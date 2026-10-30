@@ -1,0 +1,26 @@
+name: Bug report
+description: Report a non-security defect
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Never submit passwords, private keys, database dumps or live connection strings. Use Security → Report a vulnerability for security issues."
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour and safe reproduction
+    validations:
+      required: true

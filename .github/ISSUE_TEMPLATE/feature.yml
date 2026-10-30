@@ -1,0 +1,17 @@
+name: Feature proposal
+description: Propose SQL Server or macOS functionality
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: Desired SSMS-compatible behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria and SQL Server versions
+    validations:
+      required: true

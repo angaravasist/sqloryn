@@ -1,0 +1,52 @@
+# Secrets and signing material
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.mobileprovision
+*.keystore
+*.jks
+*.kdbx
+
+# IDE / system
+.DS_Store
+.idea/
+.vscode/settings.json
+*.xcuserstate
+
+# Build and dependency outputs
+node_modules/
+dist/
+build/
+coverage/
+.next/
+.turbo/
+target/
+src-tauri/target/
+bin/
+obj/
+TestResults/
+
+# Local database artifacts
+*.bak
+*.bacpac
+*.dacpac
+*.mdf
+*.ldf
+*.sqlite
+*.sqlite3
+*.db
+*.dmp
+*.dump
+
+# Installers and release artifacts
+*.dmg
+*.pkg
+*.app/
+release/
+artifacts/
