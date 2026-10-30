@@ -1,0 +1,10 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+# Add npm, cargo and nuget entries when package manifests are introduced.
+# Require lockfiles where supported; do not auto-merge dependency PRs.
