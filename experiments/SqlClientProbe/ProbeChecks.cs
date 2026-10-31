@@ -174,10 +174,12 @@ internal static class ProbeChecks
             catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
             catch (SqlException error) when (error.Number == 0 && !token.IsCancellationRequested) { }
             Require(Convert.ToInt32(await activity.ExecuteScalarAsync(token)) == 0, "PROBE-08 server request still active");
-            using var state = new SqlCommand("SELECT @@SPID, @@TRANCOUNT, XACT_STATE();", worker) { CommandTimeout = 5 };
+            using var state = new SqlCommand("DECLARE @state smallint = XACT_STATE(); SELECT @@SPID, @@TRANCOUNT, @state;", worker) { CommandTimeout = 5 };
             await using var reader = await state.ExecuteReaderAsync(token);
-            Require(await reader.ReadAsync(token) && Convert.ToInt32(reader.GetValue(0)) == sessionId &&
-                    reader.GetInt32(1) == 0 && reader.GetInt16(2) == 0, "PROBE-08 session reuse");
+            Require(await reader.ReadAsync(token), "PROBE-08 session state row");
+            Require(Convert.ToInt32(reader.GetValue(0)) == sessionId, "PROBE-08 session identity changed");
+            Require(reader.GetInt32(1) == 0, "PROBE-08 transaction count nonzero");
+            Require(reader.GetInt16(2) == 0, "PROBE-08 transaction state nonzero");
         }
         finally
         {
