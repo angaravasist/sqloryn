@@ -2,7 +2,7 @@
 
 **SQLoryn** is an independent, open-source project exploring a macOS-first alternative to SQL Server Management Studio.
 
-> **Status: technical discovery.** No database functionality or installation builds are available yet. SQLoryn is not affiliated with Microsoft or SQL Server Management Studio.
+> **Status: technical discovery.** An experimental SqlClient conformance probe is available for disposable test environments. There is no supported macOS application or installation build. SQLoryn is not affiliated with Microsoft or SQL Server Management Studio.
 
 ## Goals
 
@@ -14,9 +14,16 @@
 
 ## First engineering milestone
 
-Investigate SQL Tools Service, Microsoft's VS Code MSSQL extension, SqlClient, and DacFx on macOS. Compare Tauri 2 plus a .NET sidecar with a Code-OSS-based approach; build an isolated, reproducible connection/query proof of concept before selecting a desktop framework.
+Validate real connection/query semantics before selecting a desktop framework.
+The current experiment uses .NET and SqlClient, with synthetic SQL, strict
+certificate pinning, cancellation checks and an isolated SQL Server runner.
+SQL Tools Service remains a candidate for richer tooling; the UI framework is
+undecided. No test result implies broad SSMS parity.
 
-See [architecture](docs/ARCHITECTURE.md), [compatibility matrix](docs/FEATURE_MATRIX.md), [contribution guide](CONTRIBUTING.md) and [security policy](SECURITY.md).
+Start with the [maintainer context map](docs/README.md), [actual evidence and next
+work](docs/STATE.md), [build/test guide](docs/TESTING.md) and
+[compatibility matrix](docs/FEATURE_MATRIX.md). See also
+[contribution guide](CONTRIBUTING.md) and [security policy](SECURITY.md).
 
 ## Security and privacy
 

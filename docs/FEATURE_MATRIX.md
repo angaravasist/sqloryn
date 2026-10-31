@@ -20,3 +20,12 @@ This is an **initial outline, not a complete SSMS feature inventory**. Every men
 ## Evidence rule
 
 Mark a feature as working only after a reproducible test is performed on the relevant macOS architecture and SQL Server version. Track version-specific limitations and platform restrictions.
+
+## Active bounded experiment
+
+[SPEC-001](specs/001-sqlclient-probe.md) defines a disposable SqlClient
+connection/query conformance probe (CAP-002, CAP-013, CAP-068–074, CAP-092–095).
+Status: implemented/unverified against SQL Server. Local macOS arm64 Release
+build and 35 component assertions passed; 10 Python safety tests passed.
+No database acceptance test has run yet. See [recorded evidence](STATE.md).
+This does not promote any application capability above “Not implemented”.

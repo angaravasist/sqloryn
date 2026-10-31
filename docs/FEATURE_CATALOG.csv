@@ -1,0 +1,193 @@
+id,domain,capability,outcome,negative_case,assessment
+CAP-001,Connections & profiles,Discover/register SQL Server endpoint,Understand instance identity and server type,Server DNS or port unreachable,Unassessed candidate; not implemented
+CAP-002,Connections & profiles,Connect with SQL authentication,Authenticate without plaintext credential exposure,Expired/invalid secret,SPEC-001 transport experiment only; application not implemented
+CAP-003,Connections & profiles,Connect with supported Entra methods,Use supported cloud identity mechanisms,Interactive login unavailable/offline,Unassessed candidate; not implemented
+CAP-004,Connections & profiles,Integrated authentication where supported,Use enterprise identity within feasible macOS constraints,Kerberos/domain mismatch,Unassessed candidate; not implemented
+CAP-005,Connections & profiles,Connect to Azure SQL Database,Use applicable service without unsupported server options,Firewall/private endpoint blocked,Unassessed candidate; not implemented
+CAP-006,Connections & profiles,Connect to Azure SQL Managed Instance,Connect and detect capabilities,Network/VNet restricted,Unassessed candidate; not implemented
+CAP-007,Connections & profiles,Connect to SQL Server on remote Windows,Interact with supported database engine features,Windows-only host operations,Unassessed candidate; not implemented
+CAP-008,Connections & profiles,Connect to SQL Server on Linux,Interact with supported DB engine features,Server capability differs by platform,Unassessed candidate; not implemented
+CAP-009,Connections & profiles,Connect to SQL Server on Azure VM,Treat as explicit server endpoint,Cloud VM unavailable,Unassessed candidate; not implemented
+CAP-010,Connections & profiles,Explore supported Fabric SQL endpoints,Understand applicable capabilities,Surface/service not supported,Unassessed candidate; not implemented
+CAP-011,Connections & profiles,Connect via connection string,Validate nonsecret parameters and reject unsafe surprises,Credentials embedded accidentally,Unassessed candidate; not implemented
+CAP-012,Connections & profiles,Choose database on connect,Start in correct database,Default database unavailable,Unassessed candidate; not implemented
+CAP-013,Connections & profiles,Configure encryption and TLS trust,Show trustworthy server identity and certificate outcome,Expired/self-signed certificate,SPEC-001 transport experiment only; application not implemented
+CAP-014,Connections & profiles,Connection timeout and retry,User sees progress and deterministic outcome,Blind retry of mutating SQL,Unassessed candidate; not implemented
+CAP-015,Connections & profiles,Saved connection profiles,Remember host/options without leaking secrets,Profile contains obsolete secret,Unassessed candidate; not implemented
+CAP-016,Connections & profiles,Registered server groups,Organise many customer environments,Wrong tenant selection,Unassessed candidate; not implemented
+CAP-017,Connections & profiles,Recent connections,Reopen known profiles safely,History reveals confidential names,Unassessed candidate; not implemented
+CAP-018,Connections & profiles,Connection state and reconnect,Show stale sessions and what was lost,VPN/sleep reconnect,Unassessed candidate; not implemented
+CAP-019,Connections & profiles,Multiple simultaneous sessions,Keep identities and options isolated,Cross-session SQL execution,Unassessed candidate; not implemented
+CAP-020,Connections & profiles,Server capability/permission discovery,Explain available menu operations accurately,Permission denied,Unassessed candidate; not implemented
+CAP-021,Connections & profiles,Connection diagnostics,Provide safe and actionable troubleshooting,Secret in log,Unassessed candidate; not implemented
+CAP-022,Object Explorer,List instances and databases,Navigate server objects predictably,No metadata permission,Unassessed candidate; not implemented
+CAP-023,Object Explorer,System database visibility,Respect user policy and permissions,Hidden/system object confusion,Unassessed candidate; not implemented
+CAP-024,Object Explorer,List schemas,Disambiguate object names,Multiple schemas same object name,Unassessed candidate; not implemented
+CAP-025,Object Explorer,Tables and columns,Browse definitions and columns,Very large schema,Unassessed candidate; not implemented
+CAP-026,Object Explorer,Views,Inspect and script view definitions,Encrypted/inaccessible definition,Unassessed candidate; not implemented
+CAP-027,Object Explorer,Stored procedures,Browse and script proc definitions,Encrypted definition,Unassessed candidate; not implemented
+CAP-028,Object Explorer,Functions,Browse types and definition,CLR/unsupported objects,Unassessed candidate; not implemented
+CAP-029,Object Explorer,Triggers,Inspect table/database/server triggers,Permission denied,Unassessed candidate; not implemented
+CAP-030,Object Explorer,Indexes,"Inspect keys, included columns, filters",Version-specific index type,Unassessed candidate; not implemented
+CAP-031,Object Explorer,Primary and foreign keys,Understand key relationships,Cross-schema names,Unassessed candidate; not implemented
+CAP-032,Object Explorer,Constraints,Inspect default/check/unique constraints,Disabled/untrusted constraint,Unassessed candidate; not implemented
+CAP-033,Object Explorer,Sequences and synonyms,Inspect definitions and targets,Target not accessible,Unassessed candidate; not implemented
+CAP-034,Object Explorer,User-defined types,Display alias/table/CLR type metadata,Unsupported assembly,Unassessed candidate; not implemented
+CAP-035,Object Explorer,Full-text objects,Expose installed full-text features,Feature disabled on server,Unassessed candidate; not implemented
+CAP-036,Object Explorer,Security object tree,"Show logins, users, roles and grants",Insufficient metadata rights,Unassessed candidate; not implemented
+CAP-037,Object Explorer,Server management object tree,Display agent/logs/config where supported,Absent target service,Unassessed candidate; not implemented
+CAP-038,Object Explorer,Expand/collapse lazily,Browse without UI freeze,Thousands of nodes,Unassessed candidate; not implemented
+CAP-039,Object Explorer,Filter and object search,Find an object across large schemas,Wrong search scope,Unassessed candidate; not implemented
+CAP-040,Object Explorer,Refresh individual subtree,Sync current server metadata,Changed/deleted object,Unassessed candidate; not implemented
+CAP-041,Object Explorer,Object Explorer Details pane,Tabulate metadata and selected object properties,Truncated/partial result,Unassessed candidate; not implemented
+CAP-042,Object Explorer,Context menu scripting,Generate accurate scripts for selected objects,Escaping identifiers,Unassessed candidate; not implemented
+CAP-043,Object Explorer,Object properties,Inspect definitions/options without unintended changes,Missing permission,Unassessed candidate; not implemented
+CAP-044,Editor & SQL scripting,Multiple query tabs,Preserve independent script and session state,Context tab switched,Unassessed candidate; not implemented
+CAP-045,Editor & SQL scripting,New/open/save/save as,Edit local scripts predictably,Permission or encoding failure,Unassessed candidate; not implemented
+CAP-046,Editor & SQL scripting,Unsaved document recovery,Avoid losing drafts through normal interruptions,Sensitive SQL persisted without control,Unassessed candidate; not implemented
+CAP-047,Editor & SQL scripting,T-SQL syntax and semantics,Accurately highlight syntax,Version-specific syntax,Unassessed candidate; not implemented
+CAP-048,Editor & SQL scripting,Autocomplete and IntelliSense,Suggest schema-aware items without leaking data,Metadata unavailable,Unassessed candidate; not implemented
+CAP-049,Editor & SQL scripting,Error annotations,Highlight actual parser/compiler feedback,False positive,Unassessed candidate; not implemented
+CAP-050,Editor & SQL scripting,Code folding and minimap where useful,Navigate large procedures,Misleading folded execution,Unassessed candidate; not implemented
+CAP-051,Editor & SQL scripting,Find and replace,Navigate and edit long scripts,Encoding/unicode issue,Unassessed candidate; not implemented
+CAP-052,Editor & SQL scripting,Line/column navigation,Map errors to right script coordinates,GO batch line offsets,Unassessed candidate; not implemented
+CAP-053,Editor & SQL scripting,Snippets and templates,Reuse editable SQL snippets,Unsafe default example,Unassessed candidate; not implemented
+CAP-054,Editor & SQL scripting,Query options and timeouts,Expose effective execution settings,Hidden setting changed,Unassessed candidate; not implemented
+CAP-055,Editor & SQL scripting,Selected-text execution,Execute only selected SQL when intended,Wrong selection,Unassessed candidate; not implemented
+CAP-056,Editor & SQL scripting,Full document execution,Run intended script with clear target,Unsaved edits,Unassessed candidate; not implemented
+CAP-057,Editor & SQL scripting,GO batch separator handling,Respect T-SQL client batch semantics,GO within comments/strings,Unassessed candidate; not implemented
+CAP-058,Editor & SQL scripting,SQLCMD directives where applicable,Support or clearly label unsupported directives,Local file execution hazard,Unassessed candidate; not implemented
+CAP-059,Editor & SQL scripting,Transaction-aware editor status,Reflect current session semantics correctly,Open transaction on disconnect,Unassessed candidate; not implemented
+CAP-060,Editor & SQL scripting,Connection switching per tab,Explicitly change target and reset as needed,Accidental production execution,Unassessed candidate; not implemented
+CAP-061,Editor & SQL scripting,Keyboard shortcuts,Support common SSMS habits and Mac conventions,Shortcut collision,Unassessed candidate; not implemented
+CAP-062,Editor & SQL scripting,Editor formatting,Apply T-SQL formatting safely,Semantics altered,Unassessed candidate; not implemented
+CAP-063,Editor & SQL scripting,SQL project/source association,Use script repositories without secrets,Accidental commit of data,Unassessed candidate; not implemented
+CAP-064,Editor & SQL scripting,Execution history and recall,Find prior queries with privacy controls,Sensitive SQL retention,Unassessed candidate; not implemented
+CAP-065,Editor & SQL scripting,Multiple language modes when relevant,Use supported editor for MDX/XMLA/etc,Incorrect claimed language support,Unassessed candidate; not implemented
+CAP-066,Query execution,Execute user-authored T-SQL,Receive accurate success or SQL error,Bad SQL permissions,Unassessed candidate; not implemented
+CAP-067,Query execution,Execution progress and latency,Show running/waiting/completed status,UI reports success early,Unassessed candidate; not implemented
+CAP-068,Query execution,Query cancellation,Report cancellation semantics accurately,Server continues processing,SPEC-001 transport experiment only; application not implemented
+CAP-069,Query execution,Command timeout,Distinguish timeout from explicit cancel,Unknown server-side completion,SPEC-001 transport experiment only; application not implemented
+CAP-070,Query execution,Connection timeout during execution,Show uncertainty after disconnect,Silent replay,Unassessed candidate; not implemented
+CAP-071,Query execution,Multiple batches,Report results/messages by batch,Partial batch errors,Unassessed candidate; not implemented
+CAP-072,Query execution,Multiple result sets,Display all supported sets,Later set hidden,SPEC-001 transport experiment only; application not implemented
+CAP-073,Query execution,Informational messages,Surface PRINT and warnings,Dropped notices,SPEC-001 transport experiment only; application not implemented
+CAP-074,Query execution,SQL errors and line numbers,"Show correct messages, line/batch and severity",Mismatched error coordinates,SPEC-001 transport experiment only; application not implemented
+CAP-075,Query execution,Affected row counts,Represent row counts accurately,NOCOUNT impacts,Unassessed candidate; not implemented
+CAP-076,Query execution,Session isolation,Keep options and transactions per connection,Cross-tab mixup,Unassessed candidate; not implemented
+CAP-077,Query execution,Query execution without DB privilege,Explain permissions and preserve state,Misleading failure,Unassessed candidate; not implemented
+CAP-078,Query execution,Long-running operation status,Avoid freezing editor,Unbounded buffers,Unassessed candidate; not implemented
+CAP-079,Query execution,Query tabs during server restart,Mark sessions stale and recover,Invalid reused connection,Unassessed candidate; not implemented
+CAP-080,Query execution,Parameterised app-generated SQL,Avoid injection from UI inputs,Unsafe string concatenation,Unassessed candidate; not implemented
+CAP-081,Query execution,Explicit user SQL warnings,Do not automatically rewrite approved SQL,Overblocking harmless query,Unassessed candidate; not implemented
+CAP-082,Query execution,Batch transaction state,Make unknown/active state visible when possible,Implicit commits or connection loss,Unassessed candidate; not implemented
+CAP-083,"Results, export & data types",Grid output,Show typed rows/columns precisely,Truncation/precision loss,Unassessed candidate; not implemented
+CAP-084,"Results, export & data types",Results as text,Render equivalent output correctly,Formatting ambiguity,Unassessed candidate; not implemented
+CAP-085,"Results, export & data types",Results to file,Export intentional output safely,Unexpected overwrite,Unassessed candidate; not implemented
+CAP-086,"Results, export & data types",Multiple grids per execution,Preserve separation of result sets,Out-of-order data,Unassessed candidate; not implemented
+CAP-087,"Results, export & data types",Copy cells/rows/headers,Copy intended subset accurately,Clipboard disclosure,Unassessed candidate; not implemented
+CAP-088,"Results, export & data types",CSV export,"Correct escaping, encoding, newline, NULL",Formula injection on spreadsheet import,Unassessed candidate; not implemented
+CAP-089,"Results, export & data types",JSON export,Preserve type fidelity and structure,Big decimal precision,Unassessed candidate; not implemented
+CAP-090,"Results, export & data types",Large result paging/virtualization,Handle large outputs responsively,Out-of-memory,Unassessed candidate; not implemented
+CAP-091,"Results, export & data types",Binary/varbinary rendering,Avoid lossy default conversion,Malformed image/blob,Unassessed candidate; not implemented
+CAP-092,"Results, export & data types",Decimal numeric precision,Avoid rounding in display/export,JavaScript number coercion,SPEC-001 transport experiment only; application not implemented
+CAP-093,"Results, export & data types",datetime/datetimeoffset handling,Preserve time and offset representation,Timezone conversion,SPEC-001 transport experiment only; application not implemented
+CAP-094,"Results, export & data types",Unicode/collation display,Correctly display international text,Encoding mismatch,SPEC-001 transport experiment only; application not implemented
+CAP-095,"Results, export & data types",NULL versus empty string,Visually distinguish and export correctly,Conflated values,SPEC-001 transport experiment only; application not implemented
+CAP-096,"Results, export & data types",XML/JSON viewer,Inspect structured values safely,Untrusted markup/script,Unassessed candidate; not implemented
+CAP-097,"Results, export & data types",Geospatial and specialized SQL types,Represent types accurately or flag limits,Unsupported serialization,Unassessed candidate; not implemented
+CAP-098,"Results, export & data types",Sort/filter result viewing,Clearly indicate client vs server semantics,Partial dataset sorted,Unassessed candidate; not implemented
+CAP-099,"Results, export & data types",Result statistics and row count,Display accurate timing/count meaning,Server vs client timing,Unassessed candidate; not implemented
+CAP-100,"Results, export & data types",Explain truncation,Make incomplete values apparent,Silent value loss,Unassessed candidate; not implemented
+CAP-101,"Results, export & data types",Export cancellation,Stop without misleading completed file,Partial file left behind,Unassessed candidate; not implemented
+CAP-102,Schema & database design,Create/alter/drop database,Preview server-scoped options and impact,Data loss,Unassessed candidate; not implemented
+CAP-103,Schema & database design,Database configuration/properties,Inspect and modify supported settings,Unsupported edition,Unassessed candidate; not implemented
+CAP-104,Schema & database design,Create/alter/drop tables,Preserve data and schema semantics,Destructive column change,Unassessed candidate; not implemented
+CAP-105,Schema & database design,Visual table designer,Design columns/keys with script preview,Incompatible SQL types,Unassessed candidate; not implemented
+CAP-106,Schema & database design,Column types and nullability,Edit definitions accurately,Implicit conversion failures,Unassessed candidate; not implemented
+CAP-107,Schema & database design,Primary/foreign keys,Define referential constraints safely,Existing data violates constraint,Unassessed candidate; not implemented
+CAP-108,Schema & database design,Indexes including filtered/columnstore,Manage supported index kinds,Version differences,Unassessed candidate; not implemented
+CAP-109,Schema & database design,"Defaults, checks and unique constraints",Inspect and edit constraints,Untrusted constraint state,Unassessed candidate; not implemented
+CAP-110,Schema & database design,Identity/computed columns,Preserve expressions and identity semantics,Wrong generated SQL,Unassessed candidate; not implemented
+CAP-111,Schema & database design,Views and indexed views,Create/edit without unwanted dependencies,Schema binding issues,Unassessed candidate; not implemented
+CAP-112,Schema & database design,Stored procedures and functions,Author/alter and run where permitted,Encrypted object definitions,Unassessed candidate; not implemented
+CAP-113,Schema & database design,Triggers,Understand insert/update/delete firing semantics,Side effects,Unassessed candidate; not implemented
+CAP-114,Schema & database design,"Sequences, synonyms and types",Manage less-common object categories,Version-specific syntax,Unassessed candidate; not implemented
+CAP-115,Schema & database design,Generate create/alter/drop scripts,Review SQL before execution,Wrong quoting/dependencies,Unassessed candidate; not implemented
+CAP-116,Schema & database design,Script dependencies/order,Account for referenced objects,Circular dependency,Unassessed candidate; not implemented
+CAP-117,Schema & database design,Schema comparison,Compare source and target definitions,Wrong target; destructive deployment,Unassessed candidate; not implemented
+CAP-118,Schema & database design,Schema deployment preview,Expose planned operations and possible loss,Implicit irreversible change,Unassessed candidate; not implemented
+CAP-119,Schema & database design,DACPAC/BACPAC operations,Accurately describe extract/deploy/import/export,Platform/tool constraints,Unassessed candidate; not implemented
+CAP-120,Schema & database design,SQL Database Projects,Use declarative schema source without leaking secrets,Incorrect publish profile,Unassessed candidate; not implemented
+CAP-121,Schema & database design,Database diagrams/schema design,Visually understand relationships,Large graph performance,Unassessed candidate; not implemented
+CAP-122,Schema & database design,Flat file import,"Preview mapping, encoding and errors",Partial import,Unassessed candidate; not implemented
+CAP-123,Schema & database design,Import/export data wizard,Represent transformations with clear scope,Data mismatch,Unassessed candidate; not implemented
+CAP-124,Schema & database design,Editable table data,Make controlled changes with concurrency handling,Lost update,Unassessed candidate; not implemented
+CAP-125,Security administration,Logins,Inspect/create/alter server principals with permissions,Unsupported target SQL product,Unassessed candidate; not implemented
+CAP-126,Security administration,Users and mappings,Understand database users and mapped principals,Orphaned user,Unassessed candidate; not implemented
+CAP-127,Security administration,Server roles,View and manage role membership,Escalation risk,Unassessed candidate; not implemented
+CAP-128,Security administration,Database roles,View and manage membership,Privilege confusion,Unassessed candidate; not implemented
+CAP-129,Security administration,GRANT/DENY/REVOKE,Show actual resulting permissions,Role inheritance complexity,Unassessed candidate; not implemented
+CAP-130,Security administration,Contained users,Handle contained-database identity,Environment differences,Unassessed candidate; not implemented
+CAP-131,Security administration,Credentials and proxies,Manage supported secure objects,Exposed secret,Unassessed candidate; not implemented
+CAP-132,Security administration,Schemas and ownership,Change ownership safely,Permission chain,Unassessed candidate; not implemented
+CAP-133,Security administration,Object-level permissions,Review grants on selected object,Partial metadata,Unassessed candidate; not implemented
+CAP-134,Security administration,Audit/security configuration,Expose supported capabilities accurately,Audit side effects,Unassessed candidate; not implemented
+CAP-135,Administration & maintenance,Database backup,Show supported target/storage and outcome,Remote server path confusion,Unassessed candidate; not implemented
+CAP-136,Administration & maintenance,Database restore,"Preview overwrite, relocation, recovery modes",Data loss,Unassessed candidate; not implemented
+CAP-137,Administration & maintenance,Attach/detach database,Represent prerequisites and risks,Exclusive access required,Unassessed candidate; not implemented
+CAP-138,Administration & maintenance,Database files and filegroups,Inspect and change supported file layout,Storage path is remote,Unassessed candidate; not implemented
+CAP-139,Administration & maintenance,Recovery model,Read/set with consequences visible,Backup chain impact,Unassessed candidate; not implemented
+CAP-140,Administration & maintenance,Database compatibility level,Change with warning and version rules,Behavior regressions,Unassessed candidate; not implemented
+CAP-141,Administration & maintenance,Index rebuild/reorganize,Respect online/offline availability,Blocking operations,Unassessed candidate; not implemented
+CAP-142,Administration & maintenance,DBCC/integrity checks,Run diagnostics on permitted targets,Heavy load,Unassessed candidate; not implemented
+CAP-143,Administration & maintenance,Server properties/configuration,Inspect applicable options and permissions,Unsupported managed service,Unassessed candidate; not implemented
+CAP-144,Administration & maintenance,Activity Monitor,Inspect workloads accurately,Missing DMV permissions,Unassessed candidate; not implemented
+CAP-145,Administration & maintenance,Server/database reports,"Provide clear, truthful operational metrics",Incomplete visibility,Unassessed candidate; not implemented
+CAP-146,Administration & maintenance,Server logs and error log,Browse without data exposure,OS/service constraints,Unassessed candidate; not implemented
+CAP-147,Administration & maintenance,SQL Server Agent jobs,Manage supported job definitions,Agent unavailable on Azure SQL DB,Unassessed candidate; not implemented
+CAP-148,Administration & maintenance,Job steps/schedules/history,Inspect changes and execution outcomes,Job step side effects,Unassessed candidate; not implemented
+CAP-149,Administration & maintenance,Alerts and operators,Represent notifications and supported channels,Unsupported server environment,Unassessed candidate; not implemented
+CAP-150,Administration & maintenance,Extended Events,Manage sessions and inspect event data,High-volume overhead,Unassessed candidate; not implemented
+CAP-151,Administration & maintenance,Query Store,Inspect plans/runtime metadata where enabled,Query Store disabled,Unassessed candidate; not implemented
+CAP-152,Administration & maintenance,Estimated/actual execution plans,Distinguish predicted from executed plan,Invalid/missing Showplan,Unassessed candidate; not implemented
+CAP-153,Administration & maintenance,Live query statistics,Show progress where available,Permission/version limitation,Unassessed candidate; not implemented
+CAP-154,Administration & maintenance,Query diagnostics/profiler,"Explain data source, sampling and overhead",Monitoring load,Unassessed candidate; not implemented
+CAP-155,Administration & maintenance,Maintenance plans,Clarify Windows/SSIS-specific prerequisites,Mac-only parity barrier,Unassessed candidate; not implemented
+CAP-156,Administration & maintenance,Full-text catalogs and indexing,Administer when installed,Feature not installed,Unassessed candidate; not implemented
+CAP-157,Administration & maintenance,Replication administration,Represent publisher/subscriber requirements,Multi-server complexity,Unassessed candidate; not implemented
+CAP-158,Administration & maintenance,Availability Groups,Manage supported HA state carefully,Potential failover impact,Unassessed candidate; not implemented
+CAP-159,Administration & maintenance,Linked servers,Inspect mappings and options,Credential and remote trust risks,Unassessed candidate; not implemented
+CAP-160,Administration & maintenance,Server endpoints and protocols,Only expose what target permits,Host OS config out of scope,Unassessed candidate; not implemented
+CAP-161,Administration & maintenance,Database mail,Administer compatible settings,Credential disclosure,Unassessed candidate; not implemented
+CAP-162,Administration & maintenance,Policy-based management,Represent rules and evaluation safely,Service limitations,Unassessed candidate; not implemented
+CAP-163,Business intelligence & specialised,SSISDB catalog,Browse and manage deployed packages,SSIS service rights,Unassessed candidate; not implemented
+CAP-164,Business intelligence & specialised,SSIS package execution,Launch and monitor where supported,Windows service boundary,Unassessed candidate; not implemented
+CAP-165,Business intelligence & specialised,Analysis Services connection,Use correct server protocol/authentication,Non-SQL protocol support,Unassessed candidate; not implemented
+CAP-166,Business intelligence & specialised,SSAS MDX/DAX/XMLA tools,Operate correct query/script forms,Semantics differ from T-SQL,Unassessed candidate; not implemented
+CAP-167,Business intelligence & specialised,SSAS object deployment and processing,Represent model changes and backups,Specialised tooling,Unassessed candidate; not implemented
+CAP-168,Business intelligence & specialised,Reporting Services management,Manage supported legacy server targets,Product version limits,Unassessed candidate; not implemented
+CAP-169,Business intelligence & specialised,Migration assessment,Report readiness and limitations,Inaccurate migration claims,Unassessed candidate; not implemented
+CAP-170,Business intelligence & specialised,Fabric SQL-related workflows,Distinguish Fabric target product capability,Preview/API availability,Unassessed candidate; not implemented
+CAP-171,Business intelligence & specialised,Azure cloud resource browsing,Discover permitted SQL resources,Tenant/consent permissions,Unassessed candidate; not implemented
+CAP-172,Business intelligence & specialised,Integrated source control,Safely view changes and diff scripts,Secrets committed,Unassessed candidate; not implemented
+CAP-173,Business intelligence & specialised,Query templates/snippets library,Preserve reusable authoring workflows,Unsafe scripts,Alias of CAP-053; retain ID for traceability
+CAP-174,Business intelligence & specialised,SQL notebook workflows if approved,Run reproducible multi-cell SQL documents,Sensitive persisted results,Unassessed candidate; not implemented
+CAP-175,Business intelligence & specialised,Accessibility help and diagnostics,Offer discoverable support and shortcuts,Broken documentation links,Unassessed candidate; not implemented
+CAP-176,Business intelligence & specialised,Optional AI query assistance,Only after separate consent/security decision,Data exfiltration or uncontrolled execution,Outside baseline; separate opt-in privacy/security decision required
+CAP-177,Business intelligence & specialised,Vector and JSON SQL types,Support modern server data and tooling as applicable,Version mismatch,Unassessed candidate; not implemented
+CAP-178,Desktop and platform integration,Native document/window lifecycle,Restore user workflow without corruption,Crash during save,Unassessed candidate; not implemented
+CAP-179,Desktop and platform integration,macOS menus and keyboard,Feel natural and remain keyboard operable,Shortcut conflicts,Unassessed candidate; not implemented
+CAP-180,Desktop and platform integration,Dark and light appearance,Maintain contrast and editor fidelity,Unreadable data cells,Unassessed candidate; not implemented
+CAP-181,Desktop and platform integration,Retina and scaled monitors,Render dense results accessibly,Text clipping,Unassessed candidate; not implemented
+CAP-182,Desktop and platform integration,macOS Keychain secrets,Protect tokens and connection credentials,Uninstall/reinstall state,Unassessed candidate; not implemented
+CAP-183,Desktop and platform integration,Application sleep/wake,Detect stale connections and running operations,Silent orphaned request,Unassessed candidate; not implemented
+CAP-184,Desktop and platform integration,Application crash recovery,Preserve unsaved drafts safely,Sensitive recovery cache,Unassessed candidate; not implemented
+CAP-185,Desktop and platform integration,Native file open/save,Respect permissions and UTF formats,Out-of-sandbox file,Unassessed candidate; not implemented
+CAP-186,Desktop and platform integration,Offline installation/use,Core operation without vendor service,Hidden runtime download,Unassessed candidate; not implemented
+CAP-187,Desktop and platform integration,Release signing/notarization,Distribute verifiable app artifacts,Supply chain tampering,Unassessed candidate; not implemented
+CAP-188,Desktop and platform integration,Secure updates if implemented,Prevent untrusted/downgraded release,Invalid update signature,Unassessed candidate; not implemented
+CAP-189,Desktop and platform integration,Accessible Object Explorer,Navigate tree with screen reader and keyboard,Inaccessible focus,Unassessed candidate; not implemented
+CAP-190,Desktop and platform integration,Accessible results grid,Read cell/column meaning with assistive tech,Large grid performance,Unassessed candidate; not implemented
+CAP-191,Desktop and platform integration,Keyboard shortcut discoverability,Explain and customise supported shortcuts,Unannounced conflicts,Unassessed candidate; not implemented
+CAP-192,Desktop and platform integration,Multi-window workspace,Keep session/editor context coherent,Wrong active target,Unassessed candidate; not implemented

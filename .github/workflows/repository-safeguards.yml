@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      accept_sql_server_license:
+        description: Accept SQL Server Developer test-use terms and create temporary test credentials
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -14,11 +20,73 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  probe-components:
+    name: probe-components (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_GENERATE_ASPNET_CERTIFICATE: 'false'
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 'true'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Restore locked dependencies and audit vulnerabilities
+        run: dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
+      - name: Build with warnings as errors
+        run: dotnet build SQLoryn.slnx --no-restore --configuration Release
+      - name: Component assertions (no SQL Server)
+        run: dotnet run --project tests/SqlClientProbe.Tests --no-build --configuration Release
+      - name: Disposable runner safety tests (no Docker)
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+  sql-integration:
+    if: github.event_name == 'workflow_dispatch' && inputs.accept_sql_server_license
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_GENERATE_ASPNET_CERTIFICATE: 'false'
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 'true'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - run: dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
+      - run: dotnet build SQLoryn.slnx --no-restore --configuration Release
+      - name: Isolated SQL Server 2022 acceptance checks
+        run: python3 scripts/run_sql_probe.py --accept-sql-server-license
+
   repo-safeguards:
     name: repo-safeguards
+    needs: [probe-components, sql-integration]
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Require component success and any requested integration run
+        env:
+          COMPONENT_RESULT: ${{ needs.probe-components.result }}
+          INTEGRATION_RESULT: ${{ needs.sql-integration.result }}
+          INTEGRATION_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.accept_sql_server_license }}
+        run: |
+          test "$COMPONENT_RESULT" = success
+          if test "$INTEGRATION_REQUESTED" = true; then
+            test "$INTEGRATION_RESULT" = success
+          else
+            test "$INTEGRATION_RESULT" = skipped
+          fi
       - name: Checkout reviewed revision
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

@@ -50,3 +50,7 @@ TestResults/
 *.app/
 release/
 artifacts/
+
+# Python test caches
+__pycache__/
+*.pyc

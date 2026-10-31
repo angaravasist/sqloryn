@@ -2,6 +2,11 @@
 
 Read README.md, SECURITY.md, docs/ARCHITECTURE.md, docs/FEATURE_MATRIX.md and docs/SECURITY_BASELINE.md before making changes.
 
+Use docs/README.md as the context map, docs/STATE.md for current evidence and
+pending work, and docs/TESTING.md for exact commands. Update relevant decisions,
+specs, dependency inventory and evidence with code; prior chats are not a source
+of implementation truth. Candidate capabilities are not supported features.
+
 ## Non-negotiable safeguards
 
 - No claim of full SSMS parity without evidence from tests against an actual supported SQL Server target.
