@@ -53,6 +53,13 @@ class ProbeRunnerTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in remove.call_args_list], [
             ["docker", "container", "rm", "--force", "--volumes", name], ["docker", "network", "rm", name]])
 
+    def test_published_port_requires_one_loopback_binding(self):
+        for bindings in (None, [], [{"HostIp": "0.0.0.0", "HostPort": "14330"}],
+                         [{"HostIp": "127.0.0.1", "HostPort": "1"}]):
+            with self.subTest(bindings=bindings), self.assertRaises(runner.ProbeError):
+                runner.published_port(bindings)
+        self.assertEqual(runner.published_port([{"HostIp": "127.0.0.1", "HostPort": "14330"}]), 14330)
+
     def test_cleanup_failure_is_not_success(self):
         name = "sqloryn-probe-0123456789abcdef"
         result = subprocess.CompletedProcess([], 0, stdout=name + "\n", stderr="")

@@ -44,7 +44,7 @@ python3 scripts/run_sql_probe.py --accept-sql-server-license
 ```
 
 No existing endpoint/credential is accepted. The runner generates a hostname,
-password and two certificates, creates an internal network and loopback-only
+password and two certificates, creates a dedicated bridge network and loopback-only
 port, runs fixed synthetic SQL, and removes its own labelled resources. It
 mounts no host database files and retains no deliberate database volume.
 Cleanup failure fails the run. Never upload raw SQL logs/container configuration.

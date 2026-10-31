@@ -36,6 +36,15 @@ def validate_engine(info, endpoint):
         raise ProbeError("Requires a local Docker socket; remote Docker contexts are not supported.")
 
 
+def published_port(bindings):
+    if not isinstance(bindings, list) or len(bindings) != 1 or bindings[0].get("HostIp") != "127.0.0.1":
+        raise ProbeError("Expected one loopback-only published SQL port.")
+    port = int(bindings[0]["HostPort"])
+    if not 1024 <= port <= 65535:
+        raise ProbeError("Invalid published SQL port.")
+    return port
+
+
 def cleanup(name):
     failed = False
     for kind in ("container", "network"):
@@ -86,7 +95,7 @@ def execute():
         config.write_text("[network]\ntlscert = /probe-certs/server.crt\ntlskey = /probe-certs/server.key\nforceencryption = 1\n")
         config.chmod(0o644)
         try:
-            run(["docker", "network", "create", "--internal", "--label", f"{LABEL}={name}", name])
+            run(["docker", "network", "create", "--label", f"{LABEL}={name}", name])
             run(["docker", "create", "--name", name, "--hostname", name,
                  "--label", f"{LABEL}={name}", "--network", name,
                  "--publish", "127.0.0.1::1433", "--memory", "3g", "--cpus", "2",
@@ -104,9 +113,7 @@ def execute():
             else:
                 raise ProbeError("SQL Server startup timed out; raw logs suppressed.")
             bindings = json.loads(run(["docker", "inspect", "--format", '{{json (index .NetworkSettings.Ports "1433/tcp")}}', name]))
-            if len(bindings) != 1 or bindings[0]["HostIp"] != "127.0.0.1":
-                raise ProbeError("Expected one loopback-only published SQL port.")
-            port = int(bindings[0]["HostPort"])
+            port = published_port(bindings)
             print(f"Image: {IMAGE}", flush=True)
             result = subprocess.run(
                 ["dotnet", str(PROBE), "--confirm-disposable", "--port", str(port), "--expected-server", name,
@@ -141,8 +148,8 @@ def main(argv=None):
     except ProbeError as error:
         print(f"FAIL {error}", file=sys.stderr)
         return 1
-    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
-        print("FAIL runner operation; raw diagnostics suppressed.", file=sys.stderr)
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
+        print(f"FAIL runner operation ({type(error).__name__}); raw diagnostics suppressed.", file=sys.stderr)
         return 1
     return 0
 

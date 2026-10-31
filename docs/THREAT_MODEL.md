@@ -8,7 +8,9 @@ users/releases exist. This is not an independent security audit.
 
 Restore contacts nuget.org for packages/advisories; CI also uses GitHub and
 Microsoft SDK/image endpoints. The running probe contacts only loopback SQL TCP;
-the server is on an internal Docker network. No AI/telemetry provider is added.
+the server is on a dedicated Docker bridge network. The SQL port is published
+only on loopback. The bridge permits outbound traffic: this is a disposable
+synthetic test environment, not an egress sandbox. No AI/telemetry provider is added.
 CLI telemetry is disabled in CI/documented commands; no external logger or
 diagnostic listener is enabled.
 
