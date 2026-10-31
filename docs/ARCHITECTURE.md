@@ -1,7 +1,8 @@
 # Architecture
 
 Experimental transport baseline; desktop decision open. Owner: SQLoryn maintainer.
-Reviewed: 2026-10-31. Decision: [ADR-001](decisions/001-sqlclient-probe.md).
+Reviewed: 2026-10-31. Decisions: [ADR-001](decisions/001-sqlclient-probe.md),
+[ADR-002](decisions/002-macos-ssh-sql-probe.md).
 
 A .NET 10 developer probe directly exercises Microsoft.Data.SqlClient. It is an
 experiment, not a production service API. No UI, IPC, credential store, general
@@ -9,7 +10,9 @@ query executor, plugin system or cloud backend exists. See [SPEC-001](specs/001-
 
 ```mermaid
 flowchart LR
-    Runner[Python runner] -->|create and clean own resources| Docker[Local Linux x64 Docker]
+    Runner[Python runner] -->|local mode| Docker[Local Linux x64 Docker]
+    Runner -->|SSH mode: helper + cert PEM| Remote[Approved Linux x64 Docker]
+    Runner -->|owned 127.0.0.1 forward| Tunnel[OpenSSH local forward]
     Runner -->|password via stdin; certificate path| Probe[.NET SqlClient probe]
     Probe -->|encrypted loopback TCP; certificate pin| SQL[Disposable SQL Server 2022]
     Probe -->|test IDs and numeric version| Evidence[Console evidence]
@@ -20,18 +23,22 @@ flowchart LR
 | `experiments/SqlClientProbe/Program.cs` | Entry, deadline, cancellation, safe diagnostics |
 | `experiments/SqlClientProbe/ProbeOptions.cs` | Closed arguments, bounded stdin, secure connection settings |
 | `experiments/SqlClientProbe/ProbeChecks.cs` | Fixed synthetic suite; owned connections/readers; no result accumulation |
-| `scripts/run_sql_probe.py` | Licence/platform gate, image, certificates/password, loopback port and cleanup |
+| `scripts/run_sql_probe.py` | Licence/platform gates, local Docker lifecycle, optional SSH orchestration, cleanup |
+| `scripts/sql_probe_remote_helper.py` | Fixed remote verbs; remote keygen; ownership-scoped cleanup |
 | `tests/SqlClientProbe.Tests/` | Executable component assertions without a test framework dependency |
-| `tests/test_sql_probe_runner.py` | Runner safety tests without Docker |
+| `tests/test_sql_probe_runner.py` | Runner safety tests without Docker or a live SSH host |
 | `scripts/repo_preflight.py` | Repository path checks, not secret scanning |
 | `.github/workflows/repository-safeguards.yml` | Mac/Linux component checks, explicitly requested SQL integration and required aggregate |
 
-The runner creates a fresh container/network. The generated hostname, Developer
-edition and SQL Server 2022 are checked before fixed synthetic SELECT, PRINT,
-THROW and WAITFOR statements. No user SQL files, database contents or persistent
-DDL are accepted. Passwords are absent from arguments/source/logs; the local user
-and Docker administrator can still read test credentials from memory/container
-configuration. No production credential or Keychain claim is made.
+Local mode creates a fresh container/network on a local Linux x64 Docker socket.
+SSH mode (ADR-002) is a narrowly scoped qualification path: it does not replace
+the local safeguard that rejects remote Docker contexts, and it is not a desktop
+architecture commitment. The generated hostname, Developer edition and SQL Server
+2022 are checked before fixed synthetic SELECT, PRINT, THROW and WAITFOR
+statements. No user SQL files, database contents or persistent DDL are accepted.
+Passwords are absent from arguments/source/logs; operators with host or Docker
+admin access can still read test credentials from memory/container configuration.
+No production credential or Keychain claim is made.
 
 Connections disable pooling and connection retries. Commands/readers/connections
 are disposed. Cancellation checks server activity through a second connection
