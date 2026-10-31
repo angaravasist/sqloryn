@@ -125,7 +125,7 @@ def execute():
                     print(line)
             if result.returncode:
                 for line in result.stderr.splitlines():
-                    if line.startswith(("FAIL PROBE-", "FAIL SQL request", "FAIL TLS", "FAIL interrupted")):
+                    if line.startswith(("FAIL PROBE-", "FAIL SQL request", "FAIL TLS", "FAIL interrupted", "FAIL probe (")):
                         print(line, file=sys.stderr)
                 raise ProbeError("SQL acceptance suite failed; no compatibility claim is valid.")
         finally:

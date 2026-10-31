@@ -86,6 +86,6 @@ internal static class SafeFailure
         OperationCanceledException => "FAIL interrupted; server completion may be unknown.",
         _ when IsTls(error) => "FAIL TLS authentication; check the disposable server certificate.",
         SqlException sql => $"FAIL SQL request (number {sql.Number}); sensitive diagnostics suppressed.",
-        _ => "FAIL probe; sensitive diagnostics suppressed."
+        _ => $"FAIL probe ({error.GetType().Name}); sensitive diagnostics suppressed."
     };
 }

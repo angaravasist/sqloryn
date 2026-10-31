@@ -177,7 +177,7 @@ internal static class ProbeChecks
             using var state = new SqlCommand("SELECT @@SPID, @@TRANCOUNT, XACT_STATE();", worker) { CommandTimeout = 5 };
             await using var reader = await state.ExecuteReaderAsync(token);
             Require(await reader.ReadAsync(token) && Convert.ToInt32(reader.GetValue(0)) == sessionId &&
-                    reader.GetInt32(1) == 0 && reader.GetInt32(2) == 0, "PROBE-08 session reuse");
+                    reader.GetInt32(1) == 0 && reader.GetInt16(2) == 0, "PROBE-08 session reuse");
         }
         finally
         {
