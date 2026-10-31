@@ -10,9 +10,12 @@ orchestration ([ADR-002](decisions/002-macos-ssh-sql-probe.md),
 [SPEC-001](specs/001-sqlclient-probe.md) PROBE-11). Review corrections address
 prepare→provision lifecycle, effective SSH `-L` forwarding, local-only Docker
 binding, exception-safe tunnel/cleanup ownership and safe recovery without
-helper overwrite. No approved remote host is configured; **native Mac arm64 and
-Mac x64 SQL integration remain unverified**. Do not mark this milestone complete
-until those runs pass.
+helper overwrite. The SSH/loopback orchestration is implemented and the fresh
+Linux SQL regression has passed; the real Mac-to-server execution has not.
+A candidate Linux x64 host is being prepared separately, but its Mac SSH access,
+trusted host-key handoff and explicit test approval are pending. **Native Mac
+arm64 and Mac x64 SQL integration remain unverified.** Do not mark PROBE-11
+interoperability validated without actual native Mac runs.
 
 ## Merged baseline (main)
 
@@ -45,13 +48,28 @@ until those runs pass.
   Mac-to-server evidence.
 - [Hosted run 41188623012](https://github.com/angaravasist/sqloryn/actions/runs/41188623012)
   remains historical Linux E2 at `5ef7c380` (pre-PROBE-11 refactor).
+- [Latest PR CI run 41195204109](https://github.com/angaravasist/sqloryn/actions/runs/41195204109)
+  passed at `83ed8a8`, with Linux and both Mac component jobs and the required
+  safeguards. This is **E1**, not Mac-to-SQL E2; the SQL integration job was not
+  requested in that run.
+- [PR CodeQL run 41195201981](https://github.com/angaravasist/sqloryn/actions/runs/41195201981)
+  passed at `83ed8a8`. A passing scan is not a security audit.
+- Candidate remote test-host preparation (maintainer/operator report, **not**
+  a repository CI or remote SQL result): Windows on physical AMD x64 with
+  x86_64 Ubuntu WSL2 NAT; Docker Desktop integrated via the Unix socket;
+  Linux Docker loopback publishing and internal key-only SSH/SCP/forwarding
+  checks succeeded. **Mac key authorisation, externally verified SSH host
+  identity, Windows-to-WSL SSH forwarding and Mac-to-host connectivity have not
+  been completed.** The host is not yet approved for a PROBE-11 run. Do not
+  commit ephemeral LAN addresses, host-key material or credentials.
 - Local Mac (Apple M3, native arm64) prep on 2026-10-31: SDK 10.0.403 in
   `~/.dotnet`, Release build, 35 C# assertions, 37 Python tests, probe DLL ready.
   Docker Desktop here is Linux **aarch64** — unsuitable for SQL Server evidence.
   No maintainer-approved Linux x64 SSH host is configured for PROBE-11.
-- Native Mac arm64 → SQL Server: **unverified** (no approved host).
-- Native Mac x64 → SQL Server: **unverified** (requires an Intel Mac client plus
-  approved host; this machine cannot supply native x64 client evidence).
+- Native Mac arm64 → SQL Server: **unverified** (SSH/key trust and host
+  authorisation pending; no native Mac E2 execution).
+- Native Mac x64 → SQL Server: **unverified** (requires an Intel Mac client
+  and an approved host; an M3 Mac cannot provide native x64 evidence).
 - Earlier failed probe runs remain visible: Docker internal-only port publishing
   ([41188114994](https://github.com/angaravasist/sqloryn/actions/runs/41188114994)),
   XACT_STATE smallint handling
@@ -72,9 +90,17 @@ merge or release.
 
 ## Next bounded outcome and release gates
 
-Implement and land PROBE-11 orchestration behind an approved Linux x64 SSH host
-and known_hosts material, then record native Mac arm64 and Mac x64 SQL evidence.
-Keep UI expansion behind that gate. Assess SQL Tools Service's exact
+Review the implemented PROBE-11 orchestration as **experimental, unqualified
+Mac transport tooling**; Linux PROBE-10 regression is verified. A technical-lead
+review may recommend merging this isolated implementation without native Mac E2,
+but must explicitly preserve that missing evidence and obtain maintainer merge
+approval. Completing Mac-to-SQL arm64 qualification requires Mac public-key
+authorisation, independently verified SSH host-key trust, private-LAN-only SSH
+forwarding, test-use/licence approval, actual native Mac execution, and verified
+cleanup. Native Intel x64 remains a separate qualification task. Do not claim
+Mac connectivity or general desktop support on the strength of a merge.
+Before claiming functional Mac connectivity, close its Mac E2 evidence gate.
+Assess SQL Tools Service's exact
 artifacts/licences and a minimal metadata/language-service integration before
 choosing a desktop shell. Test ordinary CA trust/name/expiry rejection,
 restricted logins and interruption of transactions.

@@ -55,7 +55,12 @@ Cleanup failure fails the run. Never upload raw SQL logs/container configuration
 Requires maintainer approval of a Linux x64 SSH host and a known_hosts file that
 already contains that host key. Do not scan for hosts or disable host-key checks.
 Preconfigure public-key authentication; the runner is noninteractive and will not
-prompt for passwords or create credentials.
+prompt for passwords or create credentials. It currently passes `-F /dev/null`
+and `IdentitiesOnly=yes` without an explicit `IdentityFile` option: only
+OpenSSH's default identity paths are considered. Do not overwrite or symlink
+an unrelated private identity just to make the probe work. If a safe, usable
+default identity is unavailable, treat dedicated-key selection as an
+unresolved runner usability issue requiring a separately reviewed/tested fix.
 
 After Release build, licence acceptance and host approval:
 
@@ -76,6 +81,16 @@ clear `-L`), and runs the same native SqlClient suite against the forward via
 `invoke_probe`. Wrong-pin certificates are generated locally. Server private
 keys are not copied to the Mac. The console prints `PROBE-11 run-id=…` for
 precise recovery.
+
+For a temporary Windows x64 + Ubuntu WSL2 NAT host, Docker Desktop's WSL
+integration must present a usable local Unix socket **inside Ubuntu**.
+SSH must terminate in that Ubuntu environment; verify that the container's
+loopback-only published port is reachable from the same Ubuntu SSH session.
+Any Windows-to-WSL SSH forwarding must be restricted to the approved Mac's
+private-network address, and renewed if the WSL NAT IP changes. Preserve
+out-of-band host-key verification; an automatic key scan alone is insufficient.
+Treat Docker socket access as privileged host access. Preparing a host,
+testing SSH locally or passing Linux E2 does **not** establish native Mac E2.
 
 Record client OS, `Client:` process architecture line (must be native arm64 on
 arm64 Mac and native x64 on Intel Mac; Rosetta/cross-compile does not qualify),
