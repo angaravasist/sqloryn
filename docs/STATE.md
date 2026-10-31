@@ -21,7 +21,7 @@ session ([ADR-003](decisions/003-desktop-avalonia.md),
 |---|---|
 | Probe Linux SQL E2 (historical / regression) | Verified on recorded runs; see prior STATE history |
 | Prior Preview 0 CI Mac arm64+Intel app publish | [41219130069](https://github.com/angaravasist/sqloryn/actions/runs/41219130069) at `3b37d5b` |
-| Workspace correction commit (this delivery) | See tip of `codex/developer-preview-0` after push |
+| Workspace correction commit (this delivery) | `de4cce00374abf9762a54f7b2b65c095267659a3` (arm64 local build+walkthrough) |
 | Sqloryn.Core E1 (ownership, outcomes, lifecycle, 38-digit, budget, RunGuard) | Local pass |
 | Python runner suite | Local pass (40 tests) |
 | Avalonia `.app` build + host-independent UI walkthrough (arm64) | Local (this machine) |
