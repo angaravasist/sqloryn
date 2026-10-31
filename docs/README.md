@@ -11,9 +11,9 @@ source of truth. Update relevant documents in the same PR as behaviour.
 | Product, users, boundaries | [Product](PRODUCT.md), [candidate catalogue](FEATURE_CATALOG.csv) |
 | What actually works? | [Feature matrix](FEATURE_MATRIX.md), [evidence/current state](STATE.md) |
 | Code map, data flow | [Architecture](ARCHITECTURE.md) |
-| Why these choices? | [ADR-001](decisions/001-sqlclient-probe.md), [ADR-002](decisions/002-macos-ssh-sql-probe.md) |
-| What must this experiment prove? | [SPEC-001](specs/001-sqlclient-probe.md) |
-| How to build/test safely | [Testing](TESTING.md) |
+| Why these choices? | [ADR-001](decisions/001-sqlclient-probe.md), [ADR-002](decisions/002-macos-ssh-sql-probe.md), [ADR-003](decisions/003-desktop-avalonia.md) |
+| What must this experiment prove? | [SPEC-001](specs/001-sqlclient-probe.md), [SPEC-002](specs/002-developer-preview-0.md) |
+| How to build/test safely | [Testing](TESTING.md), [Walkthrough](WALKTHROUGH.md) |
 | Dependencies and redistribution | [Dependency assessment](DEPENDENCIES.md) |
 | Credentials, network, storage and unresolved risk | [Threat model](THREAT_MODEL.md) |
 | Repository protections and releases | [Security baseline](SECURITY_BASELINE.md), [security policy](../SECURITY.md) |

@@ -1,0 +1,28 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.ConnectWindow"
+        Title="Connect — SQLoryn"
+        Width="480" Height="420"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+  <StackPanel Margin="16" Spacing="10">
+    <TextBlock Text="SQL authentication · encryption mandatory · credentials stay in memory for this session only."
+               TextWrapping="Wrap" />
+    <TextBox Name="ServerBox" PlaceholderText="Server host" AutomationProperties.Name="Server" />
+    <TextBox Name="PortBox" PlaceholderText="Port" Text="1433" AutomationProperties.Name="Port" />
+    <TextBox Name="DatabaseBox" PlaceholderText="Database" Text="master" AutomationProperties.Name="Database" />
+    <TextBox Name="UserBox" PlaceholderText="Login" AutomationProperties.Name="Login" />
+    <TextBox Name="PasswordBox" PlaceholderText="Password" PasswordChar="•"
+             AutomationProperties.Name="Password" />
+    <CheckBox Name="TrustBox" Content="Trust server certificate (lab only — skips CA/name checks)"
+              AutomationProperties.Name="Trust server certificate" />
+    <TextBox Name="PinBox" PlaceholderText="Optional lab certificate pin path (.cer/.crt)"
+             AutomationProperties.Name="Certificate pin path" />
+    <TextBlock Name="ErrorText" Foreground="#A40000" TextWrapping="Wrap" IsVisible="False" />
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+      <Button Content="Cancel" Click="OnCancel" AutomationProperties.Name="Cancel connect" />
+      <Button Content="Connect" Click="OnConnect" IsDefault="True"
+              AutomationProperties.Name="Connect" />
+    </StackPanel>
+  </StackPanel>
+</Window>

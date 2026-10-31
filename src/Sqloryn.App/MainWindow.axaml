@@ -1,0 +1,83 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.MainWindow"
+        Title="SQLoryn Developer Preview 0"
+        Width="1280" Height="800"
+        MinWidth="900" MinHeight="600">
+  <DockPanel>
+    <Menu DockPanel.Dock="Top">
+      <MenuItem Header="_File">
+        <MenuItem Header="_New Query" Name="MenuNew" HotKey="Ctrl+N" Click="OnNewTab" />
+        <MenuItem Header="_Open…" Name="MenuOpen" HotKey="Ctrl+O" Click="OnOpen" />
+        <MenuItem Header="_Save" Name="MenuSave" HotKey="Ctrl+S" Click="OnSave" />
+        <MenuItem Header="Save _As…" Name="MenuSaveAs" HotKey="Ctrl+Shift+S" Click="OnSaveAs" />
+        <Separator />
+        <MenuItem Header="_Quit" Name="MenuQuit" HotKey="Ctrl+Q" Click="OnQuit" />
+      </MenuItem>
+      <MenuItem Header="_Connection">
+        <MenuItem Header="_Connect…" Name="MenuConnect" HotKey="Ctrl+Shift+C" Click="OnConnect" />
+        <MenuItem Header="_Disconnect" Name="MenuDisconnect" Click="OnDisconnect" />
+      </MenuItem>
+      <MenuItem Header="_Query">
+        <MenuItem Header="_Run" Name="MenuRun" HotKey="F5" Click="OnRun" />
+        <MenuItem Header="_Cancel" Name="MenuCancel" HotKey="Escape" Click="OnCancel" />
+      </MenuItem>
+    </Menu>
+
+    <Border DockPanel.Dock="Bottom" Padding="8,4" Background="#EEF1F4">
+      <TextBlock Name="StatusBar" Text="Disconnected — session credentials only; encryption mandatory."
+                 AutomationProperties.Name="Status" />
+    </Border>
+
+    <Grid ColumnDefinitions="280,*">
+      <DockPanel Grid.Column="0" Margin="0,0,4,0">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="8">
+          <Button Name="RefreshTreeButton" Content="Refresh" Click="OnRefreshTree"
+                  AutomationProperties.Name="Refresh object explorer" />
+          <TextBlock Name="ConnectionLabel" VerticalAlignment="Center" Text="Not connected"
+                     AutomationProperties.Name="Connection target" />
+        </StackPanel>
+        <TreeView Name="ObjectTree" Margin="8,0,8,8"
+                  AutomationProperties.Name="Object explorer"
+                  DoubleTapped="OnObjectDoubleTapped" />
+      </DockPanel>
+
+      <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto,*">
+        <TabControl Name="QueryTabs" Grid.Row="0" Margin="0,4,8,0"
+                    SelectionChanged="OnTabChanged"
+                    AutomationProperties.Name="Query tabs" />
+
+        <DockPanel Grid.Row="1" Margin="0,0,8,4">
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,6">
+            <Button Name="RunButton" Content="Run" Click="OnRun"
+                    AutomationProperties.Name="Run query" />
+            <Button Name="CancelButton" Content="Cancel" Click="OnCancel"
+                    AutomationProperties.Name="Cancel query" />
+            <TextBlock Name="RunModeLabel" VerticalAlignment="Center"
+                       Text="Run mode: document (select text to run a selection)"
+                       AutomationProperties.Name="Run mode" />
+          </StackPanel>
+          <TextBox Name="Editor" AcceptsReturn="True" TextWrapping="Wrap"
+                   FontFamily="Menlo, Monaco, Consolas, monospace" FontSize="13"
+                   PlaceholderText="Write T-SQL here. F5 runs the selection when one exists; otherwise the document."
+                   AutomationProperties.Name="SQL editor"
+                   TextChanged="OnEditorTextChanged" />
+        </DockPanel>
+
+        <TextBlock Grid.Row="2" Margin="0,4,8,2" Text="Results and messages"
+                   FontWeight="SemiBold" />
+        <TabControl Name="OutputTabs" Grid.Row="3" Margin="0,0,8,8">
+          <TabItem Header="Results" AutomationProperties.Name="Results">
+            <TextBox Name="ResultsBox" IsReadOnly="True" AcceptsReturn="True"
+                     TextWrapping="NoWrap" FontFamily="Menlo, Monaco, Consolas, monospace"
+                     AutomationProperties.Name="Result grid" />
+          </TabItem>
+          <TabItem Header="Messages" AutomationProperties.Name="Messages">
+            <TextBox Name="MessagesBox" IsReadOnly="True" AcceptsReturn="True"
+                     TextWrapping="Wrap" AutomationProperties.Name="Messages output" />
+          </TabItem>
+        </TabControl>
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>

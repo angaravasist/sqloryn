@@ -33,11 +33,11 @@ This is not a Keychain or production credential design. Never supply real secret
 
 | Risk / potential impact | Current control | Remaining gate |
 |---|---|---|
-| R-001, R-021 / high: secret exposure | No secret arguments; bounded stdin; fixed safe diagnostics; no dump upload | Same-user/admin/memory exposure remains; Keychain and crash design before an app |
+| R-001, R-021 / high: secret exposure | Probe: no secret argv; App: session-only password fields, not logged; no Keychain yet | Memory/same-user exposure; Keychain design before saved profiles |
 | R-002 / critical: server impersonation | Mandatory TLS, exact certificate pin, no trust bypass; SSH host-key file required | Normal CA/name/expiry checks and Mac SQL runs remain unverified without an approved host |
 | R-003, R-022 / critical: wrong target/production | New instance only, loopback, generated identity, edition/version check; SSH config isolated; no arbitrary endpoints | Sentinel/host-key prevent accidents; they are not authorisation; never attach to an existing tunnel |
 | R-SSH / high: remote command/tunnel misuse | Fixed remote helper, prepare ownership, JSON stdin for secrets, token-safe argv, tunnel options without ClearAllForwardings so `-L` remains effective, local Docker socket binding, independent cleanup + run-id recovery | Live SSH behaviour unproven until an approved host exists; orphaned remote resources on hard kill/network loss |
-| R-004 / critical: replay | No connection retries, pooling or query retry loop | Lost connections during writes/transactions not tested; no persistent writes in probe |
+| R-004 / critical: replay | No connection retries, pooling or automatic SQL replay in Core/probe | Live disconnect-during-run evidence pending for the app |
 | R-006, R-007 / high: fidelity/memory | Typed assertions, sequential 10,000-row read | General cells, rendering/export, backpressure and benchmarks absent |
 | R-016 / high: false cancellation | Observe active request, cancellation, absent request, usable original session | WAITFOR with test admin only; partitions/transactions open |
 | R-009, R-019 / high: dependency/licence | Locked packages, fail-closed audit, SHA-pinned Actions/image, native SNI excluded | Restore obtains separately licensed SNI; inspect all actual artifacts/notices before release |
@@ -48,8 +48,9 @@ This is not a Keychain or production credential design. Never supply real secret
 
 Other risks are **unimplemented/unassessed**: destructive GUI (R-005), updater
 (R-008), Windows/BI management (R-012), optional AI (R-014), concurrent editing
-(R-017), target capability confusion (R-018) and accessibility (R-023). Their
-absence does not settle the risk when introducing those surfaces.
+(R-017), target capability confusion (R-018). Accessibility (R-023): Preview 0
+adds AutomationProperties names; VoiceOver device evidence is still absent.
+
 
 Release remains blocked by absent app/desktop evidence and unresolved
 distribution, credential and independent-review gates. Signing, publishing,

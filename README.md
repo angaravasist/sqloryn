@@ -1,34 +1,30 @@
 # SQLoryn
 
-**SQLoryn** is an independent, open-source project exploring a macOS-first alternative to SQL Server Management Studio.
+**SQLoryn** is an independent, open-source, macOS-first SQL Server management application for developers and DBAs.
 
-> **Status: technical discovery.** An experimental SqlClient conformance probe is available for disposable test environments. There is no supported macOS application or installation build. SQLoryn is not affiliated with Microsoft or SQL Server Management Studio.
+> **Status: Developer Preview 0 (draft).** A launchable development `.app` exists on the preview branch. It is not signed, notarised or supported for production. SQLoryn is not affiliated with Microsoft or SQL Server Management Studio.
+
+## Build and launch (macOS)
+
+```sh
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
+dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
+dotnet build SQLoryn.slnx --no-restore --configuration Release
+bash scripts/build_macos_app.sh
+open artifacts/macos/osx-arm64/SQLoryn.app   # use osx-x64 on Intel Macs
+```
+
+Requires .NET SDK 10.0.403 (see `global.json`). Walkthrough: [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md).
 
 ## Goals
 
-- Familiar SQL Server administration workflows on macOS.
-- Accurate, testable compatibility rather than visual-only imitation.
-- Local-first connections with credentials secured in macOS Keychain.
-- Reuse permissively licensed, redistributable SQL tooling where feasible.
-- Safe defaults for destructive operations, updates, dependencies and CI.
+- Familiar SQL Server workflows on macOS with accurate, testable behaviour.
+- Local-first connections; Preview 0 uses session-only SQL authentication.
+- Safe defaults for TLS, cancellation, destructive operations and CI.
 
-## First engineering milestone
-
-Validate real connection/query semantics before selecting a desktop framework.
-The current experiment uses .NET and SqlClient, with synthetic SQL, strict
-certificate pinning, cancellation checks and an isolated SQL Server runner.
-SQL Tools Service remains a candidate for richer tooling; the UI framework is
-undecided. No test result implies broad SSMS parity.
-
-Start with the [maintainer context map](docs/README.md), [actual evidence and next
-work](docs/STATE.md), [build/test guide](docs/TESTING.md) and
-[compatibility matrix](docs/FEATURE_MATRIX.md). See also
-[contribution guide](CONTRIBUTING.md) and [security policy](SECURITY.md).
-
-## Security and privacy
-
-Do not put secrets, connection strings, private certificates, live data, database backups, or proprietary binaries in issues, pull requests, logs or commits. SQLoryn must not send queries, results, schemas or credentials to third-party AI services by default.
+Start with the [context map](docs/README.md), [STATE.md](docs/STATE.md),
+[TESTING.md](docs/TESTING.md) and [FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md).
 
 ## Licence
 
-Original SQLoryn code is available under the [MIT License](LICENSE). Third-party dependencies and assets must be evaluated individually for licence compatibility and redistributability.
+Original SQLoryn code is MIT ([LICENSE](LICENSE)). Third-party packages must be evaluated individually; Avalonia and SqlClient terms are summarised in [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
