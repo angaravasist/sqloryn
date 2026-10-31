@@ -38,16 +38,20 @@ until those runs pass.
   24.04, macos-15 and macos-15-intel; `repo-safeguards` passed; SQL integration
   skipped (not requested). [CodeQL run 41193673892](https://github.com/angaravasist/sqloryn/actions/runs/41193673892)
   succeeded for C#, Python and Actions on the same head.
+- [Hosted run 41194422292](https://github.com/angaravasist/sqloryn/actions/runs/41194422292)
+  workflow_dispatch SQL integration **passed** at PR #5 head `8285892` (Linux
+  local-runner regression of the refactored path on GitHub-hosted Ubuntu x64).
+  This re-qualifies Linux PROBE-10 for this branch; it does **not** establish
+  Mac-to-server evidence.
 - [Hosted run 41188623012](https://github.com/angaravasist/sqloryn/actions/runs/41188623012)
-  passed SQL integration at commit `5ef7c38051b9a43d53ad2ccc2690f708ae15d97e`
-  (historical Linux local E2). That run does **not** validate the refactored
-  local `invoke_probe` path or PROBE-11 code; preserved behaviour only until a
-  fresh approved Linux regression precedes any new E2 claim.
-- Historical Linux E2 detail: Ubuntu 24.04.5 x64 client, SDK 10.0.403/runtime
-  10.0.14, SqlClient 7.1.1, SQL Server 2022 Developer 16.0.4305.5, image SHA-256
-  `cf8f0ab2ebe61feec2eed2629061a07d247f791c2a8ddda74a4ac9f06a291718`.
+  remains historical Linux E2 at `5ef7c380` (pre-PROBE-11 refactor).
+- Local Mac (Apple M3, native arm64) prep on 2026-10-31: SDK 10.0.403 in
+  `~/.dotnet`, Release build, 35 C# assertions, 37 Python tests, probe DLL ready.
+  Docker Desktop here is Linux **aarch64** — unsuitable for SQL Server evidence.
+  No maintainer-approved Linux x64 SSH host is configured for PROBE-11.
 - Native Mac arm64 → SQL Server: **unverified** (no approved host).
-- Native Mac x64 → SQL Server: **unverified** (no approved host).
+- Native Mac x64 → SQL Server: **unverified** (requires an Intel Mac client plus
+  approved host; this machine cannot supply native x64 client evidence).
 - Earlier failed probe runs remain visible: Docker internal-only port publishing
   ([41188114994](https://github.com/angaravasist/sqloryn/actions/runs/41188114994)),
   XACT_STATE smallint handling
