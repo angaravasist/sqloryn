@@ -13,12 +13,25 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new MainWindow();
-            desktop.ShutdownRequested += async (_, e) =>
+            desktop.ShutdownRequested += (_, e) =>
             {
-                if (desktop.MainWindow is MainWindow main && !await main.ConfirmQuitAsync())
-                    e.Cancel = true;
+                // Cancel synchronously before any async prompt; complete shutdown only after agreement.
+                if (desktop.MainWindow is not MainWindow main)
+                    return;
+                if (main.TryBeginQuit(out var completion))
+                    return;
+                e.Cancel = true;
+                _ = CompleteShutdownAsync(desktop, completion);
             };
         }
         base.OnFrameworkInitializationCompleted();
+    }
+
+    static async Task CompleteShutdownAsync(
+        IClassicDesktopStyleApplicationLifetime desktop,
+        Task<bool> completion)
+    {
+        if (await completion.ConfigureAwait(true))
+            desktop.Shutdown();
     }
 }

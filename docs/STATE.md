@@ -6,8 +6,8 @@ Owner: SQLoryn maintainer. Reviewed: 2026-10-31. Experimental; no release suppor
 
 Branch `codex/developer-preview-0` — Developer Preview 0 Avalonia app + Core
 session ([ADR-003](decisions/003-desktop-avalonia.md),
-[SPEC-002](specs/002-developer-preview-0.md)). Draft PR carries the launchable
-`.app`, component tests, SSH runner corrections and docs.
+[SPEC-002](specs/002-developer-preview-0.md)). Draft
+[PR #6](https://github.com/angaravasist/sqloryn/pull/6).
 
 ## Merged baseline
 
@@ -20,18 +20,19 @@ session ([ADR-003](decisions/003-desktop-avalonia.md),
 | Claim | Status |
 |---|---|
 | Probe Linux SQL E2 (historical / regression) | Verified on recorded runs; see prior STATE history |
-| Mac arm64/x64 component CI (probe) | Verified on PR #5 runs |
-| Avalonia app builds + launches on this Mac (arm64) | Local smoke at `3b37d5b`; CI Mac arm64+Intel app publish: [41219130069](https://github.com/angaravasist/sqloryn/actions/runs/41219130069) |
-| Sqloryn.Core E1 assertions | Local + CI pass (TLS policy, cells/bounds, GO policy, tab SQL isolation, dispose) |
-| Python runner tests including empty SSH args / bootstrap | Local + CI pass (40 tests) |
-| Native Mac arm64 app → live SQL walkthrough | **Unverified** — no approved host |
-| Native Mac x64 app → live SQL | **Unverified** — needs Intel Mac + host |
+| Prior Preview 0 CI Mac arm64+Intel app publish | [41219130069](https://github.com/angaravasist/sqloryn/actions/runs/41219130069) at `3b37d5b` |
+| Workspace correction commit (this delivery) | See tip of `codex/developer-preview-0` after push |
+| Sqloryn.Core E1 (ownership, outcomes, lifecycle, 38-digit, budget, RunGuard) | Local pass |
+| Python runner suite | Local pass (40 tests) |
+| Avalonia `.app` build + host-independent UI walkthrough (arm64) | Local (this machine) |
+| CI Mac arm64 / Intel app publish for correction tip | Record after Actions complete |
+| Native Mac arm64/x64 → live SQL walkthrough | **Unverified** — no approved host |
 | VoiceOver device pass | **Unverified** — automation names present only |
 
 ## Reviewer can do today (no SQL host)
 
 ```sh
-export PATH="$HOME/.dotnet:$PATH"   # or install SDK 10.0.403
+export PATH="$HOME/.dotnet:$PATH"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
 dotnet build SQLoryn.slnx --no-restore -c Release
@@ -40,11 +41,10 @@ bash scripts/build_macos_app.sh
 open artifacts/macos/osx-arm64/SQLoryn.app   # or osx-x64 on Intel
 ```
 
-Walk the UI: Connect dialog (validation), New/Open/Save, tabs, Run mode label,
-Escape cancel (no server), Quit dirty prompt. Live connect awaits maintainer
-host approval.
+Follow [WALKTHROUGH.md](WALKTHROUGH.md) host-independent steps. Live connect
+awaits maintainer host approval.
 
 ## Next
 
-Approved Linux x64 SQL host for SPEC-002 walkthrough on arm64, then Intel Mac
-client evidence. Do not treat SSH probe success as desktop acceptance.
+Approved disposable SQL Server for SPEC-002 live walkthrough; keep arm64 and
+Intel evidence separate. Do not treat SSH probe success as desktop acceptance.

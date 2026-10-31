@@ -1,7 +1,4 @@
 using System.Data;
-using System.Data.Common;
-using System.Globalization;
-using System.Text;
 using Microsoft.Data.SqlClient;
 
 namespace Sqloryn.Core;
@@ -17,6 +14,7 @@ public sealed class SqlSession : IAsyncDisposable
     int _inFlight;
     bool _disposed;
     bool _disconnectRequested;
+    int _cancelGeneration;
 
     public bool IsConnected => _connection is { State: ConnectionState.Open };
     public string? ServerDisplay { get; private set; }
@@ -74,7 +72,6 @@ public sealed class SqlSession : IAsyncDisposable
             EnsureConnected();
             if (HasActiveCommand)
                 throw new InvalidOperationException("Cannot change database while a command is running.");
-            // Refuse silent discard of an open transaction.
             await using (var state = _connection!.CreateCommand())
             {
                 state.CommandText = "SELECT CONVERT(int, XACT_STATE());";
@@ -112,39 +109,46 @@ public sealed class SqlSession : IAsyncDisposable
         }
     }
 
-    public void RequestCancel() => CancelInFlight_NoThrow();
+    public void RequestCancel()
+    {
+        Interlocked.Increment(ref _cancelGeneration);
+        CancelInFlight_NoThrow();
+    }
 
     public async Task<QueryResult> ExecuteAsync(string sql, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (string.IsNullOrWhiteSpace(sql))
             throw new ArgumentException("SQL text is required.");
-        // Preview contract: single batch only; no GO splitting.
         if (LooksLikeGoBatch(sql))
             throw new InvalidOperationException("GO batch separators are not supported in Developer Preview 0. Run a single batch.");
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         SqlCommand? command = null;
         CancellationTokenSource? linked = null;
+        SqlConnection? infoConnection = null;
+        SqlInfoMessageEventHandler? onInfo = null;
         try
         {
             EnsureConnected();
-            if (HasActiveCommand)
-                throw new InvalidOperationException("A command is already running on this session.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session. Cancel it or wait; SQL is never queued or replayed.");
 
             linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            linked.CancelAfter(TimeSpan.FromSeconds(_options!.CommandTimeoutSeconds));
+            // Soft wall-clock helper only; provider CommandTimeout / error -2 is authoritative for timeouts.
+            linked.CancelAfter(TimeSpan.FromSeconds(Math.Max(_options!.CommandTimeoutSeconds + 5, 10)));
             _activeCts = linked;
             Interlocked.Increment(ref _inFlight);
 
-            command = _connection!.CreateCommand();
+            infoConnection = _connection!;
+            command = infoConnection.CreateCommand();
             command.CommandText = sql;
             command.CommandTimeout = _options.CommandTimeoutSeconds;
             command.CommandType = CommandType.Text;
             _activeSqlCommand = command;
 
             var messages = new List<QueryMessage>();
-            void OnInfo(object sender, SqlInfoMessageEventArgs e)
+            onInfo = (_, e) =>
             {
                 foreach (SqlError error in e.Errors)
                 {
@@ -152,24 +156,30 @@ public sealed class SqlSession : IAsyncDisposable
                         break;
                     messages.Add(new QueryMessage(error.Class, error.Number, SanitizeMessage(error.Message)));
                 }
-            }
-            _connection.InfoMessage += OnInfo;
+            };
+            infoConnection.InfoMessage += onInfo;
+
             var sets = new List<ResultSet>();
+            var budget = new ResultBudget();
             string? errorSummary = null;
             var completion = QueryCompletionKind.Succeeded;
             var partial = false;
+            int? transactionState = null;
+            var cancelGenAtStart = Volatile.Read(ref _cancelGeneration);
+
             try
             {
                 await using var reader = await command.ExecuteReaderAsync(linked.Token).ConfigureAwait(false);
                 do
                 {
-                    if (sets.Count >= QueryLimits.MaxResultSets)
+                    if (sets.Count >= QueryLimits.MaxResultSets || budget.Exceeded)
                     {
                         partial = true;
                         break;
                     }
-                    sets.Add(await ReadResultSetAsync(reader, linked.Token).ConfigureAwait(false));
-                    if (sets[^1].Truncated)
+                    var set = await ResultMaterializer.ReadResultSetAsync(reader, budget, linked.Token).ConfigureAwait(false);
+                    sets.Add(set);
+                    if (set.Truncated || set.BudgetExceeded)
                         partial = true;
                 } while (await reader.NextResultAsync(linked.Token).ConfigureAwait(false));
             }
@@ -179,36 +189,50 @@ public sealed class SqlSession : IAsyncDisposable
                 partial = sets.Count > 0;
                 errorSummary = "Disconnected during execution; server-side outcome unknown; SQL was not replayed.";
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested ||
+                                                     Volatile.Read(ref _cancelGeneration) != cancelGenAtStart)
             {
-                completion = QueryCompletionKind.CancelledConfirmed;
+                var verified = await TryProbeAfterCancelAsync().ConfigureAwait(false);
+                completion = ExecutionOutcomes.FromCancellation(
+                    disconnectRequested: false,
+                    userCancellation: true,
+                    serverStateVerified: verified.Verified);
+                transactionState = verified.TransactionState;
                 partial = sets.Count > 0;
-                errorSummary = "Cancellation confirmed for this client command. Transaction state was not changed by cancel.";
+                errorSummary = verified.Verified
+                    ? $"Cancellation: client command ended; server probe OK (XACT_STATE={verified.TransactionState}). Cancel does not imply rollback."
+                    : "Cancellation: client command ended; server/transaction state was not verified. SQL was not replayed.";
             }
             catch (OperationCanceledException)
             {
                 completion = QueryCompletionKind.TimedOut;
                 partial = sets.Count > 0;
-                errorSummary = "Command timed out.";
-            }
-            catch (SqlException ex) when (IsBrokenConnection(ex))
-            {
-                completion = QueryCompletionKind.UnknownAfterDisconnect;
-                partial = sets.Count > 0;
-                errorSummary = $"Connection lost during execution (SQL {ex.Number}); outcome unknown; SQL was not replayed.";
-                await DisposeConnectionAsync().ConfigureAwait(false);
+                errorSummary = "Command cancelled by client timeout watchdog; SQL was not replayed.";
             }
             catch (SqlException ex)
             {
-                completion = QueryCompletionKind.Failed;
+                completion = ExecutionOutcomes.FromSqlError(ex.Number);
                 partial = sets.Count > 0;
-                errorSummary = $"SQL error {ex.Number}: {SanitizeMessage(ex.Message)}";
+                errorSummary = completion switch
+                {
+                    QueryCompletionKind.TimedOut =>
+                        $"Provider timeout (SQL -2): {SanitizeMessage(ex.Message)}. Rows read before timeout are retained; SQL was not replayed.",
+                    QueryCompletionKind.UnknownAfterDisconnect =>
+                        $"Connection lost during execution (SQL {ex.Number}); outcome unknown; SQL was not replayed.",
+                    _ => $"SQL error {ex.Number}: {SanitizeMessage(ex.Message)}"
+                };
                 messages.Add(new QueryMessage(ex.Class, ex.Number, SanitizeMessage(ex.Message)));
+                if (completion == QueryCompletionKind.UnknownAfterDisconnect)
+                    await DisposeConnectionAsync().ConfigureAwait(false);
             }
             finally
             {
-                _connection.InfoMessage -= OnInfo;
+                if (infoConnection is not null && onInfo is not null)
+                    infoConnection.InfoMessage -= onInfo;
             }
+
+            if (completion == QueryCompletionKind.Succeeded)
+                await RefreshDatabaseNameNoLockAsync().ConfigureAwait(false);
 
             return new QueryResult
             {
@@ -219,7 +243,8 @@ public sealed class SqlSession : IAsyncDisposable
                 ResultSets = sets,
                 Messages = messages,
                 ErrorSummary = errorSummary,
-                PartialResults = partial
+                PartialResults = partial,
+                TransactionState = transactionState
             };
         }
         finally
@@ -236,6 +261,19 @@ public sealed class SqlSession : IAsyncDisposable
         }
     }
 
+    public async Task RefreshDatabaseAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await RefreshDatabaseNameNoLockAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<string>> ListDatabasesAsync(CancellationToken cancellationToken = default)
     {
         const string sql = """
@@ -248,7 +286,6 @@ public sealed class SqlSession : IAsyncDisposable
 
     public async Task<IReadOnlyList<string>> ListSchemasAsync(string database, CancellationToken cancellationToken = default)
     {
-        // Catalog-qualified: browsing must not change the tab's current database.
         var sql = $"""
             SELECT name FROM {SqlIdentity.QuoteIdentifier(database)}.sys.schemas
             WHERE schema_id < 16384
@@ -352,6 +389,37 @@ public sealed class SqlSession : IAsyncDisposable
         catch { /* ignore dispose failures */ }
     }
 
+    async Task RefreshDatabaseNameNoLockAsync()
+    {
+        if (_connection is not { State: ConnectionState.Open })
+            return;
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT DB_NAME();";
+        cmd.CommandTimeout = _options?.CommandTimeoutSeconds ?? 15;
+        var name = await cmd.ExecuteScalarAsync().ConfigureAwait(false) as string;
+        if (!string.IsNullOrEmpty(name))
+            Database = name;
+    }
+
+    async Task<(bool Verified, int? TransactionState)> TryProbeAfterCancelAsync()
+    {
+        try
+        {
+            if (_connection is not { State: ConnectionState.Open })
+                return (false, null);
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT CONVERT(int, XACT_STATE());";
+            cmd.CommandTimeout = 5;
+            var xact = (int)(await cmd.ExecuteScalarAsync().ConfigureAwait(false) ?? 0);
+            await RefreshDatabaseNameNoLockAsync().ConfigureAwait(false);
+            return (true, xact);
+        }
+        catch
+        {
+            return (false, null);
+        }
+    }
+
     async Task<IReadOnlyList<string>> ReadNameListAsync(string sql, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -373,61 +441,11 @@ public sealed class SqlSession : IAsyncDisposable
         }
     }
 
-    static async Task<ResultSet> ReadResultSetAsync(DbDataReader reader, CancellationToken cancellationToken)
-    {
-        var columns = new string[reader.FieldCount];
-        for (var i = 0; i < reader.FieldCount; i++)
-            columns[i] = string.IsNullOrEmpty(reader.GetName(i)) ? $"Column{i + 1}" : reader.GetName(i);
-
-        var rows = new List<IReadOnlyList<CellValue>>();
-        var truncated = false;
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            if (rows.Count >= QueryLimits.MaxRowsPerSet)
-            {
-                truncated = true;
-                break;
-            }
-            var cells = new CellValue[reader.FieldCount];
-            for (var i = 0; i < reader.FieldCount; i++)
-                cells[i] = FormatCell(reader, i);
-            rows.Add(cells);
-        }
-        return new ResultSet { Columns = columns, Rows = rows, Truncated = truncated };
-    }
-
-    internal static CellValue FormatCell(DbDataReader reader, int ordinal)
-    {
-        if (reader.IsDBNull(ordinal))
-            return CellValue.Null;
-        var value = reader.GetValue(ordinal);
-        return value switch
-        {
-            string s => CellValue.Text(Truncate(s), s.Length == 0 ? "empty-string" : "string"),
-            char c => CellValue.Text(c.ToString(), "string"),
-            byte[] bytes => CellValue.Text("0x" + Convert.ToHexString(bytes.AsSpan(0, Math.Min(bytes.Length, QueryLimits.MaxCellChars / 2))), "binary"),
-            decimal d => CellValue.Text(d.ToString(CultureInfo.InvariantCulture), "decimal"),
-            DateTimeOffset dto => CellValue.Text(dto.ToString("o", CultureInfo.InvariantCulture), "datetimeoffset"),
-            DateTime dt => CellValue.Text(dt.ToString("o", CultureInfo.InvariantCulture), "datetime"),
-            bool b => CellValue.Text(b ? "true" : "false", "bool"),
-            IFormattable formattable => CellValue.Text(Truncate(formattable.ToString(null, CultureInfo.InvariantCulture) ?? ""), "number"),
-            _ => CellValue.Text(Truncate(Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""), "other")
-        };
-    }
-
-    static string Truncate(string value)
-        => value.Length <= QueryLimits.MaxCellChars
-            ? value
-            : value[..QueryLimits.MaxCellChars] + "…";
-
     static string SanitizeMessage(string message)
     {
         var trimmed = message.Replace('\r', ' ').Replace('\n', ' ');
         return trimmed.Length <= 400 ? trimmed : trimmed[..400] + "…";
     }
-
-    static bool IsBrokenConnection(SqlException ex)
-        => ex.Number is -1 or -2 or 233 or 10053 or 10054 or 64;
 
     /// <summary>Conservative detection only — preview does not implement GO batching.</summary>
     internal static bool LooksLikeGoBatch(string sql)
@@ -444,4 +462,8 @@ public sealed class SqlSession : IAsyncDisposable
         }
         return false;
     }
+
+    // Compatibility shim for existing tests that called SqlSession.FormatCell.
+    internal static CellValue FormatCell(System.Data.Common.DbDataReader reader, int ordinal)
+        => ResultMaterializer.FormatCell(reader, ordinal);
 }

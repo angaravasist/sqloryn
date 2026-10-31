@@ -16,6 +16,9 @@ public partial class MainWindow : Window
     readonly ObservableCollection<QueryTab> _tabs = [];
     readonly ObservableCollection<TreeNode> _treeRoots = [];
     QueryTab? _active;
+    bool _closeApproved;
+    bool _closePromptInFlight;
+    long _treeLoadGeneration;
 
     sealed class TreeNode(string title, string kind, string? database = null, string? schema = null, string? objectName = null)
     {
@@ -26,6 +29,7 @@ public partial class MainWindow : Window
         public string? ObjectName { get; } = objectName;
         public ObservableCollection<TreeNode> Children { get; } = [];
         public bool Loaded { get; set; }
+        public bool Loading { get; set; }
     }
 
     public MainWindow()
@@ -39,7 +43,70 @@ public partial class MainWindow : Window
         Editor.LostFocus += (_, _) => CaptureSelection();
         Editor.PointerReleased += (_, _) => CaptureSelection();
         Editor.KeyUp += (_, _) => CaptureSelection();
+        Closing += OnWindowClosing;
         AddTab();
+    }
+
+    void OnWindowClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (_closeApproved)
+            return;
+        e.Cancel = true;
+        if (_closePromptInFlight)
+            return;
+        _closePromptInFlight = true;
+        _ = CompleteNativeCloseAsync();
+    }
+
+    async Task CompleteNativeCloseAsync()
+    {
+        try
+        {
+            if (await ConfirmQuitAsync(disposeOnSuccess: true))
+            {
+                _closeApproved = true;
+                Close();
+            }
+        }
+        finally
+        {
+            _closePromptInFlight = false;
+        }
+    }
+
+    /// <summary>Used by App shutdown path; cancels synchronously then completes asynchronously.</summary>
+    public bool TryBeginQuit(out Task<bool> completion)
+    {
+        if (_closeApproved)
+        {
+            completion = Task.FromResult(true);
+            return true;
+        }
+        if (_closePromptInFlight)
+        {
+            completion = Task.FromResult(false);
+            return false;
+        }
+        _closePromptInFlight = true;
+        completion = FinishQuitFromAppAsync();
+        return false;
+    }
+
+    async Task<bool> FinishQuitFromAppAsync()
+    {
+        try
+        {
+            if (await ConfirmQuitAsync(disposeOnSuccess: true))
+            {
+                _closeApproved = true;
+                return true;
+            }
+            return false;
+        }
+        finally
+        {
+            _closePromptInFlight = false;
+        }
     }
 
     void AddTab()
@@ -54,15 +121,35 @@ public partial class MainWindow : Window
 
     void ActivateTab(QueryTab tab)
     {
+        if (!ReferenceEquals(_active, tab))
+            _active?.BumpGeneration();
         _active = tab;
         Editor.Text = tab.Document.Text;
         RefreshHeader(tab);
         UpdateStatus();
         UpdateRunMode();
         RenderResult(tab.LastResult);
-        // OE follows the active tab's session; never retarget another tab's connection.
-        _ = LoadDatabasesAsync();
+        _ = LoadDatabasesAsync(tab);
     }
+
+    bool TabOpen(QueryTab tab) => _tabs.Contains(tab);
+
+    /// <summary>Connect/open/save/disconnect: same tab session and document; database may change.</summary>
+    bool OwnerStillCurrent(QueryTab tab, OperationBinding binding)
+        => TabOpen(tab)
+           && binding.TabId == tab.Id
+           && ReferenceEquals(tab.Session, binding.SessionKey)
+           && ReferenceEquals(tab.Document, binding.Document);
+
+    /// <summary>Metadata loads: reject after tab switch, session replace, or database identity change.</summary>
+    bool BindingStillCurrent(QueryTab tab, OperationBinding binding)
+        => binding.Matches(
+            tab.Id,
+            tab.Session,
+            tab.Document,
+            tab.Session.Database,
+            tab.Generation,
+            TabOpen(tab));
 
     void RefreshHeader(QueryTab tab)
     {
@@ -98,25 +185,44 @@ public partial class MainWindow : Window
 
     async void OnConnect(object? sender, RoutedEventArgs e)
     {
+        if (_active is null)
+            return;
+        var tab = _active;
+        var binding = tab.CaptureBinding();
         try
         {
             var dialog = new ConnectWindow();
             var ok = await dialog.ShowDialog<bool>(this);
-            if (!ok || dialog.Result is null || _active is null)
+            if (!ok || dialog.Result is null)
                 return;
-            _active.Status = "Connecting…";
-            UpdateStatus();
-            await _active.Session.ConnectAsync(dialog.Result);
-            _active.Status = $"Connected · SQL Server {_active.Session.ServerVersion}";
-            UpdateStatus();
-            await LoadDatabasesAsync();
+            if (!OwnerStillCurrent(tab, binding))
+            {
+                StatusBar.Text = "Connect ignored: tab/session changed.";
+                return;
+            }
+            tab.Status = "Connecting…";
+            if (ReferenceEquals(_active, tab))
+                UpdateStatus();
+            await tab.Session.ConnectAsync(dialog.Result);
+            if (!OwnerStillCurrent(tab, binding))
+                return;
+            tab.Status = $"Connected · SQL Server {tab.Session.ServerVersion}";
+            if (ReferenceEquals(_active, tab))
+            {
+                UpdateStatus();
+                await LoadDatabasesAsync(tab);
+            }
         }
         catch (Exception ex)
         {
-            if (_active is not null)
-                _active.Status = "Connect failed";
-            StatusBar.Text = SafeUi(ex.Message);
-            UpdateStatus();
+            if (!TabOpen(tab))
+                return;
+            tab.Status = "Connect failed";
+            if (ReferenceEquals(_active, tab))
+            {
+                StatusBar.Text = SafeUi(ex.Message);
+                UpdateStatus();
+            }
         }
     }
 
@@ -124,10 +230,18 @@ public partial class MainWindow : Window
     {
         if (_active is null)
             return;
-        await _active.Session.DisconnectAsync();
-        _active.Status = "Disconnected";
-        _treeRoots.Clear();
-        UpdateStatus();
+        var tab = _active;
+        var binding = tab.CaptureBinding();
+        await tab.Session.DisconnectAsync();
+        if (!OwnerStillCurrent(tab, binding))
+            return;
+        tab.Status = "Disconnected";
+        tab.BumpGeneration();
+        if (ReferenceEquals(_active, tab))
+        {
+            _treeRoots.Clear();
+            UpdateStatus();
+        }
     }
 
     async void OnRun(object? sender, RoutedEventArgs e)
@@ -147,21 +261,26 @@ public partial class MainWindow : Window
             StatusBar.Text = "Connect before running SQL.";
             return;
         }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand || !tab.TryBeginRun())
+        {
+            StatusBar.Text = "A command is already running on this tab. Use Cancel; Run will not queue or replay SQL.";
+            return;
+        }
 
-        tab.RunCts?.Cancel();
         tab.RunCts = new CancellationTokenSource();
         var cts = tab.RunCts;
-        var tabId = tab.Id;
+        var binding = tab.CaptureBinding();
         tab.Status = "Running…";
-        UpdateStatus();
+        if (ReferenceEquals(_active, tab))
+            UpdateStatus();
         try
         {
             var result = await tab.Session.ExecuteAsync(sql, cts.Token);
-            if (!_tabs.Contains(tab))
-                return; // tab closed while running — drop late result
+            if (!OwnerStillCurrent(tab, binding))
+                return;
             tab.LastResult = result;
             tab.Status = Describe(result);
-            if (_active?.Id == tabId)
+            if (ReferenceEquals(_active, tab))
             {
                 RenderResult(result);
                 UpdateStatus();
@@ -169,15 +288,23 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            if (!_tabs.Contains(tab))
+            if (!OwnerStillCurrent(tab, binding))
                 return;
             tab.Status = "Run failed";
-            if (_active?.Id == tabId)
+            if (ReferenceEquals(_active, tab))
             {
                 MessagesBox.Text = SafeUi(ex.Message);
                 StatusBar.Text = SafeUi(ex.Message);
                 UpdateStatus();
             }
+        }
+        finally
+        {
+            tab.EndRun();
+            if (ReferenceEquals(tab.RunCts, cts))
+                tab.RunCts = null;
+            if (ReferenceEquals(_active, tab))
+                UpdateStatus();
         }
     }
 
@@ -185,19 +312,58 @@ public partial class MainWindow : Window
     {
         if (_active is null)
             return;
-        _active.RunCts?.Cancel();
-        _active.Session.RequestCancel();
-        _active.Status = "Cancel requested…";
+        var tab = _active;
+        if (!tab.IsExecuting && !tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "Nothing to cancel.";
+            return;
+        }
+        tab.Status = "Cancellation requested…";
+        tab.RunCts?.Cancel();
+        tab.Session.RequestCancel();
         UpdateStatus();
     }
 
     void OnNewTab(object? sender, RoutedEventArgs e) => AddTab();
 
+    async void OnCloseTab(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        if (!await EnsureDiscardOrSaveAsync(tab))
+            return;
+        await RemoveTabAsync(tab);
+    }
+
+    async Task RemoveTabAsync(QueryTab tab)
+    {
+        tab.BumpGeneration();
+        await tab.DisposeAsync();
+        _tabs.Remove(tab);
+        var item = QueryTabs.Items.OfType<TabItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, tab));
+        if (item is not null)
+            QueryTabs.Items.Remove(item);
+        if (_tabs.Count == 0)
+            AddTab();
+        else if (QueryTabs.SelectedItem is TabItem { Tag: QueryTab next })
+            ActivateTab(next);
+        else if (_tabs[0] is { } first)
+        {
+            QueryTabs.SelectedItem = QueryTabs.Items.OfType<TabItem>().First(i => ReferenceEquals(i.Tag, first));
+            ActivateTab(first);
+        }
+    }
+
     async void OnOpen(object? sender, RoutedEventArgs e)
     {
         if (_active is null)
             return;
-        if (!await EnsureDiscardOrSaveAsync(_active))
+        var tab = _active;
+        var binding = tab.CaptureBinding();
+        if (!await EnsureDiscardOrSaveAsync(tab))
+            return; // cancelled — document remains dirty
+        if (!OwnerStillCurrent(tab, binding))
             return;
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
@@ -206,24 +372,39 @@ public partial class MainWindow : Window
             FileTypeFilter = [new FilePickerFileType("SQL") { Patterns = ["*.sql"] }]
         });
         if (files.Count == 0)
+            return; // cancelled picker — dirty state already resolved or unchanged
+        if (!TabOpen(tab) || !ReferenceEquals(tab.Document, binding.Document))
             return;
         var path = files[0].TryGetLocalPath();
         if (path is null)
             return;
-        await _active.Document.LoadFileAsync(path);
-        Editor.Text = _active.Document.Text;
-        RefreshHeader(_active);
+        try
+        {
+            await tab.Document.LoadFileAsync(path);
+            if (!TabOpen(tab))
+                return;
+            if (ReferenceEquals(_active, tab))
+                Editor.Text = tab.Document.Text;
+            RefreshHeader(tab);
+        }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(_active, tab))
+                StatusBar.Text = SafeUi(ex.Message);
+        }
     }
 
-    async void OnSave(object? sender, RoutedEventArgs e) => await SaveActiveAsync(saveAs: false);
-    async void OnSaveAs(object? sender, RoutedEventArgs e) => await SaveActiveAsync(saveAs: true);
+    async void OnSave(object? sender, RoutedEventArgs e) => await SaveTabAsync(_active, saveAs: false);
+    async void OnSaveAs(object? sender, RoutedEventArgs e) => await SaveTabAsync(_active, saveAs: true);
 
-    async Task<bool> SaveActiveAsync(bool saveAs)
+    async Task<bool> SaveTabAsync(QueryTab? tab, bool saveAs)
     {
-        if (_active is null)
+        if (tab is null)
             return false;
-        _active.Document.SetText(Editor.Text ?? "");
-        string? path = _active.Document.FilePath;
+        var binding = tab.CaptureBinding();
+        if (ReferenceEquals(tab, _active))
+            tab.Document.SetText(Editor.Text ?? "");
+        string? path = tab.Document.FilePath;
         if (saveAs || path is null)
         {
             var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
@@ -234,21 +415,53 @@ public partial class MainWindow : Window
             });
             path = file?.TryGetLocalPath();
             if (path is null)
-                return false;
+                return false; // cancel save — keep dirty
         }
-        await _active.Document.SaveAsync(path);
-        RefreshHeader(_active);
-        StatusBar.Text = $"Saved {_active.Document.Title}";
-        return true;
+        if (!OwnerStillCurrent(tab, binding))
+            return false;
+        try
+        {
+            await tab.Document.SaveAsync(path);
+            RefreshHeader(tab);
+            if (ReferenceEquals(_active, tab))
+                StatusBar.Text = tab.Document.IsDirty
+                    ? $"Saved {tab.Document.Title} (newer edits remain unsaved)"
+                    : $"Saved {tab.Document.Title}";
+            // Proceed only when the originating document is clean after save.
+            return !tab.Document.IsDirty;
+        }
+        catch (Exception ex)
+        {
+            // Dirty state preserved by ScriptDocument.SaveAsync
+            if (ReferenceEquals(_active, tab))
+                StatusBar.Text = SafeUi("Save failed: " + ex.Message);
+            RefreshHeader(tab);
+            return false;
+        }
     }
 
     async void OnQuit(object? sender, RoutedEventArgs e)
     {
-        if (await ConfirmQuitAsync())
-            Close();
+        if (_closePromptInFlight || _closeApproved)
+            return;
+        _closePromptInFlight = true;
+        try
+        {
+            if (await ConfirmQuitAsync(disposeOnSuccess: true))
+            {
+                _closeApproved = true;
+                Close();
+            }
+        }
+        finally
+        {
+            _closePromptInFlight = false;
+        }
     }
 
-    public async Task<bool> ConfirmQuitAsync()
+    public Task<bool> ConfirmQuitAsync() => ConfirmQuitAsync(disposeOnSuccess: true);
+
+    public async Task<bool> ConfirmQuitAsync(bool disposeOnSuccess)
     {
         foreach (var tab in _tabs.ToList())
         {
@@ -256,8 +469,10 @@ public partial class MainWindow : Window
                 QueryTabs.SelectedItem = item;
             ActivateTab(tab);
             if (!await EnsureDiscardOrSaveAsync(tab))
-                return false;
+                return false; // cancel — remaining dirty tabs stay dirty
         }
+        if (!disposeOnSuccess)
+            return true;
         foreach (var tab in _tabs.ToList())
             await tab.DisposeAsync();
         _tabs.Clear();
@@ -269,24 +484,33 @@ public partial class MainWindow : Window
     {
         if (ReferenceEquals(tab, _active))
             tab.Document.SetText(Editor.Text ?? "");
-        if (!tab.Document.IsDirty)
-            return true;
-
-        var choice = await ShowDirtyDialogAsync(tab.Document.Title);
-        switch (choice)
-        {
-            case "save":
+        return await DocumentLifecycle.ResolveDirtyAsync(
+            tab.Document,
+            async () =>
+            {
+                var choice = await ShowDirtyDialogAsync(tab.Document.Title);
+                return choice switch
+                {
+                    "save" => DocumentLifecycle.PromptChoice.Save,
+                    "discard" => DocumentLifecycle.PromptChoice.Discard,
+                    _ => DocumentLifecycle.PromptChoice.Cancel
+                };
+            },
+            async doc =>
+            {
                 if (!ReferenceEquals(tab, _active))
                     ActivateTab(tab);
-                return await SaveActiveAsync(tab.Document.FilePath is null);
-            case "discard":
-                var text = ReferenceEquals(tab, _active) ? Editor.Text ?? "" : tab.Document.Text;
-                tab.Document.DiscardChangesTo(text);
+                return await SaveTabAsync(tab, tab.Document.FilePath is null);
+            },
+            async doc =>
+            {
+                var text = ReferenceEquals(tab, _active) ? Editor.Text ?? "" : doc.Text;
+                doc.DiscardChangesTo(text);
+                if (ReferenceEquals(tab, _active))
+                    Editor.Text = text;
                 RefreshHeader(tab);
-                return true;
-            default:
-                return false;
-        }
+                await Task.CompletedTask;
+            });
     }
 
     async Task<string> ShowDirtyDialogAsync(string title)
@@ -355,18 +579,26 @@ public partial class MainWindow : Window
         UpdateRunMode();
     }
 
-    async void OnRefreshTree(object? sender, RoutedEventArgs e) => await LoadDatabasesAsync();
-
-    async Task LoadDatabasesAsync()
+    async void OnRefreshTree(object? sender, RoutedEventArgs e)
     {
-        _treeRoots.Clear();
-        if (_active?.Session.IsConnected != true)
+        if (_active is not null)
+            await LoadDatabasesAsync(_active);
+    }
+
+    async Task LoadDatabasesAsync(QueryTab tab)
+    {
+        var loadId = Interlocked.Increment(ref _treeLoadGeneration);
+        var binding = tab.CaptureBinding();
+        if (!ReferenceEquals(_active, tab))
             return;
-        var session = _active.Session;
+        _treeRoots.Clear();
+        if (!tab.Session.IsConnected)
+            return;
         try
         {
-            var names = await session.ListDatabasesAsync();
-            if (!ReferenceEquals(_active?.Session, session))
+            var names = await tab.Session.ListDatabasesAsync();
+            if (loadId != Volatile.Read(ref _treeLoadGeneration) || !ReferenceEquals(_active, tab) ||
+                !ReferenceEquals(tab.Session, binding.SessionKey))
                 return;
             foreach (var n in names)
             {
@@ -379,21 +611,84 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            if (ReferenceEquals(_active?.Session, session))
+            if (ReferenceEquals(_active, tab))
                 StatusBar.Text = SafeUi(ex.Message);
         }
     }
 
+    async void OnExpandSelected(object? sender, RoutedEventArgs e)
+    {
+        if (ObjectTree.SelectedItem is TreeNode node)
+            await ExpandNodeAsync(node, insertSql: false);
+    }
+
+    async void OnObjectKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Right or Key.Enter or Key.Space))
+            return;
+        if (ObjectTree.SelectedItem is not TreeNode node)
+            return;
+        e.Handled = true;
+        await ExpandNodeAsync(node, insertSql: false);
+    }
+
     async void OnObjectDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (ObjectTree.SelectedItem is not TreeNode node)
+            return;
+        // Double-tap expands/loads only — does not insert SQL.
+        await ExpandNodeAsync(node, insertSql: false);
+    }
+
+    async void OnScriptSelect(object? sender, RoutedEventArgs e)
     {
         if (ObjectTree.SelectedItem is not TreeNode node || _active is null)
             return;
+        if (node.Kind is not ("table" or "view") || node.Database is null || node.Schema is null || node.ObjectName is null)
+        {
+            StatusBar.Text = "Select a table or view to insert a quoted SELECT.";
+            return;
+        }
+        var tab = _active;
+        var sql = SqlIdentity.ScriptSelectTop(node.Database, node.Schema, node.ObjectName);
+        Editor.Text = (Editor.Text ?? "") + sql;
+        tab.Document.SetText(Editor.Text);
+        RefreshHeader(tab);
+        StatusBar.Text = "Inserted " + SqlIdentity.Qualify3(node.Database, node.Schema, node.ObjectName);
+    }
+
+    async Task ExpandNodeAsync(TreeNode node, bool insertSql)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        var binding = tab.CaptureBinding();
+        var database = node.Database;
         try
         {
             if (node.Kind == "database" && !node.Loaded)
             {
+                if (node.Loading)
+                    return;
+                node.Loading = true;
                 node.Children.Clear();
-                foreach (var schema in await _active.Session.ListSchemasAsync(node.Database!))
+                node.Children.Add(new TreeNode("Loading…", "placeholder", database));
+                IReadOnlyList<string> schemas;
+                try
+                {
+                    schemas = await tab.Session.ListSchemasAsync(node.Database!);
+                }
+                finally
+                {
+                    node.Loading = false;
+                }
+                if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
+                {
+                    StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
+                    return;
+                }
+                node.Children.Clear();
+                foreach (var schema in schemas)
                 {
                     var sn = new TreeNode(schema, "schema", node.Database, schema);
                     sn.Children.Add(new TreeNode("…", "placeholder", node.Database, schema));
@@ -403,11 +698,31 @@ public partial class MainWindow : Window
             }
             else if (node.Kind == "schema" && !node.Loaded)
             {
+                if (node.Loading)
+                    return;
+                node.Loading = true;
                 node.Children.Clear();
-                foreach (var (schema, name, type) in await _active.Session.ListTablesAndViewsAsync(node.Database!, node.Schema!))
+                node.Children.Add(new TreeNode("Loading…", "placeholder", node.Database, node.Schema));
+                IReadOnlyList<(string Schema, string Name, string Type)> objects;
+                try
+                {
+                    objects = await tab.Session.ListTablesAndViewsAsync(node.Database!, node.Schema!);
+                }
+                finally
+                {
+                    node.Loading = false;
+                }
+                if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
+                {
+                    StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
+                    return;
+                }
+                node.Children.Clear();
+                foreach (var (schema, name, type) in objects)
                 {
                     var kind = type == "V" ? "view" : "table";
-                    var tn = new TreeNode($"{name} ({kind})", kind, node.Database, schema, name);
+                    // Show database context so identical names across DBs stay distinguishable.
+                    var tn = new TreeNode($"{node.Database}.{schema}.{name} ({kind})", kind, node.Database, schema, name);
                     tn.Children.Add(new TreeNode("…", "placeholder", node.Database, schema, name));
                     node.Children.Add(tn);
                 }
@@ -417,20 +732,43 @@ public partial class MainWindow : Window
             {
                 if (!node.Loaded)
                 {
+                    if (node.Loading)
+                        return;
+                    node.Loading = true;
                     node.Children.Clear();
-                    foreach (var (name, type, nullable) in await _active.Session.ListColumnsAsync(node.Database!, node.Schema!, node.ObjectName!))
+                    node.Children.Add(new TreeNode("Loading…", "placeholder", node.Database, node.Schema, node.ObjectName));
+                    IReadOnlyList<(string Name, string TypeName, bool IsNullable)> columns;
+                    try
+                    {
+                        columns = await tab.Session.ListColumnsAsync(node.Database!, node.Schema!, node.ObjectName!);
+                    }
+                    finally
+                    {
+                        node.Loading = false;
+                    }
+                    if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
+                    {
+                        StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
+                        return;
+                    }
+                    node.Children.Clear();
+                    foreach (var (name, type, nullable) in columns)
                         node.Children.Add(new TreeNode($"{name} : {type}{(nullable ? "?" : "")}", "column", node.Database, node.Schema, name));
                     node.Loaded = true;
                 }
-                var sql = "SELECT TOP (100) * FROM " + SqlIdentity.Qualify(node.Schema, node.ObjectName!) + ";\n";
-                Editor.Text = (Editor.Text ?? "") + sql;
-                _active.Document.SetText(Editor.Text);
-                RefreshHeader(_active);
+                if (insertSql && node.Database is not null && node.Schema is not null && node.ObjectName is not null)
+                {
+                    var sql = SqlIdentity.ScriptSelectTop(node.Database, node.Schema, node.ObjectName);
+                    Editor.Text = (Editor.Text ?? "") + sql;
+                    tab.Document.SetText(Editor.Text);
+                    RefreshHeader(tab);
+                }
             }
         }
         catch (Exception ex)
         {
-            StatusBar.Text = SafeUi(ex.Message);
+            if (ReferenceEquals(_active, tab))
+                StatusBar.Text = SafeUi(ex.Message);
         }
     }
 
@@ -448,6 +786,8 @@ public partial class MainWindow : Window
             $"Server: {result.Server}  Database: {result.Database}",
             $"Partial: {result.PartialResults}"
         };
+        if (result.TransactionState is int xact)
+            lines.Add($"XACT_STATE: {xact}");
         if (!string.IsNullOrEmpty(result.ErrorSummary))
             lines.Add(result.ErrorSummary);
         foreach (var msg in result.Messages)
@@ -470,11 +810,19 @@ public partial class MainWindow : Window
             sb.AppendLine($"--- result set {i + 1} ---");
             sb.AppendLine(string.Join('\t', set.Columns));
             foreach (var row in set.Rows)
-                sb.AppendLine(string.Join('\t', row.Select(c => c.IsNull ? "NULL" : c.Display.Replace('\t', ' ').Replace('\n', ' '))));
-            if (set.Truncated)
             {
-                sb.AppendLine($"… truncated at {QueryLimits.MaxRowsPerSet} rows");
-                MessagesBox.Text += $"{Environment.NewLine}Result set {i + 1} truncated at {QueryLimits.MaxRowsPerSet} rows.";
+                sb.AppendLine(string.Join('\t', row.Select(c =>
+                {
+                    var text = c.IsNull ? "NULL" : c.Display.Replace('\t', ' ').Replace('\n', ' ');
+                    return c.Truncated ? text + " [truncated]" : text;
+                })));
+            }
+            if (set.Truncated || set.BudgetExceeded)
+            {
+                sb.AppendLine(set.BudgetExceeded
+                    ? "… stopped: aggregate retained-output budget exceeded"
+                    : $"… truncated at {QueryLimits.MaxRowsPerSet} rows");
+                MessagesBox.Text += $"{Environment.NewLine}Result set {i + 1} truncated.";
             }
         }
         ResultsBox.Text = sb.ToString();
@@ -484,7 +832,9 @@ public partial class MainWindow : Window
     {
         QueryCompletionKind.Succeeded => "Succeeded",
         QueryCompletionKind.Failed => "Failed",
-        QueryCompletionKind.CancelledConfirmed => "Cancelled",
+        QueryCompletionKind.CancellationRequested => "Cancellation requested",
+        QueryCompletionKind.CancelledClientEnded => "Cancelled (client ended)",
+        QueryCompletionKind.CancelledServerVerified => "Cancelled (server verified)",
         QueryCompletionKind.TimedOut => "Timed out",
         QueryCompletionKind.UnknownAfterDisconnect => "Unknown after disconnect",
         _ => result.Completion.ToString()

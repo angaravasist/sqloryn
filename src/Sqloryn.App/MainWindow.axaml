@@ -11,6 +11,7 @@
         <MenuItem Header="_Open…" Name="MenuOpen" HotKey="Ctrl+O" Click="OnOpen" />
         <MenuItem Header="_Save" Name="MenuSave" HotKey="Ctrl+S" Click="OnSave" />
         <MenuItem Header="Save _As…" Name="MenuSaveAs" HotKey="Ctrl+Shift+S" Click="OnSaveAs" />
+        <MenuItem Header="_Close Tab" Name="MenuCloseTab" HotKey="Ctrl+W" Click="OnCloseTab" />
         <Separator />
         <MenuItem Header="_Quit" Name="MenuQuit" HotKey="Ctrl+Q" Click="OnQuit" />
       </MenuItem>
@@ -21,6 +22,11 @@
       <MenuItem Header="_Query">
         <MenuItem Header="_Run" Name="MenuRun" HotKey="F5" Click="OnRun" />
         <MenuItem Header="_Cancel" Name="MenuCancel" HotKey="Escape" Click="OnCancel" />
+      </MenuItem>
+      <MenuItem Header="_Object">
+        <MenuItem Header="_Expand Selected" Name="MenuExpand" HotKey="Ctrl+E" Click="OnExpandSelected" />
+        <MenuItem Header="Insert _SELECT for Table/View" Name="MenuScriptSelect" HotKey="Ctrl+Shift+E" Click="OnScriptSelect"
+                  AutomationProperties.Name="Insert SELECT for selected table or view" />
       </MenuItem>
     </Menu>
 
@@ -39,7 +45,8 @@
         </StackPanel>
         <TreeView Name="ObjectTree" Margin="8,0,8,8"
                   AutomationProperties.Name="Object explorer"
-                  DoubleTapped="OnObjectDoubleTapped" />
+                  DoubleTapped="OnObjectDoubleTapped"
+                  KeyDown="OnObjectKeyDown" />
       </DockPanel>
 
       <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto,*">
