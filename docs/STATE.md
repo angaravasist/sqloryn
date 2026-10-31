@@ -21,9 +21,9 @@ session ([ADR-003](decisions/003-desktop-avalonia.md),
 |---|---|
 | Probe Linux SQL E2 (historical / regression) | Verified on recorded runs; see prior STATE history |
 | Mac arm64/x64 component CI (probe) | Verified on PR #5 runs |
-| Avalonia app builds + launches on this Mac (arm64) | Locally observed: `scripts/build_macos_app.sh`; process stayed up until killed |
-| Sqloryn.Core E1 assertions | Local pass (TLS policy, cells/bounds, GO policy, tab SQL isolation, dispose) |
-| Python runner tests including empty SSH args / bootstrap | Local pass (40 tests) |
+| Avalonia app builds + launches on this Mac (arm64) | Local smoke at `3b37d5b`; CI Mac arm64+Intel app publish: [41219130069](https://github.com/angaravasist/sqloryn/actions/runs/41219130069) |
+| Sqloryn.Core E1 assertions | Local + CI pass (TLS policy, cells/bounds, GO policy, tab SQL isolation, dispose) |
+| Python runner tests including empty SSH args / bootstrap | Local + CI pass (40 tests) |
 | Native Mac arm64 app → live SQL walkthrough | **Unverified** — no approved host |
 | Native Mac x64 app → live SQL | **Unverified** — needs Intel Mac + host |
 | VoiceOver device pass | **Unverified** — automation names present only |
