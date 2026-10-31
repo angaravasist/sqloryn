@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../experiments/SqlClientProbe/SqlClientProbe.csproj" />
+    <PackageReference Include="Microsoft.Data.SqlClient.SNI.runtime" Version="[7.1.0]" ExcludeAssets="all" PrivateAssets="all" />
+  </ItemGroup>
+</Project>
