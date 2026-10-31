@@ -25,7 +25,7 @@ session ([ADR-003](decisions/003-desktop-avalonia.md),
 | Sqloryn.Core E1 (ownership, outcomes, lifecycle, 38-digit, budget, RunGuard) | Local pass |
 | Python runner suite | Local pass (40 tests) |
 | Avalonia `.app` build + host-independent UI walkthrough (arm64) | Local (this machine) |
-| CI Mac arm64 / Intel app publish for correction tip | Record after Actions complete |
+| CI Mac arm64 / Intel app publish for correction tip | [41234937796](https://github.com/angaravasist/sqloryn/actions/runs/41234937796) (ubuntu + macos-15 + macos-15-intel pass) |
 | Native Mac arm64/x64 → live SQL walkthrough | **Unverified** — no approved host |
 | VoiceOver device pass | **Unverified** — automation names present only |
 
