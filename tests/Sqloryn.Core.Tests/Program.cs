@@ -94,5 +94,29 @@ tabB.SetText("SELECT 'B'");
 Check(ScriptDocument.ResolveBatch(tabA.Text, null) != ScriptDocument.ResolveBatch(tabB.Text, null), "tab-sql-isolation");
 Pass("tab-sql-isolation");
 
+Check(QueryLimits.MaxRowsPerSet > 0 && QueryLimits.MaxCellChars > 0, "bounds");
+var longTable = new DataTable();
+longTable.Columns.Add("x", typeof(string));
+longTable.Rows.Add(new string('x', QueryLimits.MaxCellChars + 50));
+using (var longReader = longTable.CreateDataReader())
+{
+    Check(longReader.Read(), "long-reader");
+    var cell = SqlSession.FormatCell(longReader, 0);
+    Check(cell.Display.Length <= QueryLimits.MaxCellChars + 1, "cell-bound"); // +1 for ellipsis
+}
+Pass("output-bounds");
+
+// Closed-tab routing: disposing a session must not leave a connectable target for late UI apply.
+await using (var closed = new SqlSession())
+{
+    await closed.DisposeAsync();
+    try
+    {
+        await closed.ExecuteAsync("SELECT 1");
+        throw new Exception("FAIL execute-after-dispose");
+    }
+    catch (ObjectDisposedException) { Pass("execute-after-dispose"); }
+}
+
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
 return 0;

@@ -60,6 +60,8 @@ public partial class MainWindow : Window
         UpdateStatus();
         UpdateRunMode();
         RenderResult(tab.LastResult);
+        // OE follows the active tab's session; never retarget another tab's connection.
+        _ = LoadDatabasesAsync();
     }
 
     void RefreshHeader(QueryTab tab)
@@ -155,6 +157,8 @@ public partial class MainWindow : Window
         try
         {
             var result = await tab.Session.ExecuteAsync(sql, cts.Token);
+            if (!_tabs.Contains(tab))
+                return; // tab closed while running — drop late result
             tab.LastResult = result;
             tab.Status = Describe(result);
             if (_active?.Id == tabId)
@@ -165,6 +169,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            if (!_tabs.Contains(tab))
+                return;
             tab.Status = "Run failed";
             if (_active?.Id == tabId)
             {
@@ -353,22 +359,28 @@ public partial class MainWindow : Window
 
     async Task LoadDatabasesAsync()
     {
+        _treeRoots.Clear();
         if (_active?.Session.IsConnected != true)
             return;
+        var session = _active.Session;
         try
         {
-            var names = await _active.Session.ListDatabasesAsync();
-            _treeRoots.Clear();
+            var names = await session.ListDatabasesAsync();
+            if (!ReferenceEquals(_active?.Session, session))
+                return;
             foreach (var n in names)
             {
                 var node = new TreeNode(n, "database", database: n);
                 node.Children.Add(new TreeNode("…", "placeholder", database: n));
                 _treeRoots.Add(node);
             }
+            if (names.Count == 0)
+                StatusBar.Text = "Object explorer: no accessible databases.";
         }
         catch (Exception ex)
         {
-            StatusBar.Text = SafeUi(ex.Message);
+            if (ReferenceEquals(_active?.Session, session))
+                StatusBar.Text = SafeUi(ex.Message);
         }
     }
 
@@ -440,8 +452,8 @@ public partial class MainWindow : Window
             lines.Add(result.ErrorSummary);
         foreach (var msg in result.Messages)
             lines.Add($"Msg {msg.Number} (class {msg.Class}): {msg.Text}");
-        if (result.ResultSets.Count > 1)
-            lines.Add($"Showing first of {result.ResultSets.Count} result sets.");
+        if (result.PartialResults)
+            lines.Add("Partial or truncated output.");
         MessagesBox.Text = string.Join(Environment.NewLine, lines);
 
         if (result.ResultSets.Count == 0)
@@ -449,15 +461,21 @@ public partial class MainWindow : Window
             ResultsBox.Text = "(no result sets)";
             return;
         }
-        var set = result.ResultSets[0];
         var sb = new StringBuilder();
-        sb.AppendLine(string.Join('\t', set.Columns));
-        foreach (var row in set.Rows)
-            sb.AppendLine(string.Join('\t', row.Select(c => c.IsNull ? "NULL" : c.Display.Replace('\t', ' ').Replace('\n', ' '))));
-        if (set.Truncated)
+        for (var i = 0; i < result.ResultSets.Count; i++)
         {
-            sb.AppendLine($"… truncated at {QueryLimits.MaxRowsPerSet} rows");
-            MessagesBox.Text += $"{Environment.NewLine}Row output truncated at {QueryLimits.MaxRowsPerSet} rows.";
+            var set = result.ResultSets[i];
+            if (i > 0)
+                sb.AppendLine();
+            sb.AppendLine($"--- result set {i + 1} ---");
+            sb.AppendLine(string.Join('\t', set.Columns));
+            foreach (var row in set.Rows)
+                sb.AppendLine(string.Join('\t', row.Select(c => c.IsNull ? "NULL" : c.Display.Replace('\t', ' ').Replace('\n', ' '))));
+            if (set.Truncated)
+            {
+                sb.AppendLine($"… truncated at {QueryLimits.MaxRowsPerSet} rows");
+                MessagesBox.Text += $"{Environment.NewLine}Result set {i + 1} truncated at {QueryLimits.MaxRowsPerSet} rows.";
+            }
         }
         ResultsBox.Text = sb.ToString();
     }

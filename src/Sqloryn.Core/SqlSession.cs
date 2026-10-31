@@ -16,6 +16,7 @@ public sealed class SqlSession : IAsyncDisposable
     SqlCommand? _activeSqlCommand;
     int _inFlight;
     bool _disposed;
+    bool _disconnectRequested;
 
     public bool IsConnected => _connection is { State: ConnectionState.Open };
     public string? ServerDisplay { get; private set; }
@@ -93,10 +94,11 @@ public sealed class SqlSession : IAsyncDisposable
 
     public async Task DisconnectAsync()
     {
+        _disconnectRequested = true;
+        CancelInFlight_NoThrow();
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            CancelInFlight_NoThrow();
             await DisposeConnectionAsync().ConfigureAwait(false);
             ServerDisplay = null;
             Database = null;
@@ -105,6 +107,7 @@ public sealed class SqlSession : IAsyncDisposable
         }
         finally
         {
+            _disconnectRequested = false;
             _gate.Release();
         }
     }
@@ -170,11 +173,17 @@ public sealed class SqlSession : IAsyncDisposable
                         partial = true;
                 } while (await reader.NextResultAsync(linked.Token).ConfigureAwait(false));
             }
+            catch (OperationCanceledException) when (_disconnectRequested)
+            {
+                completion = QueryCompletionKind.UnknownAfterDisconnect;
+                partial = sets.Count > 0;
+                errorSummary = "Disconnected during execution; server-side outcome unknown; SQL was not replayed.";
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 completion = QueryCompletionKind.CancelledConfirmed;
                 partial = sets.Count > 0;
-                errorSummary = "Cancellation requested; awaiting confirmation that the batch stopped.";
+                errorSummary = "Cancellation confirmed for this client command. Transaction state was not changed by cancel.";
             }
             catch (OperationCanceledException)
             {
@@ -239,9 +248,9 @@ public sealed class SqlSession : IAsyncDisposable
 
     public async Task<IReadOnlyList<string>> ListSchemasAsync(string database, CancellationToken cancellationToken = default)
     {
-        await ChangeDatabaseAsync(database, cancellationToken).ConfigureAwait(false);
-        const string sql = """
-            SELECT name FROM sys.schemas
+        // Catalog-qualified: browsing must not change the tab's current database.
+        var sql = $"""
+            SELECT name FROM {SqlIdentity.QuoteIdentifier(database)}.sys.schemas
             WHERE schema_id < 16384
             ORDER BY name;
             """;
@@ -251,11 +260,10 @@ public sealed class SqlSession : IAsyncDisposable
     public async Task<IReadOnlyList<(string Schema, string Name, string Type)>> ListTablesAndViewsAsync(
         string database, string schema, CancellationToken cancellationToken = default)
     {
-        await ChangeDatabaseAsync(database, cancellationToken).ConfigureAwait(false);
         var sql = $"""
             SELECT s.name, o.name, o.type
-            FROM sys.objects AS o
-            INNER JOIN sys.schemas AS s ON o.schema_id = s.schema_id
+            FROM {SqlIdentity.QuoteIdentifier(database)}.sys.objects AS o
+            INNER JOIN {SqlIdentity.QuoteIdentifier(database)}.sys.schemas AS s ON o.schema_id = s.schema_id
             WHERE o.type IN ('U', 'V') AND s.name = @schema
             ORDER BY o.type, o.name;
             """;
@@ -282,13 +290,13 @@ public sealed class SqlSession : IAsyncDisposable
     public async Task<IReadOnlyList<(string Name, string TypeName, bool IsNullable)>> ListColumnsAsync(
         string database, string schema, string table, CancellationToken cancellationToken = default)
     {
-        await ChangeDatabaseAsync(database, cancellationToken).ConfigureAwait(false);
-        const string sql = """
+        var db = SqlIdentity.QuoteIdentifier(database);
+        var sql = $"""
             SELECT c.name, t.name, c.is_nullable
-            FROM sys.columns AS c
-            INNER JOIN sys.types AS t ON c.user_type_id = t.user_type_id
-            INNER JOIN sys.objects AS o ON c.object_id = o.object_id
-            INNER JOIN sys.schemas AS s ON o.schema_id = s.schema_id
+            FROM {db}.sys.columns AS c
+            INNER JOIN {db}.sys.types AS t ON c.user_type_id = t.user_type_id
+            INNER JOIN {db}.sys.objects AS o ON c.object_id = o.object_id
+            INNER JOIN {db}.sys.schemas AS s ON o.schema_id = s.schema_id
             WHERE s.name = @schema AND o.name = @table
             ORDER BY c.column_id;
             """;
