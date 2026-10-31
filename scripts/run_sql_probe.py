@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import socket
 import subprocess
 import sys
@@ -93,7 +92,7 @@ def parse_ssh_destination(value):
     return user, host
 
 
-def ssh_common_options(known_hosts):
+def ssh_isolation_options(known_hosts):
     path = Path(known_hosts)
     if not path.is_file():
         raise ProbeError("SSH known-hosts file is required and must already exist.")
@@ -111,7 +110,6 @@ def ssh_common_options(known_hosts):
         "-o", "PubkeyAuthentication=yes",
         "-o", "ForwardAgent=no",
         "-o", "ForwardX11=no",
-        "-o", "ClearAllForwardings=yes",
         "-o", "ExitOnForwardFailure=yes",
         "-o", "RequestTTY=no",
         "-o", "UpdateHostKeys=no",
@@ -124,11 +122,65 @@ def ssh_common_options(known_hosts):
         "-o", "ConnectTimeout=20",
         "-o", "ServerAliveInterval=10",
         "-o", "ServerAliveCountMax=3",
+        "-o", "ConnectionAttempts=1",
     ]
+
+
+def ssh_command_options(known_hosts):
+    # ClearAllForwardings must stay on command/scp sessions only. On tunnel sessions it
+    # also clears explicit -L forwards (verified via ssh -G).
+    return [*ssh_isolation_options(known_hosts), "-o", "ClearAllForwardings=yes"]
+
+
+def ssh_tunnel_options(known_hosts):
+    return ssh_isolation_options(known_hosts)
+
+
+def ssh_common_options(known_hosts):
+    """Backward-compatible alias for non-tunnel sessions."""
+    return ssh_command_options(known_hosts)
 
 
 def ssh_target(user, host):
     return f"{user}@{host}" if user else host
+
+
+def tunnel_ssh_command(user, host, known_hosts, local_port, remote_port):
+    if not 1024 <= local_port <= 65535 or not 1024 <= remote_port <= 65535:
+        raise ProbeError("Invalid tunnel port.")
+    forward = f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}"
+    return [
+        "ssh", *ssh_tunnel_options(known_hosts),
+        "-N", "-L", forward,
+        "--", ssh_target(user, host),
+    ]
+
+
+def effective_ssh_config(argv):
+    """Connection-free effective configuration via ssh -G."""
+    if not argv or argv[0] != "ssh":
+        raise ProbeError("Invalid SSH argv for configuration dump.")
+    # Replace destination with a dummy host; -G does not connect.
+    command = ["ssh", "-G", *argv[1:]]
+    try:
+        result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=10)
+    except subprocess.TimeoutExpired as error:
+        raise ProbeError("SSH configuration dump timed out.") from error
+    if result.returncode:
+        raise ProbeError("SSH configuration dump failed; raw diagnostics suppressed.")
+    parsed = {}
+    localforward = []
+    for line in result.stdout.splitlines():
+        if not line or " " not in line:
+            continue
+        key, value = line.split(" ", 1)
+        key = key.lower()
+        if key == "localforward":
+            localforward.append(value)
+        else:
+            parsed[key] = value
+    parsed["localforward"] = localforward
+    return parsed
 
 
 def ssh_run(user, host, known_hosts, remote_argv, *, timeout=60, input_text=None):
@@ -137,8 +189,7 @@ def ssh_run(user, host, known_hosts, remote_argv, *, timeout=60, input_text=None
         if not isinstance(part, str) or not part or re.search(r"[\s\"'\\;$`|&<>]", part):
             raise ProbeError("Refusing unsafe remote command token.")
     command = [
-        "ssh", *ssh_common_options(known_hosts),
-        "-o", "ConnectionAttempts=1",
+        "ssh", *ssh_command_options(known_hosts),
         "--", ssh_target(user, host),
         *remote_argv,
     ]
@@ -161,8 +212,7 @@ def validate_remote_helper_path(remote_path):
 def scp_upload(user, host, known_hosts, local_path, remote_path):
     validate_remote_helper_path(remote_path)
     command = [
-        "scp", *ssh_common_options(known_hosts),
-        "-o", "ConnectionAttempts=1",
+        "scp", *ssh_command_options(known_hosts),
         "--", str(local_path), f"{ssh_target(user, host)}:{remote_path}",
     ]
     try:
@@ -210,51 +260,47 @@ def assert_local_port_free(port):
 
 def start_owned_tunnel(user, host, known_hosts, local_port, remote_port):
     assert_local_port_free(local_port)
-    if not 1024 <= remote_port <= 65535:
-        raise ProbeError("Invalid remote published SQL port.")
-    forward = f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}"
-    command = [
-        "ssh", *ssh_common_options(known_hosts),
-        "-o", "ConnectionAttempts=1",
-        "-N", "-L", forward,
-        "--", ssh_target(user, host),
-    ]
+    command = tunnel_ssh_command(user, host, known_hosts, local_port, remote_port)
+    process = None
     try:
         process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError as error:
-        raise ProbeError("Unable to start SSH tunnel; raw diagnostics suppressed.") from error
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        code = process.poll()
-        if code is not None:
-            raise ProbeError("SSH tunnel exited before forward was established.")
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.2)
-            try:
-                sock.connect(("127.0.0.1", local_port))
-                break
-            except OSError:
-                time.sleep(0.2)
-    else:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            code = process.poll()
+            if code is not None:
+                raise ProbeError("SSH tunnel exited before forward was established.")
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.2)
+                try:
+                    sock.connect(("127.0.0.1", local_port))
+                    break
+                except OSError:
+                    time.sleep(0.2)
+        else:
+            raise ProbeError("SSH tunnel forward did not become ready.")
+        return process
+    except BaseException:
         stop_owned_tunnel(process)
-        raise ProbeError("SSH tunnel forward did not become ready.")
-    return process
+        raise
 
 
 def stop_owned_tunnel(process):
     if process is None:
         return False
     failed = False
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
+    try:
+        if process.poll() is None:
+            process.terminate()
             try:
-                process.wait(timeout=5)
+                process.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                failed = True
+                process.kill()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    failed = True
+    except (OSError, subprocess.SubprocessError):
+        failed = True
     return failed
 
 
@@ -324,9 +370,23 @@ def execute_local():
     print("PASS PROBE-10 disposable container/network and temporary files removed.")
 
 
+def recovery_message(name, failures):
+    detail = ",".join(failures) if failures else "unspecified"
+    return (
+        f"Cleanup incomplete or unverifiable ({detail}) for run-id {name}; "
+        f"inspect remote resources labelled {LABEL}={name} and /tmp/{name} after verifying OWNER. "
+        "Never use broad Docker prune."
+    )
+
+
 def remote_cleanup(user, host, known_hosts, name, tunnel):
+    if not NAME_RE.fullmatch(name):
+        raise ProbeError("Invalid disposable resource name.")
     failures = []
-    if stop_owned_tunnel(tunnel):
+    try:
+        if stop_owned_tunnel(tunnel):
+            failures.append("tunnel")
+    except Exception:
         failures.append("tunnel")
     try:
         parse_helper_json(ssh_run(
@@ -334,31 +394,10 @@ def remote_cleanup(user, host, known_hosts, name, tunnel):
             ["/usr/bin/python3", f"/tmp/{name}/helper.py", "cleanup", name],
             timeout=90))
     except ProbeError:
-        # Retry with a freshly uploaded helper if the workdir helper was lost.
-        try:
-            if not NAME_RE.fullmatch(name):
-                raise ProbeError("Invalid disposable resource name.")
-            recovery = tempfile.TemporaryDirectory(prefix="sqloryn-probe-recover-")
-            try:
-                helper_copy = Path(recovery.name) / "helper.py"
-                shutil.copyfile(REMOTE_HELPER, helper_copy)
-                # Fixed remote recovery path under /tmp with exact run name only.
-                ssh_run(user, host, known_hosts,
-                        ["/bin/mkdir", "-m", "700", "-p", "--", f"/tmp/{name}"], timeout=30)
-                scp_upload(user, host, known_hosts, helper_copy, f"/tmp/{name}/helper.py")
-                parse_helper_json(ssh_run(
-                    user, host, known_hosts,
-                    ["/usr/bin/python3", f"/tmp/{name}/helper.py", "cleanup", name],
-                    timeout=90))
-            finally:
-                recovery.cleanup()
-        except ProbeError:
-            failures.append("remote")
+        # No upload/overwrite recovery: ownership must already be established.
+        failures.append("remote")
     if failures:
-        raise ProbeError(
-            "Cleanup incomplete or unverifiable (" + ",".join(failures) + "); "
-            "inspect remote resources labelled org.sqloryn.disposable-probe with the exact run name. "
-            "Never use broad Docker prune.")
+        raise ProbeError(recovery_message(name, failures))
 
 
 def execute_ssh(destination, known_hosts):
@@ -371,17 +410,22 @@ def execute_ssh(destination, known_hosts):
     name = "sqloryn-probe-" + secrets.token_hex(8)
     password = "Aa1!" + secrets.token_hex(24)
     tunnel = None
-    provisioned = False
-    print("PROBE-11 preparing disposable remote instance over isolated SSH.", flush=True)
+    prepared = False
+    print(f"PROBE-11 run-id={name}; preparing disposable remote instance over isolated SSH.", flush=True)
     try:
         ssh_run(user, host, known_hosts_path,
                 ["/bin/mkdir", "-m", "700", "--", f"/tmp/{name}"], timeout=30)
         scp_upload(user, host, known_hosts_path, REMOTE_HELPER, f"/tmp/{name}/helper.py")
+        parse_helper_json(ssh_run(
+            user, host, known_hosts_path,
+            ["/usr/bin/python3", f"/tmp/{name}/helper.py", "prepare", name], timeout=30))
+        prepared = True
         engine = parse_helper_json(ssh_run(
             user, host, known_hosts_path,
             ["/usr/bin/python3", f"/tmp/{name}/helper.py", "engine-check"], timeout=60))
         print(
             f"PROBE-11 remote engine ostype={engine.get('ostype')} arch={engine.get('architecture')} "
+            f"docker_host={engine.get('docker_host')} "
             "(reported arch is not hardware proof).",
             flush=True)
         provision = parse_helper_json(ssh_run(
@@ -389,7 +433,6 @@ def execute_ssh(destination, known_hosts):
             ["/usr/bin/python3", f"/tmp/{name}/helper.py", "provision", name],
             timeout=420,
             input_text=json.dumps({"password": password, "image": IMAGE})))
-        provisioned = True
         remote_port = provision.get("port")
         certificate_pem = provision.get("certificate_pem")
         if provision.get("name") != name or not isinstance(remote_port, int) or not isinstance(certificate_pem, str):
@@ -412,7 +455,7 @@ def execute_ssh(destination, known_hosts):
             print(f"Transport: ssh-loopback local={local_port} remote={remote_port}", flush=True)
             invoke_probe(local_port, name, server_cert, wrong_cert, password)
     finally:
-        if provisioned or tunnel is not None:
+        if prepared or tunnel is not None:
             remote_cleanup(user, host, known_hosts_path, name, tunnel)
         else:
             try:
@@ -420,10 +463,9 @@ def execute_ssh(destination, known_hosts):
                     user, host, known_hosts_path,
                     ["/usr/bin/python3", f"/tmp/{name}/helper.py", "cleanup", name], timeout=60))
             except ProbeError:
-                raise ProbeError(
-                    "Cleanup incomplete or unverifiable; inspect remote /tmp/sqloryn-probe-* "
-                    "and labelled Docker resources for the exact run name. Never use broad Docker prune.")
-    print("PASS PROBE-11 disposable remote resources and owned tunnel removed.")
+                raise ProbeError(recovery_message(name, ["remote"]))
+    print(f"PASS PROBE-11 disposable remote resources and owned tunnel removed for run-id {name}.")
+
 
 
 def main(argv=None):

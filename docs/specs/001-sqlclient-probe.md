@@ -34,7 +34,7 @@ and never prints connection strings, SQL results or exception messages.
 | PROBE-08 | Observe an active WAITFOR on a second connection, request cancellation, verify it stopped server-side, and check the original session remains usable with no transaction. |
 | PROBE-09 | Read 10,000 synthetic rows sequentially without collecting the result set. This is not a large-result benchmark. |
 | PROBE-10 | Local runner refuses non-Linux/non-x64 Docker hosts and remote Docker contexts; requires explicit SQL Server licence acceptance; creates and removes only its own disposable container and temporary material. |
-| PROBE-11 | Optional SSH mode targets only a maintainer-approved host with a supplied known_hosts file; isolates SSH config; generates the server private key remotely and returns the public certificate only; owns a local loopback forward with `ExitOnForwardFailure`; fails closed on transport/ownership/cleanup faults. Does not weaken PROBE-01–10. |
+| PROBE-11 | Optional SSH mode targets only a maintainer-approved host with a supplied known_hosts file; isolates SSH config; uses a prepare→provision ownership lifecycle; generates the server private key remotely and returns the public certificate only; keeps effective local `-L` forwarding (no `ClearAllForwardings` on the tunnel); constrains remote Docker to the verified local Unix socket after host `uname` checks; owns/reaps the tunnel on failure; cleanup is independent per resource and reports `run-id` for manual recovery without helper overwrite. Does not weaken PROBE-01–10. |
 
 ## Scope of the change
 

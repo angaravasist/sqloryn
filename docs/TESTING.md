@@ -65,12 +65,17 @@ python3 scripts/run_sql_probe.py --accept-sql-server-license \
   --ssh-known-hosts /path/to/approved_known_hosts
 ```
 
-The runner uploads `scripts/sql_probe_remote_helper.py`, verifies the remote
-Docker engine reports Linux x64 (not hardware proof), generates the server key
-on the remote host, returns only the public certificate, opens an owned local
-`127.0.0.1` forward with `ExitOnForwardFailure`, and runs the same native
-SqlClient suite against the forward. Wrong-pin certificates are generated locally.
-Server private keys are not copied to the Mac.
+The runner uploads `scripts/sql_probe_remote_helper.py`, runs `prepare` then
+`engine-check`/`provision` against that owned directory, verifies the SSH host
+`uname` is Linux x64 and constrains Docker to `unix:///var/run/docker.sock`
+(rejecting non-local `DOCKER_HOST`/context redirects; reported Docker arch is
+still not hardware proof), generates the server key on the remote host, returns
+only the public certificate, opens an owned local `127.0.0.1` forward with
+`ExitOnForwardFailure` (tunnel sessions omit `ClearAllForwardings`, which would
+clear `-L`), and runs the same native SqlClient suite against the forward via
+`invoke_probe`. Wrong-pin certificates are generated locally. Server private
+keys are not copied to the Mac. The console prints `PROBE-11 run-id=…` for
+precise recovery.
 
 Record client OS, `Client:` process architecture line (must be native arm64 on
 arm64 Mac and native x64 on Intel Mac; Rosetta/cross-compile does not qualify),
@@ -80,11 +85,13 @@ in [STATE.md](STATE.md). Until an approved host exists, Mac SQL evidence stays
 
 ### Remote cleanup recovery
 
-If the Mac process dies, inspect only remote resources whose label value equals
-the exact run name `sqloryn-probe-<16 hex>` (`org.sqloryn.disposable-probe`) and
-the matching `/tmp/sqloryn-probe-<16 hex>` directory after verifying the `OWNER`
-marker. Remove those specific resources. Never use broad Docker prune/deletion.
-Unreachable remote cleanup is a failed run.
+Use the printed `run-id` (`sqloryn-probe-<16 hex>`). Inspect only remote
+resources whose label value equals that exact name (`org.sqloryn.disposable-probe`)
+and `/tmp/<run-id>` after verifying the `OWNER` marker matches and the path is
+not a symlink. Remove those specific resources. Never overwrite `helper.py` or
+fabricate `OWNER` to force cleanup; never use broad Docker prune/deletion.
+Unreachable or partial remote cleanup is a failed run. Hard kill/network loss
+does not guarantee cleanup.
 
 ## Shared acceptance notes
 

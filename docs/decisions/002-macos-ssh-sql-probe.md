@@ -25,9 +25,12 @@ against a process-owned `127.0.0.1` forward.
   host is implied by this ADR. Missing approval leaves Mac SQL evidence unverified.
 - SSH is noninteractive (`BatchMode`), config-isolated (`-F /dev/null`), host-key
   pinned to the supplied file, with `ExitOnForwardFailure` and no agent forwarding.
-- Remote verbs use a fixed helper and JSON stdin; passwords never appear in remote
-  shell command strings. Server private keys are generated remotely and are not
-  copied to the Mac.
+  Tunnel argv omits `ClearAllForwardings` so explicit `-L` remains effective;
+  command/scp sessions still clear forwardings.
+- Remote verbs use a fixed helper (`prepare` → `provision`/`cleanup`) and JSON
+  stdin; passwords never appear in remote shell command strings. Server private
+  keys are generated remotely and are not copied to the Mac. Docker on the SSH
+  host is constrained to the local Unix socket after `uname` and env checks.
 - Reported remote architecture is checked and known ARM/emulation shapes are
   rejected; architecture strings alone do not prove hardware suitability.
 - This is not authorisation to scan for hosts, create paid infrastructure, or
