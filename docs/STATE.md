@@ -32,9 +32,12 @@ until those runs pass.
   local development hosts for the probe baseline.
 - [Hosted run 41192800910](https://github.com/angaravasist/sqloryn/actions/runs/41192800910)
   at original PR #5 head `964427a`: 35 C# assertions and 24 Python tests on Linux
-  and both Mac architectures (pre-correction). Revised-head component/CodeQL
-  evidence must be recorded from the correction push; do not treat 41192800910 as
-  validating the corrected orchestration.
+  and both Mac architectures (pre-correction; retained for history).
+- [Hosted run 41193677357](https://github.com/angaravasist/sqloryn/actions/runs/41193677357)
+  at correction head `e11242a`: 35 C# assertions and 37 Python tests on Ubuntu
+  24.04, macos-15 and macos-15-intel; `repo-safeguards` passed; SQL integration
+  skipped (not requested). [CodeQL run 41193673892](https://github.com/angaravasist/sqloryn/actions/runs/41193673892)
+  succeeded for C#, Python and Actions on the same head.
 - [Hosted run 41188623012](https://github.com/angaravasist/sqloryn/actions/runs/41188623012)
   passed SQL integration at commit `5ef7c38051b9a43d53ad2ccc2690f708ae15d97e`
   (historical Linux local E2). That run does **not** validate the refactored
