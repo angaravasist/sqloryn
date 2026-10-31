@@ -11,7 +11,7 @@ source of truth. Update relevant documents in the same PR as behaviour.
 | Product, users, boundaries | [Product](PRODUCT.md), [candidate catalogue](FEATURE_CATALOG.csv) |
 | What actually works? | [Feature matrix](FEATURE_MATRIX.md), [evidence/current state](STATE.md) |
 | Code map, data flow | [Architecture](ARCHITECTURE.md) |
-| Why these choices? | [ADR-001](decisions/001-sqlclient-probe.md) |
+| Why these choices? | [ADR-001](decisions/001-sqlclient-probe.md), [ADR-002](decisions/002-macos-ssh-sql-probe.md) |
 | What must this experiment prove? | [SPEC-001](specs/001-sqlclient-probe.md) |
 | How to build/test safely | [Testing](TESTING.md) |
 | Dependencies and redistribution | [Dependency assessment](DEPENDENCIES.md) |

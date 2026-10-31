@@ -4,7 +4,10 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import secrets
+import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -12,9 +15,15 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "experiments/SqlClientProbe/bin/Release/net10.0/SqlClientProbe.dll"
+REMOTE_HELPER = Path(__file__).resolve().parent / "sql_probe_remote_helper.py"
 # SQL Server 2022 CU27 GDR1, Ubuntu 22.04; resolved from MCR on 2026-10-31.
 IMAGE = "mcr.microsoft.com/mssql/server@sha256:cf8f0ab2ebe61feec2eed2629061a07d247f791c2a8ddda74a4ac9f06a291718"
 LABEL = "org.sqloryn.disposable-probe"
+NAME_RE = re.compile(r"\Asqloryn-probe-[a-f0-9]{16}\Z")
+USER_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_-]{0,31}\Z")
+HOST_RE = re.compile(
+    r"\A(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}|"
+    r"localhost|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))\Z")
 
 
 class ProbeError(Exception):
@@ -70,7 +79,201 @@ def cleanup(name):
         raise ProbeError("Cleanup incomplete; inspect resources labelled org.sqloryn.disposable-probe before retrying.")
 
 
-def execute():
+def parse_ssh_destination(value):
+    if not isinstance(value, str) or not value or len(value) > 253:
+        raise ProbeError("Invalid SSH destination.")
+    if "@" in value:
+        user, host = value.rsplit("@", 1)
+        if not USER_RE.fullmatch(user):
+            raise ProbeError("Invalid SSH user.")
+    else:
+        user, host = None, value
+    if not HOST_RE.fullmatch(host):
+        raise ProbeError("Invalid SSH host.")
+    return user, host
+
+
+def ssh_common_options(known_hosts):
+    path = Path(known_hosts)
+    if not path.is_file():
+        raise ProbeError("SSH known-hosts file is required and must already exist.")
+    # Isolate from user/global ssh_config: no proxy, multiplex, agent or extra trust stores.
+    return [
+        "-F", "/dev/null",
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", f"UserKnownHostsFile={path.resolve()}",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "PasswordAuthentication=no",
+        "-o", "KbdInteractiveAuthentication=no",
+        "-o", "PreferredAuthentications=publickey",
+        "-o", "PubkeyAuthentication=yes",
+        "-o", "ForwardAgent=no",
+        "-o", "ForwardX11=no",
+        "-o", "ClearAllForwardings=yes",
+        "-o", "ExitOnForwardFailure=yes",
+        "-o", "RequestTTY=no",
+        "-o", "UpdateHostKeys=no",
+        "-o", "CanonicalizeHostname=no",
+        "-o", "ProxyCommand=none",
+        "-o", "ProxyUseFdpass=no",
+        "-o", "ControlMaster=no",
+        "-o", "ControlPath=none",
+        "-o", "ControlPersist=no",
+        "-o", "ConnectTimeout=20",
+        "-o", "ServerAliveInterval=10",
+        "-o", "ServerAliveCountMax=3",
+    ]
+
+
+def ssh_target(user, host):
+    return f"{user}@{host}" if user else host
+
+
+def ssh_run(user, host, known_hosts, remote_argv, *, timeout=60, input_text=None):
+    """Run a fixed remote argv list. Joined for sshd's remote shell; tokens must be safe."""
+    for part in remote_argv:
+        if not isinstance(part, str) or not part or re.search(r"[\s\"'\\;$`|&<>]", part):
+            raise ProbeError("Refusing unsafe remote command token.")
+    command = [
+        "ssh", *ssh_common_options(known_hosts),
+        "-o", "ConnectionAttempts=1",
+        "--", ssh_target(user, host),
+        *remote_argv,
+    ]
+    try:
+        result = subprocess.run(
+            command, cwd=ROOT, input=input_text, text=True, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise ProbeError("SSH operation timed out; raw diagnostics suppressed.") from error
+    if result.returncode:
+        raise ProbeError("SSH authentication or remote command failed; raw diagnostics suppressed.")
+    return result.stdout
+
+
+def validate_remote_helper_path(remote_path):
+    remote = Path(remote_path)
+    if remote.parent.parent != Path("/tmp") or not NAME_RE.fullmatch(remote.parent.name) or remote.name != "helper.py":
+        raise ProbeError("Refusing unexpected remote upload path.")
+
+
+def scp_upload(user, host, known_hosts, local_path, remote_path):
+    validate_remote_helper_path(remote_path)
+    command = [
+        "scp", *ssh_common_options(known_hosts),
+        "-o", "ConnectionAttempts=1",
+        "--", str(local_path), f"{ssh_target(user, host)}:{remote_path}",
+    ]
+    try:
+        result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired as error:
+        raise ProbeError("SCP upload timed out; raw diagnostics suppressed.") from error
+    if result.returncode:
+        raise ProbeError("SCP upload failed; raw diagnostics suppressed.")
+
+
+def parse_helper_json(stdout):
+    lines = [line for line in stdout.splitlines() if line.strip()]
+    if not lines:
+        raise ProbeError("Remote helper returned no result.")
+    try:
+        payload = json.loads(lines[-1])
+    except json.JSONDecodeError as error:
+        raise ProbeError("Remote helper returned unusable status.") from error
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        raise ProbeError("Remote helper reported failure; raw diagnostics suppressed.")
+    return payload
+
+
+def allocate_loopback_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", 0))
+        except OSError as error:
+            raise ProbeError("Unable to allocate a free loopback port.") from error
+        port = sock.getsockname()[1]
+    if not 1024 <= port <= 65535:
+        raise ProbeError("Invalid allocated loopback port.")
+    return port
+
+
+def assert_local_port_free(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError as error:
+            raise ProbeError("Refusing to reuse an occupied local loopback port.") from error
+
+
+def start_owned_tunnel(user, host, known_hosts, local_port, remote_port):
+    assert_local_port_free(local_port)
+    if not 1024 <= remote_port <= 65535:
+        raise ProbeError("Invalid remote published SQL port.")
+    forward = f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}"
+    command = [
+        "ssh", *ssh_common_options(known_hosts),
+        "-o", "ConnectionAttempts=1",
+        "-N", "-L", forward,
+        "--", ssh_target(user, host),
+    ]
+    try:
+        process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as error:
+        raise ProbeError("Unable to start SSH tunnel; raw diagnostics suppressed.") from error
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        code = process.poll()
+        if code is not None:
+            raise ProbeError("SSH tunnel exited before forward was established.")
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            try:
+                sock.connect(("127.0.0.1", local_port))
+                break
+            except OSError:
+                time.sleep(0.2)
+    else:
+        stop_owned_tunnel(process)
+        raise ProbeError("SSH tunnel forward did not become ready.")
+    return process
+
+
+def stop_owned_tunnel(process):
+    if process is None:
+        return False
+    failed = False
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                failed = True
+    return failed
+
+
+def invoke_probe(port, expected_server, certificate, wrong_certificate, password):
+    result = subprocess.run(
+        ["dotnet", str(PROBE), "--confirm-disposable", "--port", str(port), "--expected-server", expected_server,
+         "--certificate", str(certificate), "--wrong-certificate", str(wrong_certificate)],
+        cwd=ROOT, input=password + "\n", text=True, capture_output=True, timeout=110)
+    for line in result.stdout.splitlines():
+        if line.startswith(("PASS PROBE-", "Client: ")):
+            print(line)
+    if result.returncode:
+        for line in result.stderr.splitlines():
+            if line.startswith(("FAIL PROBE-", "FAIL SQL request", "FAIL TLS", "FAIL interrupted", "FAIL probe (")):
+                print(line, file=sys.stderr)
+        raise ProbeError("SQL acceptance suite failed; no compatibility claim is valid.")
+
+
+def execute_local():
     if not PROBE.is_file():
         raise ProbeError("Build the Release configuration first; see docs/TESTING.md.")
     endpoint = os.environ.get("DOCKER_HOST") or run(
@@ -115,33 +318,132 @@ def execute():
             bindings = json.loads(run(["docker", "inspect", "--format", '{{json (index .NetworkSettings.Ports "1433/tcp")}}', name]))
             port = published_port(bindings)
             print(f"Image: {IMAGE}", flush=True)
-            result = subprocess.run(
-                ["dotnet", str(PROBE), "--confirm-disposable", "--port", str(port), "--expected-server", name,
-                 "--certificate", str(certs / "server.crt"), "--wrong-certificate", str(certs / "wrong.crt")],
-                cwd=ROOT, input=password + "\n", text=True, capture_output=True, timeout=110)
-            # Only the probe's bounded evidence lines are eligible for public CI output.
-            for line in result.stdout.splitlines():
-                if line.startswith(("PASS PROBE-", "Client: ")):
-                    print(line)
-            if result.returncode:
-                for line in result.stderr.splitlines():
-                    if line.startswith(("FAIL PROBE-", "FAIL SQL request", "FAIL TLS", "FAIL interrupted", "FAIL probe (")):
-                        print(line, file=sys.stderr)
-                raise ProbeError("SQL acceptance suite failed; no compatibility claim is valid.")
+            invoke_probe(port, name, certs / "server.crt", certs / "wrong.crt", password)
         finally:
             cleanup(name)
     print("PASS PROBE-10 disposable container/network and temporary files removed.")
+
+
+def remote_cleanup(user, host, known_hosts, name, tunnel):
+    failures = []
+    if stop_owned_tunnel(tunnel):
+        failures.append("tunnel")
+    try:
+        parse_helper_json(ssh_run(
+            user, host, known_hosts,
+            ["/usr/bin/python3", f"/tmp/{name}/helper.py", "cleanup", name],
+            timeout=90))
+    except ProbeError:
+        # Retry with a freshly uploaded helper if the workdir helper was lost.
+        try:
+            if not NAME_RE.fullmatch(name):
+                raise ProbeError("Invalid disposable resource name.")
+            recovery = tempfile.TemporaryDirectory(prefix="sqloryn-probe-recover-")
+            try:
+                helper_copy = Path(recovery.name) / "helper.py"
+                shutil.copyfile(REMOTE_HELPER, helper_copy)
+                # Fixed remote recovery path under /tmp with exact run name only.
+                ssh_run(user, host, known_hosts,
+                        ["/bin/mkdir", "-m", "700", "-p", "--", f"/tmp/{name}"], timeout=30)
+                scp_upload(user, host, known_hosts, helper_copy, f"/tmp/{name}/helper.py")
+                parse_helper_json(ssh_run(
+                    user, host, known_hosts,
+                    ["/usr/bin/python3", f"/tmp/{name}/helper.py", "cleanup", name],
+                    timeout=90))
+            finally:
+                recovery.cleanup()
+        except ProbeError:
+            failures.append("remote")
+    if failures:
+        raise ProbeError(
+            "Cleanup incomplete or unverifiable (" + ",".join(failures) + "); "
+            "inspect remote resources labelled org.sqloryn.disposable-probe with the exact run name. "
+            "Never use broad Docker prune.")
+
+
+def execute_ssh(destination, known_hosts):
+    if not PROBE.is_file():
+        raise ProbeError("Build the Release configuration first; see docs/TESTING.md.")
+    if not REMOTE_HELPER.is_file():
+        raise ProbeError("Missing remote helper script.")
+    user, host = parse_ssh_destination(destination)
+    known_hosts_path = str(Path(known_hosts).resolve())
+    name = "sqloryn-probe-" + secrets.token_hex(8)
+    password = "Aa1!" + secrets.token_hex(24)
+    tunnel = None
+    provisioned = False
+    print("PROBE-11 preparing disposable remote instance over isolated SSH.", flush=True)
+    try:
+        ssh_run(user, host, known_hosts_path,
+                ["/bin/mkdir", "-m", "700", "--", f"/tmp/{name}"], timeout=30)
+        scp_upload(user, host, known_hosts_path, REMOTE_HELPER, f"/tmp/{name}/helper.py")
+        engine = parse_helper_json(ssh_run(
+            user, host, known_hosts_path,
+            ["/usr/bin/python3", f"/tmp/{name}/helper.py", "engine-check"], timeout=60))
+        print(
+            f"PROBE-11 remote engine ostype={engine.get('ostype')} arch={engine.get('architecture')} "
+            "(reported arch is not hardware proof).",
+            flush=True)
+        provision = parse_helper_json(ssh_run(
+            user, host, known_hosts_path,
+            ["/usr/bin/python3", f"/tmp/{name}/helper.py", "provision", name],
+            timeout=420,
+            input_text=json.dumps({"password": password, "image": IMAGE})))
+        provisioned = True
+        remote_port = provision.get("port")
+        certificate_pem = provision.get("certificate_pem")
+        if provision.get("name") != name or not isinstance(remote_port, int) or not isinstance(certificate_pem, str):
+            raise ProbeError("Remote provision returned unexpected identity.")
+        if "-----BEGIN CERTIFICATE-----" not in certificate_pem or "PRIVATE KEY" in certificate_pem:
+            raise ProbeError("Remote provision did not return a public certificate only.")
+        with tempfile.TemporaryDirectory(prefix="sqloryn-probe-") as temporary:
+            directory = Path(temporary)
+            server_cert = directory / "server.crt"
+            wrong_cert = directory / "wrong.crt"
+            wrong_key = directory / "wrong.key"
+            server_cert.write_text(certificate_pem)
+            server_cert.chmod(0o600)
+            run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                 "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+                 "-keyout", str(wrong_key), "-out", str(wrong_cert)])
+            local_port = allocate_loopback_port()
+            tunnel = start_owned_tunnel(user, host, known_hosts_path, local_port, remote_port)
+            print(f"Image: {IMAGE}", flush=True)
+            print(f"Transport: ssh-loopback local={local_port} remote={remote_port}", flush=True)
+            invoke_probe(local_port, name, server_cert, wrong_cert, password)
+    finally:
+        if provisioned or tunnel is not None:
+            remote_cleanup(user, host, known_hosts_path, name, tunnel)
+        else:
+            try:
+                parse_helper_json(ssh_run(
+                    user, host, known_hosts_path,
+                    ["/usr/bin/python3", f"/tmp/{name}/helper.py", "cleanup", name], timeout=60))
+            except ProbeError:
+                raise ProbeError(
+                    "Cleanup incomplete or unverifiable; inspect remote /tmp/sqloryn-probe-* "
+                    "and labelled Docker resources for the exact run name. Never use broad Docker prune.")
+    print("PASS PROBE-11 disposable remote resources and owned tunnel removed.")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--accept-sql-server-license", action="store_true",
                         help="Explicitly accept Microsoft's SQL Server Developer test-use terms for this run.")
+    parser.add_argument("--ssh-host",
+                        help="Optional approved SSH destination (host or user@host) for Mac-to-Linux qualification.")
+    parser.add_argument("--ssh-known-hosts",
+                        help="Existing known_hosts file used exclusively for host-key verification.")
     args = parser.parse_args(argv)
     if not args.accept_sql_server_license:
         parser.error("Explicit --accept-sql-server-license is required; no Docker resources were created.")
+    if (args.ssh_host is None) ^ (args.ssh_known_hosts is None):
+        parser.error("Remote mode requires both --ssh-host and --ssh-known-hosts.")
     try:
-        execute()
+        if args.ssh_host:
+            execute_ssh(args.ssh_host, args.ssh_known_hosts)
+        else:
+            execute_local()
     except KeyboardInterrupt:
         print("FAIL interrupted; cleanup attempted.", file=sys.stderr)
         return 130

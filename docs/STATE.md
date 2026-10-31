@@ -4,61 +4,66 @@ Owner: SQLoryn maintainer. Reviewed: 2026-10-31. Experimental; no release suppor
 
 ## Work under review
 
-Branch `codex/sqlclient-connection-probe`, based on `bdcf928`.
-[PR #3](https://github.com/angaravasist/sqloryn/pull/3). [ADR-001](decisions/001-sqlclient-probe.md)
-selects a direct SqlClient experiment, not the desktop stack. [SPEC-001](specs/001-sqlclient-probe.md)
-defines PROBE-01–10. Source, test runner, locked dependency graph and AI-first
-context are implemented; the bounded Linux SQL Server acceptance suite passes.
+Branch `codex/macos-sqlclient-qualification`, based on `d2eebbc`.
+Draft PR for Mac SSH/loopback orchestration ([ADR-002](decisions/002-macos-ssh-sql-probe.md),
+[SPEC-001](specs/001-sqlclient-probe.md) PROBE-11). No approved remote host is
+configured; **native Mac arm64 and Mac x64 SQL integration remain unverified**.
+Do not mark this milestone complete until those runs pass.
+
+## Merged baseline (main)
+
+- [PR #3](https://github.com/angaravasist/sqloryn/pull/3) established the
+  SqlClient experiment ([ADR-001](decisions/001-sqlclient-probe.md)).
+- [PR #2](https://github.com/angaravasist/sqloryn/pull/2) installed
+  `actions/checkout` v7.0.1; [PR #4](https://github.com/angaravasist/sqloryn/pull/4)
+  installed `actions/setup-dotnet` v6.0.0. Older workflow runs may still show
+  prior pins; current workflow source is authoritative. The checkout Node 20
+  maintenance item from the probe PR is **resolved** in source.
+- `origin/main` at technical assessment start for this branch: `d2eebbc`.
 
 ## Evidence actually obtained
 
 - All 32 reference-pack entries read; all manifest hashes verified.
-- Eleven Python safety tests passed on local macOS 27.0.1 arm64; the licence-free
-  invocation exited 2 before Docker work, as intended.
-- Initial NuGet restore failed on two PKCS advisories; fixed with 10.0.14 and
-  restored successfully with SDK 10.0.403. No warning suppression.
-- Official local SDK archive checked against published SHA-512 before extraction
-  to a temporary directory; system SDK installation unchanged.
-- Release build passed with zero warnings/errors; 35 C# component assertions
-  passed with .NET 10.0.14 on local macOS arm64. Locked restore/audit, repository
-  path checks and whitespace checks passed. Build servers were disabled locally
-  after a sandboxed shared-build process stalled; no compiler warning was ignored.
-- Windows native SNI files were absent from both built outputs.
+- Python safety tests and C# component assertions pass on Mac component CI and
+  local development hosts for the probe baseline.
 - [Hosted run 41188623012](https://github.com/angaravasist/sqloryn/actions/runs/41188623012)
   passed all component, SQL integration and required aggregate checks at commit
   `5ef7c38051b9a43d53ad2ccc2690f708ae15d97e` on 2026-10-31.
   Each hosted Mac arm64/x64 and Ubuntu x64 job passed 35 C# assertions and 11
-  Python tests, Release build and locked restore/audit.
-- E2: Ubuntu 24.04.5 x64 client, SDK 10.0.403/runtime 10.0.14, SqlClient 7.1.1,
-  SQL Server 2022 Developer 16.0.4305.5 on the pinned Ubuntu 22.04 image.
-  SQL auth used a generated disposable admin credential; TLS used exact pinning.
-  PROBE-02–10 passed, including invalid pin/login, result fidelity, late errors,
-  timeout, observed cancellation/session reuse, 10,000 rows and resource cleanup.
-  Image SHA-256: `cf8f0ab2ebe61feec2eed2629061a07d247f791c2a8ddda74a4ac9f06a291718`.
-- Earlier failed runs remain visible: Docker internal-only port publishing
+  Python tests, Release build and locked restore/audit. (Python safety coverage
+  grows with PROBE-11 unit tests; count the live job output.)
+- E2 (local Linux client): Ubuntu 24.04.5 x64 client, SDK 10.0.403/runtime 10.0.14,
+  SqlClient 7.1.1, SQL Server 2022 Developer 16.0.4305.5 on the pinned Ubuntu 22.04
+  image. SQL auth used a generated disposable admin credential; TLS used exact
+  pinning. PROBE-02–10 passed. Image SHA-256:
+  `cf8f0ab2ebe61feec2eed2629061a07d247f791c2a8ddda74a4ac9f06a291718`.
+- Native Mac arm64 → SQL Server: **unverified** (no approved host).
+- Native Mac x64 → SQL Server: **unverified** (no approved host).
+- Earlier failed probe runs remain visible: Docker internal-only port publishing
   ([41188114994](https://github.com/angaravasist/sqloryn/actions/runs/41188114994)),
   XACT_STATE smallint handling
   ([41188319700](https://github.com/angaravasist/sqloryn/actions/runs/41188319700)),
   and transaction-state sampling inside SELECT
   ([41188500385](https://github.com/angaravasist/sqloryn/actions/runs/41188500385)).
-  The final check samples state before SELECT and retains all assertions.
-  No failing acceptance check was disabled.
-- CI warns that baseline checkout v4 targets deprecated Node 20; GitHub runs it
-  on Node 24. A reviewed checkout update remains maintenance work.
-- Native ARM Docker host detected; no local SQL Server emulation was attempted.
+- [CodeQL run 41190629514](https://github.com/angaravasist/sqloryn/actions/runs/41190629514)
+  includes C#, Python and Actions. C# uses build mode `none`. See
+  [security baseline](SECURITY_BASELINE.md). No security settings were changed
+  for this note.
 - Live repository protections verified read-only; see [security baseline](SECURITY_BASELINE.md).
 
-The maintainer explicitly approved this PR's disposable GitHub-hosted Linux x64
-SQL Server Developer test run, its test-use terms and temporary credentials.
-This does not authorise production access, retained credentials, merge or release.
+The maintainer approved PR #3's disposable GitHub-hosted Linux x64 SQL Server
+Developer test run, its test-use terms and temporary credentials. That approval
+does **not** authorise a new remote host, production access, retained credentials,
+merge or release.
 
 ## Next bounded outcome and release gates
 
-The probe milestone is complete for the recorded Linux target. Next, test a real
-Mac client against a supported isolated x64 server. Keep UI expansion behind that
-gate. Assess SQL Tools Service's exact artifacts/licences and a minimal metadata/
-language-service integration before choosing a desktop shell. Test ordinary CA
-trust/name/expiry rejection, restricted logins and interruption of transactions.
+Implement and land PROBE-11 orchestration behind an approved Linux x64 SSH host
+and known_hosts material, then record native Mac arm64 and Mac x64 SQL evidence.
+Keep UI expansion behind that gate. Assess SQL Tools Service's exact
+artifacts/licences and a minimal metadata/language-service integration before
+choosing a desktop shell. Test ordinary CA trust/name/expiry rejection,
+restricted logins and interruption of transactions.
 
 No GUI, Keychain, Entra, saved profiles, user-script/GO parser, administration,
 installer, signing/notarisation or full-parity claim exists. Large-cell memory,
