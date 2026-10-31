@@ -23,15 +23,16 @@ git diff --check
 
 The .NET suite is executable assertions, not a `dotnet test` project. Nonzero
 exit means failure. It checks rejected inputs, secure options, password bounds
-and diagnostic privacy. Python tests cover licence/platform/cleanup boundaries
-without Docker. Repository preflight checks paths, not secret contents.
+and diagnostic privacy. Python tests cover licence/platform/cleanup/SSH boundary
+checks without Docker or a live remote host. Repository preflight checks paths,
+not secret contents.
 
 Restore audits direct/transitive packages; vulnerabilities and audit failures are
 errors. To update packages, review licences/advisories, restore without locked
 mode, inspect both lockfiles, update [the inventory](DEPENDENCIES.md) and rerun.
 Do not suppress warnings to unblock a build.
 
-## Actual SQL acceptance — E2
+## Actual SQL acceptance — local Linux E2 (PROBE-10)
 
 Use a **local Linux x64 Docker engine**. ARM emulation and remote Docker contexts
 are rejected. Provide Docker, OpenSSL, .NET and the container's 3 GiB memory.
@@ -49,15 +50,72 @@ port, runs fixed synthetic SQL, and removes its own labelled resources. It
 mounts no host database files and retains no deliberate database volume.
 Cleanup failure fails the run. Never upload raw SQL logs/container configuration.
 
+## Actual SQL acceptance — Mac client via SSH (PROBE-11, blocked without host)
+
+Requires maintainer approval of a Linux x64 SSH host and a known_hosts file that
+already contains that host key. Do not scan for hosts or disable host-key checks.
+Preconfigure public-key authentication; the runner is noninteractive and will not
+prompt for passwords or create credentials. It currently passes `-F /dev/null`
+and `IdentitiesOnly=yes` without an explicit `IdentityFile` option: only
+OpenSSH's default identity paths are considered. Do not overwrite or symlink
+an unrelated private identity just to make the probe work. If a safe, usable
+default identity is unavailable, treat dedicated-key selection as an
+unresolved runner usability issue requiring a separately reviewed/tested fix.
+
+After Release build, licence acceptance and host approval:
+
+```sh
+python3 scripts/run_sql_probe.py --accept-sql-server-license \
+  --ssh-host 'user@approved.host.example' \
+  --ssh-known-hosts /path/to/approved_known_hosts
+```
+
+The runner uploads `scripts/sql_probe_remote_helper.py`, runs `prepare` then
+`engine-check`/`provision` against that owned directory, verifies the SSH host
+`uname` is Linux x64 and constrains Docker to `unix:///var/run/docker.sock`
+(rejecting non-local `DOCKER_HOST`/context redirects; reported Docker arch is
+still not hardware proof), generates the server key on the remote host, returns
+only the public certificate, opens an owned local `127.0.0.1` forward with
+`ExitOnForwardFailure` (tunnel sessions omit `ClearAllForwardings`, which would
+clear `-L`), and runs the same native SqlClient suite against the forward via
+`invoke_probe`. Wrong-pin certificates are generated locally. Server private
+keys are not copied to the Mac. The console prints `PROBE-11 run-id=…` for
+precise recovery.
+
+For a temporary Windows x64 + Ubuntu WSL2 NAT host, Docker Desktop's WSL
+integration must present a usable local Unix socket **inside Ubuntu**.
+SSH must terminate in that Ubuntu environment; verify that the container's
+loopback-only published port is reachable from the same Ubuntu SSH session.
+Any Windows-to-WSL SSH forwarding must be restricted to the approved Mac's
+private-network address, and renewed if the WSL NAT IP changes. Preserve
+out-of-band host-key verification; an automatic key scan alone is insufficient.
+Treat Docker socket access as privileged host access. Preparing a host,
+testing SSH locally or passing Linux E2 does **not** establish native Mac E2.
+
+Record client OS, `Client:` process architecture line (must be native arm64 on
+arm64 Mac and native x64 on Intel Mac; Rosetta/cross-compile does not qualify),
+SDK/runtime/driver, server version/edition/image digest, transport and outcomes
+in [STATE.md](STATE.md). Until an approved host exists, Mac SQL evidence stays
+**unverified**.
+
+### Remote cleanup recovery
+
+Use the printed `run-id` (`sqloryn-probe-<16 hex>`). Inspect only remote
+resources whose label value equals that exact name (`org.sqloryn.disposable-probe`)
+and `/tmp/<run-id>` after verifying the `OWNER` marker matches and the path is
+not a symlink. Remove those specific resources. Never overwrite `helper.py` or
+fabricate `OWNER` to force cleanup; never use broad Docker prune/deletion.
+Unreachable or partial remote cleanup is a failed run. Hard kill/network loss
+does not guarantee cleanup.
+
+## Shared acceptance notes
+
 Checks cover correct/incorrect certificate pins, invalid login, multiple/empty
 result sets, data fidelity, notices, late SQL errors, timeout, observed server
 cancellation/session reuse and 10,000 sequential rows. WAITFOR cancellation does
 not prove rollback of arbitrary transactions or cancellation after network loss.
 10,000 scalar rows is a smoke test, not a large-cell or performance benchmark.
-
-A forcibly killed runner cannot guarantee cleanup. Inspect only resources with
-label `org.sqloryn.disposable-probe`, verify ownership and remove those specific
-resources. Never use broad Docker prune/deletion.
+Ordinary CA/name/expiry TLS validation remains unverified under exact pinning.
 
 ## CI and evidence
 
@@ -66,6 +124,8 @@ resources. Never use broad Docker prune/deletion.
 including when a component job fails. SQL integration requires manual dispatch
 with `accept_sql_server_license=true`; a requested run must pass. Unrequested SQL
 checks are **skipped, not verified**. PRs cannot implicitly accept the licence.
+Elaborate CI networking for Mac-to-remote SQL is not required for this milestone;
+manual PROBE-11 execution is acceptable once a host is approved.
 
 Record exact commit/run URL, client OS/architecture/runtime, server build/edition,
 image digest, auth/TLS mode, test IDs and exclusions in [STATE.md](STATE.md).
@@ -73,4 +133,5 @@ Never commit credentials, certificates, raw results or dumps.
 
 E0 = expectation/research; E1 = component; E2 = isolated actual SQL Server;
 E3 = actual Mac desktop workflow; E4 = signed release qualification. A Mac build
-is not a Mac connection test. No E3/E4 evidence exists.
+is not a Mac connection test. No E3/E4 evidence exists. Native Mac E2 is pending
+approved-host runs.

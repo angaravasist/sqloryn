@@ -42,11 +42,12 @@ enforcement was not independently verified.
 
 Private vulnerability reporting, Dependabot security updates, secret scanning
 and push protection are enabled. Non-provider secret patterns and validity
-checks are disabled. The enabled CodeQL default setup currently lists **Python
-only**; C# coverage must be verified after introduction of C# code. Do not claim
-that a green CodeQL setup job scanned this probe. No security settings were
-changed. External-contributor approval policy and dependency-alert triage were
-not independently verified in this inspection.
+checks are disabled. [CodeQL run 41190629514](https://github.com/angaravasist/sqloryn/actions/runs/41190629514)
+includes **C#, Python and Actions**. C# analysis uses build mode `none`. Treat
+that run as the current default-setup evidence; do not infer additional
+security-setting changes from documentation updates alone. No security settings
+were changed for this note. External-contributor approval policy and
+dependency-alert triage were not independently verified in this inspection.
 
 The proposed workflow preserves the required check name and read-only token.
 It adds Mac/Linux component gates and a manually authorised disposable SQL job.

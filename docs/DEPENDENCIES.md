@@ -53,8 +53,9 @@ the project MIT licence. Inspect actual artifacts and notices before any release
   execution requires explicit test-use licence acceptance.
 - actions/checkout and actions/setup-dotnet have MIT source licences, pinned to
   full commits. Hosted OS images evolve; record their actual run versions.
-- OpenSSL, Docker, Python and .NET are host prerequisites. Their redistribution
-  has not been assessed because no installer bundles them.
+- OpenSSL, Docker, Python and .NET are host prerequisites. OpenSSH client/scp are
+  additional prerequisites for optional Mac SSH qualification (PROBE-11). Their
+  redistribution has not been assessed because no installer bundles them.
 - No SSMS, DacFx, SMO, Tools Service, Marketplace extension, image, font or icon
   is imported. Their exact binary/package terms remain separate investigations.
 
