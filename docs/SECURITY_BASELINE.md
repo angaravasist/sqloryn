@@ -29,3 +29,25 @@
 ## Known limitation
 
 This repository is not automatically secure merely because this document exists. Confirm actual settings and ruleset enforcement in GitHub, validate CI results, and independently review security-sensitive code changes.
+
+## Read-only verification — 2026-10-31
+
+Live API checks confirmed active ruleset `Protect main` (26247104), default-branch
+PRs, strict required `repo-safeguards`, conversation resolution, no force pushes
+or deletion, zero mandatory approvals and no bypass actors. Squash-only merge,
+auto-delete merged branches, read-only workflow tokens and disabled Actions PR
+approval were confirmed. Actions permit GitHub-owned actions; verified/pattern
+allowlists are empty. Workflow SHA pins are enforced in source; global SHA-only
+enforcement was not independently verified.
+
+Private vulnerability reporting, Dependabot security updates, secret scanning
+and push protection are enabled. Non-provider secret patterns and validity
+checks are disabled. The enabled CodeQL default setup currently lists **Python
+only**; C# coverage must be verified after introduction of C# code. Do not claim
+that a green CodeQL setup job scanned this probe. No security settings were
+changed. External-contributor approval policy and dependency-alert triage were
+not independently verified in this inspection.
+
+The proposed workflow preserves the required check name and read-only token.
+It adds Mac/Linux component gates and a manually authorised disposable SQL job.
+Neither signing credentials nor persistent test/database secrets are configured.

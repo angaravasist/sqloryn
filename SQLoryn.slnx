@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="experiments/SqlClientProbe/SqlClientProbe.csproj" />
+  <Project Path="tests/SqlClientProbe.Tests/SqlClientProbe.Tests.csproj" />
+</Solution>
