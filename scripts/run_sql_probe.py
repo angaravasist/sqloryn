@@ -400,6 +400,12 @@ def remote_cleanup(user, host, known_hosts, name, tunnel):
         raise ProbeError(recovery_message(name, failures))
 
 
+def require_remote_helper_present(user, host, known_hosts, name):
+    """Confirm the uploaded helper path exists as a regular file before executing it."""
+    ssh_run(user, host, known_hosts,
+            ["/usr/bin/test", "-f", f"/tmp/{name}/helper.py"], timeout=30)
+
+
 def execute_ssh(destination, known_hosts):
     if not PROBE.is_file():
         raise ProbeError("Build the Release configuration first; see docs/TESTING.md.")
@@ -410,16 +416,17 @@ def execute_ssh(destination, known_hosts):
     name = "sqloryn-probe-" + secrets.token_hex(8)
     password = "Aa1!" + secrets.token_hex(24)
     tunnel = None
-    prepared = False
+    helper_ready = False
     print(f"PROBE-11 run-id={name}; preparing disposable remote instance over isolated SSH.", flush=True)
     try:
         ssh_run(user, host, known_hosts_path,
                 ["/bin/mkdir", "-m", "700", "--", f"/tmp/{name}"], timeout=30)
         scp_upload(user, host, known_hosts_path, REMOTE_HELPER, f"/tmp/{name}/helper.py")
+        require_remote_helper_present(user, host, known_hosts_path, name)
+        helper_ready = True
         parse_helper_json(ssh_run(
             user, host, known_hosts_path,
             ["/usr/bin/python3", f"/tmp/{name}/helper.py", "prepare", name], timeout=30))
-        prepared = True
         engine = parse_helper_json(ssh_run(
             user, host, known_hosts_path,
             ["/usr/bin/python3", f"/tmp/{name}/helper.py", "engine-check"], timeout=60))
@@ -455,17 +462,20 @@ def execute_ssh(destination, known_hosts):
             print(f"Transport: ssh-loopback local={local_port} remote={remote_port}", flush=True)
             invoke_probe(local_port, name, server_cert, wrong_cert, password)
     finally:
-        if prepared or tunnel is not None:
+        if helper_ready or tunnel is not None:
             remote_cleanup(user, host, known_hosts_path, name, tunnel)
-        else:
-            try:
-                parse_helper_json(ssh_run(
-                    user, host, known_hosts_path,
-                    ["/usr/bin/python3", f"/tmp/{name}/helper.py", "cleanup", name], timeout=60))
-            except ProbeError:
-                raise ProbeError(recovery_message(name, ["remote"]))
+        # else: mkdir/upload incomplete — never execute helper.py; preserve the original failure.
     print(f"PASS PROBE-11 disposable remote resources and owned tunnel removed for run-id {name}.")
 
+
+def require_nonempty_remote_args(ssh_host, ssh_known_hosts):
+    if ssh_host is None and ssh_known_hosts is None:
+        return False
+    if ssh_host is None or ssh_known_hosts is None:
+        raise ProbeError("Remote mode requires both --ssh-host and --ssh-known-hosts.")
+    if not str(ssh_host).strip() or not str(ssh_known_hosts).strip():
+        raise ProbeError("Remote mode rejects empty --ssh-host or --ssh-known-hosts.")
+    return True
 
 
 def main(argv=None):
@@ -479,10 +489,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not args.accept_sql_server_license:
         parser.error("Explicit --accept-sql-server-license is required; no Docker resources were created.")
-    if (args.ssh_host is None) ^ (args.ssh_known_hosts is None):
-        parser.error("Remote mode requires both --ssh-host and --ssh-known-hosts.")
     try:
-        if args.ssh_host:
+        remote = require_nonempty_remote_args(args.ssh_host, args.ssh_known_hosts)
+    except ProbeError as error:
+        print(f"FAIL {error}", file=sys.stderr)
+        return 1
+    try:
+        if remote:
             execute_ssh(args.ssh_host, args.ssh_known_hosts)
         else:
             execute_local()

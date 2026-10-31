@@ -1,4 +1,7 @@
 <Solution>
   <Project Path="experiments/SqlClientProbe/SqlClientProbe.csproj" />
   <Project Path="tests/SqlClientProbe.Tests/SqlClientProbe.Tests.csproj" />
+  <Project Path="src/Sqloryn.Core/Sqloryn.Core.csproj" />
+  <Project Path="src/Sqloryn.App/Sqloryn.csproj" />
+  <Project Path="tests/Sqloryn.Core.Tests/Sqloryn.Core.Tests.csproj" />
 </Solution>

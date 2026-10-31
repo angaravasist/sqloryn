@@ -23,6 +23,7 @@
 node_modules/
 dist/
 build/
+artifacts/
 coverage/
 .next/
 .turbo/
@@ -47,7 +48,8 @@ TestResults/
 # Installers and release artifacts
 *.dmg
 *.pkg
-*.app/
+# Packaged macOS bundles under artifacts only (do not match src/*App*/).
+/artifacts/**/*.app/
 release/
 artifacts/
 
