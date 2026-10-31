@@ -1,6 +1,6 @@
 # SPEC-001 — disposable SqlClient conformance probe
 
-Status: implemented; SQL acceptance pending. Owner: SQLoryn maintainer. Reviewed: 2026-10-31.
+Status: E2 verified on the recorded Linux target; see [evidence](../STATE.md). Owner: SQLoryn maintainer. Reviewed: 2026-10-31.
 
 ## Outcome and boundary
 

@@ -25,7 +25,12 @@ Mark a feature as working only after a reproducible test is performed on the rel
 
 [SPEC-001](specs/001-sqlclient-probe.md) defines a disposable SqlClient
 connection/query conformance probe (CAP-002, CAP-013, CAP-068–074, CAP-092–095).
-Status: implemented/unverified against SQL Server. Local macOS arm64 Release
-build and 35 component assertions passed; 10 Python safety tests passed.
-No database acceptance test has run yet. See [recorded evidence](STATE.md).
-This does not promote any application capability above “Not implemented”.
+Status: **E2 verified for the bounded Linux x64 experiment**, not the macOS
+application. [Recorded run](https://github.com/angaravasist/sqloryn/actions/runs/41188623012):
+SQL Server 2022 Developer 16.0.4305.5, SqlClient 7.1.1, .NET 10.0.14; SQL auth,
+exact certificate pinning, multiple/empty results and fidelity, notices/late
+errors, timeout, observed WAITFOR cancellation/session reuse and 10,000 rows.
+Hosted Mac arm64/x64 and Linux component jobs each passed 35 C# assertions and
+11 Python safety tests. [Evidence and exclusions](STATE.md) remain authoritative.
+No Mac-to-server, desktop or release qualification exists. This does not promote
+any application capability above “Not implemented”.
