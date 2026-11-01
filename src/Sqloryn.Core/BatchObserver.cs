@@ -11,12 +11,38 @@ public sealed class ProviderErrorException(int number, string message) : Excepti
     public int Number { get; } = number;
 }
 
+/// <summary>
+/// Independent evidence of which soft timer expired. A linked token's cancelled state alone
+/// cannot attribute Watchdog vs DrainDeadline — callbacks record the cause when the timer fires.
+/// First timer wins.
+/// </summary>
+public sealed class TimerStopEvidence
+{
+    int _captured; // 0 none, 1 watchdog, 2 drain
+
+    public void NoteWatchdog() => Interlocked.CompareExchange(ref _captured, 1, 0);
+
+    public void NoteDrainDeadline() => Interlocked.CompareExchange(ref _captured, 2, 0);
+
+    public bool WatchdogFired => Volatile.Read(ref _captured) == 1;
+
+    public bool DrainDeadlineFired => Volatile.Read(ref _captured) == 2;
+
+    public StopCause? CapturedTimerCause => Volatile.Read(ref _captured) switch
+    {
+        1 => StopCause.WatchdogTimeout,
+        2 => StopCause.DrainDeadline,
+        _ => null
+    };
+}
+
 /// <summary>Signals available when an OperationCanceledException is observed.</summary>
 public readonly record struct StopContext(
     bool DisconnectRequested,
     bool UserCancelRequested,
     bool WatchdogCancelRequested,
-    bool DrainDeadlineRequested);
+    bool DrainDeadlineRequested,
+    TimerStopEvidence? Timers = null);
 
 /// <summary>
 /// Separates retained display output from command observation/completion.
@@ -50,13 +76,17 @@ public static class BatchObserver
         {
             if (context.DisconnectRequested)
                 return StopCause.Disconnect;
-            // Drain deadline only when the drain CTS fired without a competing user cancel.
-            if (context.DrainDeadlineRequested && !context.UserCancelRequested)
+
+            // Independent timer evidence wins over linked-token ambiguity.
+            if (context.Timers?.CapturedTimerCause is StopCause timed)
+                return timed;
+
+            if (context.WatchdogCancelRequested)
+                return StopCause.WatchdogTimeout;
+            if (context.DrainDeadlineRequested)
                 return StopCause.DrainDeadline;
             if (context.UserCancelRequested)
                 return StopCause.UserCancel;
-            if (context.WatchdogCancelRequested)
-                return StopCause.WatchdogTimeout;
             return StopCause.WatchdogTimeout;
         }
 
@@ -122,19 +152,24 @@ public static class BatchObserver
         ResultBudget budget,
         CancellationToken retainToken,
         TimeSpan drainDeadline,
-        StopContext stopContext)
-        => ObserveOpenedReaderAsync(reader, budget, retainToken, drainDeadline, () => stopContext);
+        StopContext stopContext,
+        TimerStopEvidence? timers = null)
+        => ObserveOpenedReaderAsync(
+            reader, budget, retainToken, drainDeadline, () => stopContext, timers ?? stopContext.Timers);
 
     public static async Task<Observation> ObserveOpenedReaderAsync(
         DbDataReader reader,
         ResultBudget budget,
         CancellationToken retainToken,
         TimeSpan drainDeadline,
-        Func<StopContext> resolveStopContext)
+        Func<StopContext> resolveStopContext,
+        TimerStopEvidence? timers = null)
     {
+        // Always keep independent drain/watchdog evidence; linked cancel alone is not attribution.
+        timers ??= resolveStopContext().Timers ?? new TimerStopEvidence();
         var obs = new Observation();
         var retaining = true;
-        CancellationTokenSource? drainCts = null;
+        DrainSession? drain = null;
 
         try
         {
@@ -145,7 +180,7 @@ public static class BatchObserver
                     obs.RetentionLimitReached = true;
                     obs.PartialResults = true;
                     retaining = false;
-                    drainCts = BeginDrainDeadline(retainToken, drainDeadline);
+                    drain = BeginDrainDeadline(retainToken, drainDeadline, timers);
                 }
 
                 if (retaining)
@@ -158,25 +193,25 @@ public static class BatchObserver
                         obs.PartialResults = true;
                         obs.RetentionLimitReached = true;
                         retaining = false;
-                        drainCts?.Dispose();
-                        drainCts = BeginDrainDeadline(retainToken, drainDeadline);
+                        drain?.Dispose();
+                        drain = BeginDrainDeadline(retainToken, drainDeadline, timers);
                     }
 
                     if (outcome.RowFailure is not null)
                     {
-                        ApplyStop(obs, outcome.RowFailure, resolveStopContext());
+                        ApplyStop(obs, outcome.RowFailure, ResolveAtFailure(resolveStopContext, timers));
                         return obs;
                     }
 
                     if (!retaining)
-                        await DrainResultSetAsync(reader, drainCts!.Token).ConfigureAwait(false);
+                        await DrainResultSetAsync(reader, drain!.Token).ConfigureAwait(false);
                 }
                 else
                 {
-                    await DrainResultSetAsync(reader, drainCts!.Token).ConfigureAwait(false);
+                    await DrainResultSetAsync(reader, drain!.Token).ConfigureAwait(false);
                 }
 
-                var more = await reader.NextResultAsync(retaining ? retainToken : drainCts!.Token)
+                var more = await reader.NextResultAsync(retaining ? retainToken : drain!.Token)
                     .ConfigureAwait(false);
                 if (!more)
                     break;
@@ -190,23 +225,53 @@ public static class BatchObserver
         }
         catch (Exception ex)
         {
-            var ctx = resolveStopContext();
-            if (!retaining && drainCts is { IsCancellationRequested: true })
-                ctx = ctx with { DrainDeadlineRequested = true };
-            ApplyStop(obs, ex, ctx);
+            ApplyStop(obs, ex, ResolveAtFailure(resolveStopContext, timers));
             return obs;
         }
         finally
         {
-            drainCts?.Dispose();
+            drain?.Dispose();
         }
     }
 
-    static CancellationTokenSource BeginDrainDeadline(CancellationToken userToken, TimeSpan drainDeadline)
+    static StopContext ResolveAtFailure(Func<StopContext> resolveStopContext, TimerStopEvidence? timers)
     {
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(userToken);
-        cts.CancelAfter(drainDeadline);
-        return cts;
+        var ctx = resolveStopContext();
+        var evidence = timers ?? ctx.Timers;
+        if (evidence is null)
+            return ctx;
+
+        // Attribute from callback evidence — never from linked CTS.IsCancellationRequested alone.
+        return ctx with
+        {
+            Timers = evidence,
+            WatchdogCancelRequested = evidence.WatchdogFired || ctx.WatchdogCancelRequested,
+            DrainDeadlineRequested = evidence.DrainDeadlineFired || ctx.DrainDeadlineRequested
+        };
+    }
+
+    static DrainSession BeginDrainDeadline(
+        CancellationToken retainToken,
+        TimeSpan drainDeadline,
+        TimerStopEvidence? timers)
+    {
+        var drainOnly = new CancellationTokenSource();
+        // Record drain-timer expiry independently of retain/watchdog cancellation.
+        drainOnly.Token.Register(timers!.NoteDrainDeadline);
+        drainOnly.CancelAfter(drainDeadline);
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(retainToken, drainOnly.Token);
+        return new DrainSession(drainOnly, linked);
+    }
+
+    sealed class DrainSession(CancellationTokenSource drainOnly, CancellationTokenSource linked) : IDisposable
+    {
+        public CancellationToken Token => linked.Token;
+
+        public void Dispose()
+        {
+            linked.Dispose();
+            drainOnly.Dispose();
+        }
     }
 
     public static QueryResult BuildResult(
@@ -246,6 +311,32 @@ public static class BatchObserver
         obs.ErrorSummary = SummarizeStop(cause, ex, rows);
         var number = ex is SqlException s ? s.Number : ex is ProviderErrorException p ? p.Number : 0;
         obs.Messages.Add(new QueryMessage(16, number, Sanitize(ex.Message)));
+    }
+
+    /// <summary>
+    /// Same-session cancel probe may refine an already-recorded UserCancel only.
+    /// Provider / watchdog timeouts are preserved if the user clicks Cancel later.
+    /// </summary>
+    public static bool TryRefineUserCancel(
+        Observation obs,
+        bool serverStateVerified,
+        int? transactionState,
+        out int? recordedTransactionState)
+    {
+        recordedTransactionState = null;
+        if (obs.StopCause != StopCause.UserCancel)
+            return false;
+
+        obs.Completion = ExecutionOutcomes.FromCancellation(
+            disconnectRequested: false,
+            userCancellation: true,
+            serverStateVerified: serverStateVerified);
+        recordedTransactionState = transactionState;
+        var rows = obs.RetainedSets.Sum(s => s.Rows.Count);
+        obs.ErrorSummary = serverStateVerified
+            ? $"Cancellation: client command ended; server probe OK (XACT_STATE={transactionState}). Retained {rows} complete row(s). Cancel does not imply rollback."
+            : SummarizeStop(StopCause.UserCancel, null, rows);
+        return true;
     }
 
     static string Sanitize(string message)

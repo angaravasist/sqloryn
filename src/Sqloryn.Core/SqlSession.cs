@@ -132,6 +132,7 @@ public sealed class SqlSession : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         SqlCommand? command = null;
         CancellationTokenSource? linked = null;
+        CancellationTokenSource? watchdogCts = null;
         SqlConnection? infoConnection = null;
         SqlInfoMessageEventHandler? onInfo = null;
         try
@@ -143,9 +144,13 @@ public sealed class SqlSession : IAsyncDisposable
             if (Volatile.Read(ref _inFlight) > 0)
                 throw new InvalidOperationException("A command is already running on this session. Cancel it or wait; SQL is never queued or replayed.");
 
-            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var timers = new TimerStopEvidence();
             // Soft wall-clock helper only; provider CommandTimeout / error -2 is authoritative for timeouts.
-            linked.CancelAfter(TimeSpan.FromSeconds(Math.Max(_options!.CommandTimeoutSeconds + 5, 10)));
+            // Dedicated CTS so watchdog attribution is independent of user cancel and drain deadline.
+            watchdogCts = new CancellationTokenSource();
+            watchdogCts.Token.Register(timers.NoteWatchdog);
+            watchdogCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(_options!.CommandTimeoutSeconds + 5, 10)));
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, watchdogCts.Token);
             _activeCts = linked;
             Interlocked.Increment(ref _inFlight);
 
@@ -179,8 +184,9 @@ public sealed class SqlSession : IAsyncDisposable
                 DisconnectRequested: _disconnectRequested,
                 UserCancelRequested: cancellationToken.IsCancellationRequested ||
                                      Volatile.Read(ref _cancelGeneration) != cancelGenAtStart,
-                WatchdogCancelRequested: true,
-                DrainDeadlineRequested: false);
+                WatchdogCancelRequested: timers.WatchdogFired,
+                DrainDeadlineRequested: timers.DrainDeadlineFired,
+                Timers: timers);
 
             try
             {
@@ -203,7 +209,7 @@ public sealed class SqlSession : IAsyncDisposable
 
                     // Drain deadline starts inside Observe when retention stops — not before.
                     obs = await BatchObserver.ObserveOpenedReaderAsync(
-                        reader, budget, linked.Token, drainDeadline, ResolveStop).ConfigureAwait(false);
+                        reader, budget, linked.Token, drainDeadline, ResolveStop, timers).ConfigureAwait(false);
                     sqlPhaseComplete = true;
                 }
                 finally
@@ -213,32 +219,13 @@ public sealed class SqlSession : IAsyncDisposable
                         await reader.DisposeAsync().ConfigureAwait(false);
                 }
 
-                if (obs.StopCause == StopCause.UserCancel ||
-                    (obs.Completion is QueryCompletionKind.CancelledClientEnded
-                        or QueryCompletionKind.CancelledServerVerified) ||
-                    (obs.Completion == QueryCompletionKind.TimedOut &&
-                     ResolveStop().UserCancelRequested))
+                // Only refine an already-recorded UserCancel; never overwrite provider/watchdog timeout.
+                if (obs.StopCause == StopCause.UserCancel)
                 {
-                    if (ResolveStop().UserCancelRequested)
-                    {
-                        var verified = await TryProbeAfterCancelAsync().ConfigureAwait(false);
-                        // Refine cancel verification only — never upgrade a non-cancel SQL outcome.
-                        if (obs.StopCause is StopCause.UserCancel or StopCause.None ||
-                            obs.Completion is QueryCompletionKind.CancelledClientEnded
-                                or QueryCompletionKind.TimedOut)
-                        {
-                            obs.StopCause = StopCause.UserCancel;
-                            obs.Completion = ExecutionOutcomes.FromCancellation(
-                                disconnectRequested: false,
-                                userCancellation: true,
-                                serverStateVerified: verified.Verified);
-                            transactionState = verified.TransactionState;
-                            var rows = obs.RetainedSets.Sum(s => s.Rows.Count);
-                            obs.ErrorSummary = verified.Verified
-                                ? $"Cancellation: client command ended; server probe OK (XACT_STATE={verified.TransactionState}). Retained {rows} complete row(s). Cancel does not imply rollback."
-                                : BatchObserver.SummarizeStop(StopCause.UserCancel, null, rows);
-                        }
-                    }
+                    var verified = await TryProbeAfterCancelAsync().ConfigureAwait(false);
+                    if (BatchObserver.TryRefineUserCancel(
+                            obs, verified.Verified, verified.TransactionState, out var xact))
+                        transactionState = xact;
                 }
 
                 if (obs.Completion == QueryCompletionKind.UnknownAfterDisconnect)
@@ -304,6 +291,7 @@ public sealed class SqlSession : IAsyncDisposable
             if (ReferenceEquals(_activeCts, linked))
                 _activeCts = null;
             linked?.Dispose();
+            watchdogCts?.Dispose();
             Interlocked.Decrement(ref _inFlight);
             _gate.Release();
         }

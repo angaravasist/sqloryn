@@ -312,6 +312,53 @@ Pass("observe-limit-drain-then-later-error");
 }
 Pass("observe-drain-deadline-unobserved");
 
+// Watchdog fires during drain while drain deadline is still pending → WatchdogTimeout (not DrainDeadline).
+{
+    var timers = new TimerStopEvidence();
+    using var watchdogCts = new CancellationTokenSource();
+    watchdogCts.Token.Register(timers.NoteWatchdog);
+    using var hangReader = new HangAfterFirstRowReader(["n"], ["kept"]);
+    var budget = new ResultBudget();
+    budget.TryReserve(QueryLimits.MaxRetainedOutputChars - 4);
+    // Long drain deadline; short watchdog — linked drain cancel must not be mis-attributed.
+    watchdogCts.CancelAfter(TimeSpan.FromMilliseconds(40));
+    var obs = await BatchObserver.ObserveOpenedReaderAsync(
+        hangReader, budget, watchdogCts.Token, TimeSpan.FromSeconds(60),
+        () => new StopContext(
+            DisconnectRequested: false,
+            UserCancelRequested: false,
+            WatchdogCancelRequested: timers.WatchdogFired,
+            DrainDeadlineRequested: timers.DrainDeadlineFired,
+            Timers: timers),
+        timers);
+    var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    Check(timers.WatchdogFired, "drain-watchdog-evidence");
+    Check(!timers.DrainDeadlineFired, "drain-deadline-still-pending");
+    Check(result.StopCause == StopCause.WatchdogTimeout, "watchdog-during-drain-stop");
+    Check(result.Completion == QueryCompletionKind.TimedOut, "watchdog-during-drain-kind");
+    AssertUiSurfaces(result, "Timed out", "watchdog-during-drain");
+}
+Pass("observe-watchdog-during-drain");
+
+// Provider -2 recorded, then user cancel before verification → TimedOut preserved.
+{
+    var obs = new BatchObserver.Observation();
+    BatchObserver.ApplyStop(
+        obs,
+        new ProviderErrorException(-2, "Timeout expired"),
+        new StopContext(false, false, false, false));
+    Check(obs.StopCause == StopCause.ProviderTimeout, "provider-then-cancel-recorded");
+    Check(obs.Completion == QueryCompletionKind.TimedOut, "provider-then-cancel-kind");
+    // Late Cancel click must not overwrite provider timeout.
+    Check(!BatchObserver.TryRefineUserCancel(obs, serverStateVerified: true, transactionState: 0, out _),
+          "provider-then-cancel-no-refine");
+    Check(obs.StopCause == StopCause.ProviderTimeout, "provider-then-cancel-stop-kept");
+    Check(obs.Completion == QueryCompletionKind.TimedOut, "provider-then-cancel-completion-kept");
+    var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    AssertUiSurfaces(result, "Timed out (provider)", "provider-then-cancel");
+}
+Pass("observe-provider-timeout-survives-late-cancel");
+
 using (var throwReader = new OneRowThenThrowReader(["n"], ["kept"]))
 {
     var outcome = await ResultMaterializer.ReadResultSetAsync(throwReader, new ResultBudget(), CancellationToken.None);

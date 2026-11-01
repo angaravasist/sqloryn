@@ -23,6 +23,9 @@ messages:
   (`DiscardValueGuardReader` rejects discarded GetValue)
 - drain deadline expiry → `FinalCompletionUnobserved` (not Succeeded); target
   verification must not upgrade Completion/StopCause
+- watchdog expiry during drain while drain deadline still pending →
+  `WatchdogTimeout` (linked cancel is not drain attribution)
+- provider -2 then late Cancel before verification → remains TimedOut (provider)
 - deferred Open/Quit with intervening edits; SqlDecimal typed formatting
 
 Those PASS lines are **automated**. They do not prove Avalonia dialogs or focus
