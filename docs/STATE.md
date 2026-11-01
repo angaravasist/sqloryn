@@ -23,7 +23,7 @@ Branch `codex/developer-preview-0` — Developer Preview 0
 | Target verification never upgrades SQL Completion/StopCause | Automated Core PASS |
 | Open version race + failed read with intervening edit | Automated Core PASS |
 | Ordinary dirty Open/Quit in arm64 `.app` | Manual (prior tip) — not re-run this correction |
-| Hosted ubuntu + macos-15 + macos-15-intel | *(pending this push)* |
+| Hosted ubuntu + macos-15 + macos-15-intel | [41305335602](https://github.com/angaravasist/sqloryn/actions/runs/41305335602) |
 | Live SQL / provider SqlDataReader decimal(38) | **Unverified** — no host |
 
 ## Reviewer launch
