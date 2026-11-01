@@ -169,9 +169,11 @@ public partial class MainWindow : Window
             return;
         }
         var session = _active.Session;
-        ConnectionLabel.Text = session.IsConnected
-            ? $"{session.ServerDisplay} / {session.Database}"
-            : "Not connected";
+        ConnectionLabel.Text = !session.IsConnected
+            ? "Not connected"
+            : session.TargetUnknown
+                ? $"{session.ServerDisplay} / (target unknown — revalidate)"
+                : $"{session.ServerDisplay} / {session.Database}";
         StatusBar.Text =
             $"{_active.Status} · tab {_active.Id.ToString()[..8]} · preview: single batch, no GO, session-only credentials";
     }
@@ -261,6 +263,12 @@ public partial class MainWindow : Window
             StatusBar.Text = "Connect before running SQL.";
             return;
         }
+        if (tab.Session.TargetUnknown)
+        {
+            StatusBar.Text =
+                "Database target unknown after a prior batch. Reconnect or revalidate before running. SQL is never replayed.";
+            return;
+        }
         if (tab.IsExecuting || tab.Session.HasActiveCommand || !tab.TryBeginRun())
         {
             StatusBar.Text = "A command is already running on this tab. Use Cancel; Run will not queue or replay SQL.";
@@ -331,8 +339,16 @@ public partial class MainWindow : Window
         if (_active is null)
             return;
         var tab = _active;
-        if (!await EnsureDiscardOrSaveAsync(tab))
+        if (ReferenceEquals(tab, _active))
+            tab.Document.SetText(Editor.Text ?? "");
+        var (ok, pending) = await DocumentLifecycle.BeginOpenAsync(
+            tab.Document,
+            async () => MapPrompt(await ShowDirtyDialogAsync(tab.Document.Title)),
+            async _ => await SaveTabAsync(tab, tab.Document.FilePath is null));
+        if (!ok)
             return;
+        if (pending is not null)
+            DocumentLifecycle.Commit([pending]);
         await RemoveTabAsync(tab);
     }
 
@@ -361,10 +377,21 @@ public partial class MainWindow : Window
             return;
         var tab = _active;
         var binding = tab.CaptureBinding();
-        if (!await EnsureDiscardOrSaveAsync(tab))
-            return; // cancelled — document remains dirty
+        if (ReferenceEquals(tab, _active))
+            tab.Document.SetText(Editor.Text ?? "");
+        // Discard/save intent is deferred until a replacement file loads successfully.
+        var (ok, pending) = await DocumentLifecycle.BeginOpenAsync(
+            tab.Document,
+            async () => MapPrompt(await ShowDirtyDialogAsync(tab.Document.Title)),
+            async _ => await SaveTabAsync(tab, tab.Document.FilePath is null));
+        if (!ok)
+            return; // cancelled prompt — dirty unchanged
         if (!OwnerStillCurrent(tab, binding))
+        {
+            if (pending is not null)
+                DocumentLifecycle.Rollback([pending]);
             return;
+        }
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "Open SQL script",
@@ -372,25 +399,48 @@ public partial class MainWindow : Window
             FileTypeFilter = [new FilePickerFileType("SQL") { Patterns = ["*.sql"] }]
         });
         if (files.Count == 0)
-            return; // cancelled picker — dirty state already resolved or unchanged
-        if (!TabOpen(tab) || !ReferenceEquals(tab.Document, binding.Document))
+        {
+            // Cancelled picker — restore any pending discard so unsaved buffer stays dirty.
+            if (pending is not null)
+                DocumentLifecycle.Rollback([pending]);
+            RefreshHeader(tab);
             return;
+        }
+        if (!TabOpen(tab) || !ReferenceEquals(tab.Document, binding.Document))
+        {
+            if (pending is not null)
+                DocumentLifecycle.Rollback([pending]);
+            return;
+        }
         var path = files[0].TryGetLocalPath();
         if (path is null)
+        {
+            if (pending is not null)
+                DocumentLifecycle.Rollback([pending]);
             return;
+        }
         try
         {
-            await tab.Document.LoadFileAsync(path);
-            if (!TabOpen(tab))
+            var text = await ScriptDocument.ReadFileTextAsync(path);
+            if (!OwnerStillCurrent(tab, binding))
+            {
+                if (pending is not null)
+                    DocumentLifecycle.Rollback([pending]);
                 return;
+            }
+            // LoadFrom replaces the buffer; pending discard must not be committed (would restore old text).
+            tab.Document.LoadFrom(path, text);
             if (ReferenceEquals(_active, tab))
                 Editor.Text = tab.Document.Text;
             RefreshHeader(tab);
         }
         catch (Exception ex)
         {
+            if (pending is not null)
+                DocumentLifecycle.Rollback([pending]);
+            RefreshHeader(tab);
             if (ReferenceEquals(_active, tab))
-                StatusBar.Text = SafeUi(ex.Message);
+                StatusBar.Text = SafeUi("Open failed; unsaved buffer preserved. " + ex.Message);
         }
     }
 
@@ -463,14 +513,49 @@ public partial class MainWindow : Window
 
     public async Task<bool> ConfirmQuitAsync(bool disposeOnSuccess)
     {
-        foreach (var tab in _tabs.ToList())
+        // Sync editor into active document before prompting.
+        if (_active is not null)
+            _active.Document.SetText(Editor.Text ?? "");
+
+        var docs = _tabs.Select(t => t.Document).ToList();
+        var (ok, pending) = await DocumentLifecycle.ResolveAllDirtyDeferredAsync(
+            docs,
+            async (doc, index) =>
+            {
+                var tab = _tabs[index];
+                if (QueryTabs.Items.OfType<TabItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, tab)) is { } item)
+                    QueryTabs.SelectedItem = item;
+                ActivateTab(tab);
+                return MapPrompt(await ShowDirtyDialogAsync(doc.Title));
+            },
+            async doc =>
+            {
+                var tab = _tabs.First(t => ReferenceEquals(t.Document, doc));
+                if (!ReferenceEquals(tab, _active))
+                    ActivateTab(tab);
+                return await SaveTabAsync(tab, tab.Document.FilePath is null);
+            });
+
+        if (!ok)
         {
-            if (QueryTabs.Items.OfType<TabItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, tab)) is { } item)
-                QueryTabs.SelectedItem = item;
-            ActivateTab(tab);
-            if (!await EnsureDiscardOrSaveAsync(tab))
-                return false; // cancel — remaining dirty tabs stay dirty
+            // Rollback pending discards — all still-open unsaved buffers stay dirty.
+            foreach (var tab in _tabs)
+            {
+                if (ReferenceEquals(tab, _active))
+                    Editor.Text = tab.Document.Text;
+                RefreshHeader(tab);
+            }
+            return false;
         }
+
+        DocumentLifecycle.Commit(pending);
+        foreach (var tab in _tabs)
+        {
+            if (ReferenceEquals(tab, _active))
+                Editor.Text = tab.Document.Text;
+            RefreshHeader(tab);
+        }
+
         if (!disposeOnSuccess)
             return true;
         foreach (var tab in _tabs.ToList())
@@ -480,38 +565,12 @@ public partial class MainWindow : Window
         return true;
     }
 
-    async Task<bool> EnsureDiscardOrSaveAsync(QueryTab tab)
+    static DocumentLifecycle.PromptChoice MapPrompt(string choice) => choice switch
     {
-        if (ReferenceEquals(tab, _active))
-            tab.Document.SetText(Editor.Text ?? "");
-        return await DocumentLifecycle.ResolveDirtyAsync(
-            tab.Document,
-            async () =>
-            {
-                var choice = await ShowDirtyDialogAsync(tab.Document.Title);
-                return choice switch
-                {
-                    "save" => DocumentLifecycle.PromptChoice.Save,
-                    "discard" => DocumentLifecycle.PromptChoice.Discard,
-                    _ => DocumentLifecycle.PromptChoice.Cancel
-                };
-            },
-            async doc =>
-            {
-                if (!ReferenceEquals(tab, _active))
-                    ActivateTab(tab);
-                return await SaveTabAsync(tab, tab.Document.FilePath is null);
-            },
-            async doc =>
-            {
-                var text = ReferenceEquals(tab, _active) ? Editor.Text ?? "" : doc.Text;
-                doc.DiscardChangesTo(text);
-                if (ReferenceEquals(tab, _active))
-                    Editor.Text = text;
-                RefreshHeader(tab);
-                await Task.CompletedTask;
-            });
-    }
+        "save" => DocumentLifecycle.PromptChoice.Save,
+        "discard" => DocumentLifecycle.PromptChoice.Discard,
+        _ => DocumentLifecycle.PromptChoice.Cancel
+    };
 
     async Task<string> ShowDirtyDialogAsync(string title)
     {
@@ -780,52 +839,20 @@ public partial class MainWindow : Window
             MessagesBox.Text = "";
             return;
         }
-        var lines = new List<string>
-        {
-            $"Completion: {result.Completion}",
-            $"Server: {result.Server}  Database: {result.Database}",
-            $"Partial: {result.PartialResults}"
-        };
+        var rendered = ResultMaterializer.RenderForDisplay(result);
+        ResultsBox.Text = rendered;
+        var msg = new StringBuilder();
+        msg.AppendLine($"Completion: {result.Completion}");
+        msg.AppendLine($"Target: {result.TargetConfidence}");
         if (result.TransactionState is int xact)
-            lines.Add($"XACT_STATE: {xact}");
+            msg.AppendLine($"XACT_STATE: {xact}");
         if (!string.IsNullOrEmpty(result.ErrorSummary))
-            lines.Add(result.ErrorSummary);
-        foreach (var msg in result.Messages)
-            lines.Add($"Msg {msg.Number} (class {msg.Class}): {msg.Text}");
+            msg.AppendLine(result.ErrorSummary);
+        foreach (var m in result.Messages)
+            msg.AppendLine($"Msg {m.Number} (class {m.Class}): {m.Text}");
         if (result.PartialResults)
-            lines.Add("Partial or truncated output.");
-        MessagesBox.Text = string.Join(Environment.NewLine, lines);
-
-        if (result.ResultSets.Count == 0)
-        {
-            ResultsBox.Text = "(no result sets)";
-            return;
-        }
-        var sb = new StringBuilder();
-        for (var i = 0; i < result.ResultSets.Count; i++)
-        {
-            var set = result.ResultSets[i];
-            if (i > 0)
-                sb.AppendLine();
-            sb.AppendLine($"--- result set {i + 1} ---");
-            sb.AppendLine(string.Join('\t', set.Columns));
-            foreach (var row in set.Rows)
-            {
-                sb.AppendLine(string.Join('\t', row.Select(c =>
-                {
-                    var text = c.IsNull ? "NULL" : c.Display.Replace('\t', ' ').Replace('\n', ' ');
-                    return c.Truncated ? text + " [truncated]" : text;
-                })));
-            }
-            if (set.Truncated || set.BudgetExceeded)
-            {
-                sb.AppendLine(set.BudgetExceeded
-                    ? "… stopped: aggregate retained-output budget exceeded"
-                    : $"… truncated at {QueryLimits.MaxRowsPerSet} rows");
-                MessagesBox.Text += $"{Environment.NewLine}Result set {i + 1} truncated.";
-            }
-        }
-        ResultsBox.Text = sb.ToString();
+            msg.AppendLine("Partial or truncated output.");
+        MessagesBox.Text = msg.ToString();
     }
 
     static string Describe(QueryResult result) => result.Completion switch

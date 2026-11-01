@@ -1,7 +1,7 @@
 # SPEC-002 — Developer Preview 0 connected workspace
 
 Status: implemented for local builds and component tests; live SQL walkthrough
-**unverified** (no approved host). Owner: SQLoryn maintainer. Reviewed: 2026-10-31.
+**unverified** (no approved host). Owner: SQLoryn maintainer. Reviewed: 2026-11-01.
 Desktop choice: [ADR-003](../decisions/003-desktop-avalonia.md).
 
 ## Outcome
@@ -16,13 +16,14 @@ results/messages → cancel → disconnect. Single-batch execution only (no GO).
 | Area | Demonstrated (component / host-independent UI) | Live (needs approved host) |
 |---|---|---|
 | Connection options / TLS requirements | E1 validation tests | Wrong cert/password + successful connect |
-| Async ownership (tab/session/document/database); stale rejection | Delayed metadata + binding tests | Two DBs / identical names under load |
-| Explorer `database.schema.object` quoting; browse ≠ insert SQL | E1 Qualify3 + BuildSelectScript | Expand tree + restricted login |
-| Run guard (no second Run cancel/queue); cancel requested / client ended / server verified; timeout -2 ≠ disconnect; no replay | E1 outcomes + RunGuard | Delayed cancel + disconnect uncertainty |
-| Dirty Open/Quit/Close-tab; sync native close cancel; save I/O + concurrent edit | E1 DocumentLifecycle + ScriptDocument | Manual save/discard on live session |
-| 38-digit decimal (probe literal), bounded text/binary, aggregate budget, partial late error | E1 ResultMaterializer | Full fidelity against SQL Server |
-| Keyboard / menu tree expansion path | Wired in UI (host-independent) | With live metadata |
-| Tab isolation of SQL text / late UI apply | E1 + dispose | Two-tab execution destinations |
+| Async ownership; stale OE rejection; Qualify3 | E1 | Two DBs / identical names under load |
+| SqlDecimal via typed reader path (38-digit probe literal); no `System.Decimal` | E1 `ISqlTypedCellSource` | Provider `SqlDataReader.GetSqlDecimal` on SQL Server |
+| Output budget mid-row; omit incomplete row; UI truncation marker | E1 + `RenderForDisplay` | Wide live result sets |
+| One-row-then-throw preserves complete row + error + partial | E1 fake reader | Late SQL error after rows |
+| Deferred Open/Quit discard; cancel picker / later Cancel keeps dirty | E1 DocumentLifecycle + macOS manual dirty sequences | — |
+| SQL outcome vs target verification; block run when target unknown; no replay | E1 `WithTargetVerification` | USE+error; write+failed DB_NAME |
+| Run guard; cancel kinds; timeout -2 ≠ break | E1 | Delayed cancel / disconnect |
+| Keyboard / menu expand ≠ Insert SELECT | UI wiring | Live metadata |
 | SSH runner empty args + bootstrap | Python tests | N/A |
 
 ## Non-goals

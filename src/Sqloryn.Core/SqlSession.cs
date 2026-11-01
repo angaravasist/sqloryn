@@ -15,12 +15,15 @@ public sealed class SqlSession : IAsyncDisposable
     bool _disposed;
     bool _disconnectRequested;
     int _cancelGeneration;
+    bool _targetUnknown;
 
     public bool IsConnected => _connection is { State: ConnectionState.Open };
     public string? ServerDisplay { get; private set; }
     public string? Database { get; private set; }
     public string? ServerVersion { get; private set; }
     public bool HasActiveCommand => Volatile.Read(ref _inFlight) > 0;
+    /// <summary>True when the last batch's target could not be verified; further execution is blocked.</summary>
+    public bool TargetUnknown => _targetUnknown;
 
     public async Task ConnectAsync(ConnectionOptions options, CancellationToken cancellationToken = default)
     {
@@ -47,6 +50,7 @@ public sealed class SqlSession : IAsyncDisposable
                 ServerDisplay = options.DisplayTarget;
                 _options = options;
                 _connection = connection;
+                _targetUnknown = false;
                 connection = null;
             }
             finally
@@ -101,6 +105,7 @@ public sealed class SqlSession : IAsyncDisposable
             Database = null;
             ServerVersion = null;
             _options = null;
+            _targetUnknown = false;
         }
         finally
         {
@@ -131,6 +136,9 @@ public sealed class SqlSession : IAsyncDisposable
         try
         {
             EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before running SQL. Prior SQL is never replayed.");
             if (Volatile.Read(ref _inFlight) > 0)
                 throw new InvalidOperationException("A command is already running on this session. Cancel it or wait; SQL is never queued or replayed.");
 
@@ -166,10 +174,12 @@ public sealed class SqlSession : IAsyncDisposable
             var partial = false;
             int? transactionState = null;
             var cancelGenAtStart = Volatile.Read(ref _cancelGeneration);
+            var sqlPhaseComplete = false;
 
             try
             {
-                await using var reader = await command.ExecuteReaderAsync(linked.Token).ConfigureAwait(false);
+                await using var reader = await command.ExecuteReaderAsync(
+                    System.Data.CommandBehavior.SequentialAccess, linked.Token).ConfigureAwait(false);
                 do
                 {
                     if (sets.Count >= QueryLimits.MaxResultSets || budget.Exceeded)
@@ -177,11 +187,23 @@ public sealed class SqlSession : IAsyncDisposable
                         partial = true;
                         break;
                     }
-                    var set = await ResultMaterializer.ReadResultSetAsync(reader, budget, linked.Token).ConfigureAwait(false);
-                    sets.Add(set);
-                    if (set.Truncated || set.BudgetExceeded)
+                    var outcome = await ResultMaterializer.ReadResultSetAsync(reader, budget, linked.Token)
+                        .ConfigureAwait(false);
+                    sets.Add(outcome.Set);
+                    if (outcome.Set.Truncated || outcome.Set.BudgetExceeded)
                         partial = true;
-                } while (await reader.NextResultAsync(linked.Token).ConfigureAwait(false));
+                    if (outcome.RowFailure is not null)
+                    {
+                        completion = QueryCompletionKind.Failed;
+                        partial = true;
+                        errorSummary =
+                            $"Row read failed after {outcome.Set.Rows.Count} complete row(s): {SanitizeMessage(outcome.RowFailure.Message)}. Incomplete row omitted; SQL was not replayed.";
+                        messages.Add(new QueryMessage(16, 0, SanitizeMessage(outcome.RowFailure.Message)));
+                        break;
+                    }
+                } while (completion == QueryCompletionKind.Succeeded &&
+                         await reader.NextResultAsync(linked.Token).ConfigureAwait(false));
+                sqlPhaseComplete = true;
             }
             catch (OperationCanceledException) when (_disconnectRequested)
             {
@@ -224,6 +246,7 @@ public sealed class SqlSession : IAsyncDisposable
                 messages.Add(new QueryMessage(ex.Class, ex.Number, SanitizeMessage(ex.Message)));
                 if (completion == QueryCompletionKind.UnknownAfterDisconnect)
                     await DisposeConnectionAsync().ConfigureAwait(false);
+                sqlPhaseComplete = true; // SQL outcome preserved; target verification is separate.
             }
             finally
             {
@@ -231,20 +254,49 @@ public sealed class SqlSession : IAsyncDisposable
                     infoConnection.InfoMessage -= onInfo;
             }
 
-            if (completion == QueryCompletionKind.Succeeded)
-                await RefreshDatabaseNameNoLockAsync().ConfigureAwait(false);
+            // Separate target verification from SQL completion. Never replay the batch.
+            var targetConfidence = TargetConfidence.Known;
+            if (completion == QueryCompletionKind.UnknownAfterDisconnect || _connection is null)
+            {
+                _targetUnknown = true;
+                targetConfidence = TargetConfidence.Unknown;
+            }
+            else if (sqlPhaseComplete || completion is QueryCompletionKind.Succeeded or QueryCompletionKind.Failed
+                     or QueryCompletionKind.TimedOut or QueryCompletionKind.CancelledClientEnded
+                     or QueryCompletionKind.CancelledServerVerified)
+            {
+                var verify = await TryVerifyTargetNoLockAsync().ConfigureAwait(false);
+                if (!verify.Ok)
+                {
+                    _targetUnknown = true;
+                    targetConfidence = TargetConfidence.Unknown;
+                    var verifyNote = "Target verification failed after the batch; database is unknown until revalidation. SQL was not replayed.";
+                    errorSummary = string.IsNullOrEmpty(errorSummary)
+                        ? verifyNote
+                        : errorSummary + " " + verifyNote;
+                }
+                else
+                {
+                    _targetUnknown = false;
+                    targetConfidence = TargetConfidence.Known;
+                    Database = verify.Database ?? Database;
+                }
+            }
 
             return new QueryResult
             {
                 ExecutedSql = sql,
                 Server = ServerDisplay ?? "",
-                Database = Database ?? "",
+                Database = targetConfidence == TargetConfidence.Unknown
+                    ? (Database ?? "(unknown)")
+                    : (Database ?? ""),
                 Completion = completion,
                 ResultSets = sets,
                 Messages = messages,
                 ErrorSummary = errorSummary,
                 PartialResults = partial,
-                TransactionState = transactionState
+                TransactionState = transactionState,
+                TargetConfidence = targetConfidence
             };
         }
         finally
@@ -266,12 +318,74 @@ public sealed class SqlSession : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await RefreshDatabaseNameNoLockAsync().ConfigureAwait(false);
+            var verify = await TryVerifyTargetNoLockAsync().ConfigureAwait(false);
+            if (!verify.Ok)
+                throw new InvalidOperationException("Unable to verify the current database target.");
+            _targetUnknown = false;
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>Safe revalidation after TargetConfidence.Unknown. Does not replay prior SQL.</summary>
+    public async Task RevalidateTargetAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureConnected();
+            var verify = await TryVerifyTargetNoLockAsync().ConfigureAwait(false);
+            if (!verify.Ok)
+                throw new InvalidOperationException(
+                    "Target revalidation failed. Reconnect before running SQL. Prior batches are never replayed.");
+            _targetUnknown = false;
+            Database = verify.Database ?? Database;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Pure combine helper for tests: SQL outcome preserved when target verification fails.</summary>
+    public static QueryResult WithTargetVerification(QueryResult sqlOutcome, bool verificationSucceeded, string? verifiedDatabase)
+    {
+        if (verificationSucceeded)
+        {
+            return new QueryResult
+            {
+                ExecutedSql = sqlOutcome.ExecutedSql,
+                Server = sqlOutcome.Server,
+                Database = verifiedDatabase ?? sqlOutcome.Database,
+                Completion = sqlOutcome.Completion,
+                ResultSets = sqlOutcome.ResultSets,
+                Messages = sqlOutcome.Messages,
+                ErrorSummary = sqlOutcome.ErrorSummary,
+                PartialResults = sqlOutcome.PartialResults,
+                TransactionState = sqlOutcome.TransactionState,
+                TargetConfidence = TargetConfidence.Known
+            };
+        }
+
+        var note = "Target verification failed after the batch; database is unknown until revalidation. SQL was not replayed.";
+        return new QueryResult
+        {
+            ExecutedSql = sqlOutcome.ExecutedSql,
+            Server = sqlOutcome.Server,
+            Database = "(unknown)",
+            Completion = sqlOutcome.Completion,
+            ResultSets = sqlOutcome.ResultSets,
+            Messages = sqlOutcome.Messages,
+            ErrorSummary = string.IsNullOrEmpty(sqlOutcome.ErrorSummary)
+                ? note
+                : sqlOutcome.ErrorSummary + " " + note,
+            PartialResults = sqlOutcome.PartialResults,
+            TransactionState = sqlOutcome.TransactionState,
+            TargetConfidence = TargetConfidence.Unknown
+        };
     }
 
     public async Task<IReadOnlyList<string>> ListDatabasesAsync(CancellationToken cancellationToken = default)
@@ -389,16 +503,25 @@ public sealed class SqlSession : IAsyncDisposable
         catch { /* ignore dispose failures */ }
     }
 
-    async Task RefreshDatabaseNameNoLockAsync()
+    async Task<(bool Ok, string? Database)> TryVerifyTargetNoLockAsync()
     {
-        if (_connection is not { State: ConnectionState.Open })
-            return;
-        await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT DB_NAME();";
-        cmd.CommandTimeout = _options?.CommandTimeoutSeconds ?? 15;
-        var name = await cmd.ExecuteScalarAsync().ConfigureAwait(false) as string;
-        if (!string.IsNullOrEmpty(name))
+        try
+        {
+            if (_connection is not { State: ConnectionState.Open })
+                return (false, null);
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT DB_NAME();";
+            cmd.CommandTimeout = Math.Min(_options?.CommandTimeoutSeconds ?? 15, 15);
+            var name = await cmd.ExecuteScalarAsync().ConfigureAwait(false) as string;
+            if (string.IsNullOrEmpty(name))
+                return (false, null);
             Database = name;
+            return (true, name);
+        }
+        catch
+        {
+            return (false, null);
+        }
     }
 
     async Task<(bool Verified, int? TransactionState)> TryProbeAfterCancelAsync()
@@ -411,8 +534,8 @@ public sealed class SqlSession : IAsyncDisposable
             cmd.CommandText = "SELECT CONVERT(int, XACT_STATE());";
             cmd.CommandTimeout = 5;
             var xact = (int)(await cmd.ExecuteScalarAsync().ConfigureAwait(false) ?? 0);
-            await RefreshDatabaseNameNoLockAsync().ConfigureAwait(false);
-            return (true, xact);
+            var verify = await TryVerifyTargetNoLockAsync().ConfigureAwait(false);
+            return (verify.Ok, xact);
         }
         catch
         {

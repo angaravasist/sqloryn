@@ -14,6 +14,14 @@ public enum QueryCompletionKind
     UnknownAfterDisconnect
 }
 
+public enum TargetConfidence
+{
+    /// <summary>DB_NAME() (or connect identity) was verified for this session.</summary>
+    Known,
+    /// <summary>Target could not be verified after a batch; further execution is blocked until revalidation.</summary>
+    Unknown
+}
+
 public sealed record QueryMessage(byte Class, int Number, string Text);
 
 public sealed class ResultSet
@@ -41,8 +49,8 @@ public sealed class QueryResult
     public IReadOnlyList<QueryMessage> Messages { get; init; } = [];
     public string? ErrorSummary { get; init; }
     public bool PartialResults { get; init; }
-    /// <summary>When cancel completed with a server probe, reports XACT_STATE() or null if unknown.</summary>
     public int? TransactionState { get; init; }
+    public TargetConfidence TargetConfidence { get; init; } = TargetConfidence.Known;
 }
 
 public static class QueryLimits
@@ -53,6 +61,8 @@ public static class QueryLimits
     public const int MaxMessages = 200;
     /// <summary>Aggregate retained display characters across all cells in one execution.</summary>
     public const int MaxRetainedOutputChars = 2_000_000;
+    /// <summary>Minimum budget charge per cell slot (covers empty text and NULL).</summary>
+    public const int MinCellBudgetChars = 1;
 }
 
 public static class SqlIdentity
@@ -69,7 +79,6 @@ public static class SqlIdentity
             ? QuoteIdentifier(name)
             : QuoteIdentifier(schema) + "." + QuoteIdentifier(name);
 
-    /// <summary>Fully qualified database.schema.object for Explorer-generated scripts.</summary>
     public static string Qualify3(string database, string schema, string name)
         => QuoteIdentifier(database) + "." + Qualify(schema, name);
 
@@ -77,7 +86,6 @@ public static class SqlIdentity
         => $"SELECT TOP ({top}) * FROM {Qualify3(database, schema, name)};{Environment.NewLine}";
 }
 
-/// <summary>Classifies provider errors without replaying SQL.</summary>
 public static class ExecutionOutcomes
 {
     public static bool IsProviderTimeout(int sqlErrorNumber) => sqlErrorNumber == -2;
@@ -109,7 +117,6 @@ public static class ExecutionOutcomes
     }
 }
 
-/// <summary>Binds an async UI completion to the tab/session/document/database that started it.</summary>
 public readonly record struct OperationBinding(
     Guid TabId,
     object SessionKey,

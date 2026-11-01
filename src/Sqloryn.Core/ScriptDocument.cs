@@ -43,6 +43,18 @@ public sealed class ScriptDocument
         _version++;
     }
 
+    /// <summary>Snapshot for deferred Open/Quit commit or rollback.</summary>
+    public DocumentSnapshot CaptureSnapshot()
+        => new(FilePath, Text, IsDirty, _version);
+
+    public void RestoreSnapshot(DocumentSnapshot snapshot)
+    {
+        FilePath = snapshot.FilePath;
+        Text = snapshot.Text;
+        IsDirty = snapshot.IsDirty;
+        _version = snapshot.Version + 1;
+    }
+
     public async Task LoadFileAsync(string path, CancellationToken cancellationToken = default)
     {
         var text = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
@@ -50,9 +62,12 @@ public sealed class ScriptDocument
     }
 
     /// <summary>
-    /// Writes the snapshot captured at start. Clears dirty only if no newer edits arrived.
-    /// On I/O failure, leaves dirty state unchanged and rethrows.
+    /// Reads replacement file text without mutating this document.
+    /// Caller commits via <see cref="LoadFrom"/> only after Open succeeds.
     /// </summary>
+    public static async Task<string> ReadFileTextAsync(string path, CancellationToken cancellationToken = default)
+        => await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+
     public async Task SaveAsync(
         string? path = null,
         CancellationToken cancellationToken = default,
@@ -73,28 +88,26 @@ public sealed class ScriptDocument
         }
         catch
         {
-            // Preserve dirty / path for recovery; never claim a successful save.
             throw;
         }
 
         CommitSave(target, snapshot, version);
     }
 
-    /// <summary>Applies a completed write. Stays dirty when newer edits arrived during the save.</summary>
     public void CommitSave(string path, string snapshot, long versionAtCapture)
     {
         FilePath = path;
         if (_version == versionAtCapture && Text == snapshot)
             IsDirty = false;
-        // else: keep IsDirty true — newer edits or concurrent SetText.
     }
 
-    /// <summary>Preview rule: selection when non-empty; otherwise the whole document.</summary>
     public static string ResolveBatch(string document, string? selection)
         => !string.IsNullOrEmpty(selection) ? selection : document;
 }
 
-/// <summary>Pure document/prompt sequencing for Open/Quit/Close-tab without UI frameworks.</summary>
+public readonly record struct DocumentSnapshot(string? FilePath, string Text, bool IsDirty, long Version);
+
+/// <summary>Deferred dirty resolution: destructive changes apply only on commit.</summary>
 public static class DocumentLifecycle
 {
     public enum PromptChoice
@@ -104,54 +117,110 @@ public static class DocumentLifecycle
         Cancel
     }
 
+    public enum PendingActionKind
+    {
+        None,
+        Discard,
+        Saved
+    }
+
+    public sealed class PendingAction
+    {
+        public required ScriptDocument Document { get; init; }
+        public required DocumentSnapshot Before { get; init; }
+        public required PendingActionKind Kind { get; init; }
+    }
+
     /// <summary>
-    /// Returns whether the caller may proceed (open/close/quit). Cancel leaves the document dirty.
+    /// Prompts for a dirty document without applying Discard. Save may run immediately
+    /// (persistent side effect); Discard is recorded as pending until <see cref="Commit"/>.
     /// </summary>
-    public static async Task<bool> ResolveDirtyAsync(
+    public static async Task<(bool Proceed, PendingAction? Pending)> ResolveDirtyDeferredAsync(
         ScriptDocument document,
         Func<Task<PromptChoice>> prompt,
-        Func<ScriptDocument, Task<bool>> save,
-        Func<ScriptDocument, Task>? discard = null)
+        Func<ScriptDocument, Task<bool>> save)
     {
         if (!document.IsDirty)
-            return true;
-        var choice = await prompt().ConfigureAwait(false);
+            return (true, null);
+
+        var before = document.CaptureSnapshot();
+        var choice = await prompt().ConfigureAwait(true);
         switch (choice)
         {
             case PromptChoice.Cancel:
-                return false;
+                return (false, null);
             case PromptChoice.Discard:
-                if (discard is not null)
-                    await discard(document).ConfigureAwait(false);
-                else
-                    document.DiscardChangesTo(document.Text);
-                return true;
+                return (true, new PendingAction
+                {
+                    Document = document,
+                    Before = before,
+                    Kind = PendingActionKind.Discard
+                });
             case PromptChoice.Save:
-                return await save(document).ConfigureAwait(false);
+                if (!await save(document).ConfigureAwait(true))
+                    return (false, null);
+                return (true, new PendingAction
+                {
+                    Document = document,
+                    Before = before,
+                    Kind = PendingActionKind.Saved
+                });
             default:
-                return false;
+                return (false, null);
+        }
+    }
+
+    public static void Commit(IEnumerable<PendingAction> actions)
+    {
+        foreach (var action in actions)
+        {
+            if (action.Kind == PendingActionKind.Discard)
+                action.Document.DiscardChangesTo(action.Before.Text);
+        }
+    }
+
+    public static void Rollback(IEnumerable<PendingAction> actions)
+    {
+        foreach (var action in actions.Reverse())
+        {
+            if (action.Kind == PendingActionKind.Discard)
+                action.Document.RestoreSnapshot(action.Before);
+            // Saved actions already wrote to disk; buffer content stays as saved unless user edited again.
         }
     }
 
     /// <summary>
-    /// Walks dirty tabs in order. Cancel at any prompt aborts and leaves remaining tabs untouched
-    /// (already-resolved tabs keep the user's Save/Discard choice).
+    /// Quit/close-all: collect intents; on cancel at any prompt, roll back prior pending discards
+    /// so every still-open buffer keeps its unsaved text and dirty flag.
     /// </summary>
-    public static async Task<bool> ResolveAllDirtyAsync(
+    public static async Task<(bool Proceed, List<PendingAction> Pending)> ResolveAllDirtyDeferredAsync(
         IReadOnlyList<ScriptDocument> documents,
         Func<ScriptDocument, int, Task<PromptChoice>> prompt,
         Func<ScriptDocument, Task<bool>> save)
     {
+        var pending = new List<PendingAction>();
         for (var i = 0; i < documents.Count; i++)
         {
             var doc = documents[i];
-            var ok = await ResolveDirtyAsync(
+            var (ok, action) = await ResolveDirtyDeferredAsync(
                 doc,
                 () => prompt(doc, i),
-                save).ConfigureAwait(false);
+                save).ConfigureAwait(true);
             if (!ok)
-                return false;
+            {
+                Rollback(pending);
+                return (false, pending);
+            }
+            if (action is not null)
+                pending.Add(action);
         }
-        return true;
+        return (true, pending);
     }
+
+    /// <summary>Open flow: discard stays pending until a replacement file is successfully loaded.</summary>
+    public static async Task<(bool Proceed, PendingAction? Pending)> BeginOpenAsync(
+        ScriptDocument document,
+        Func<Task<PromptChoice>> prompt,
+        Func<ScriptDocument, Task<bool>> save)
+        => await ResolveDirtyDeferredAsync(document, prompt, save).ConfigureAwait(true);
 }

@@ -1,6 +1,6 @@
 # Current engineering state
 
-Owner: SQLoryn maintainer. Reviewed: 2026-10-31. Experimental; no release support.
+Owner: SQLoryn maintainer. Reviewed: 2026-11-01. Experimental; no release support.
 
 ## Work under review
 
@@ -11,23 +11,23 @@ session ([ADR-003](decisions/003-desktop-avalonia.md),
 
 ## Merged baseline
 
-- `origin/main` includes SqlClient probe + PROBE-11 tools ([PR #5](https://github.com/angaravasist/sqloryn/pull/5) merged as `006612a`).
-- Linux SQL regression on that line:
+- `origin/main` at `006612a` (PROBE-11). Linux regression:
   [41194422292](https://github.com/angaravasist/sqloryn/actions/runs/41194422292).
 
 ## Evidence
 
 | Claim | Status |
 |---|---|
-| Probe Linux SQL E2 (historical / regression) | Verified on recorded runs; see prior STATE history |
-| Prior Preview 0 CI Mac arm64+Intel app publish | [41219130069](https://github.com/angaravasist/sqloryn/actions/runs/41219130069) at `3b37d5b` |
-| Workspace correction commit (this delivery) | `de4cce00374abf9762a54f7b2b65c095267659a3` (arm64 local build+walkthrough) |
-| Sqloryn.Core E1 (ownership, outcomes, lifecycle, 38-digit, budget, RunGuard) | Local pass |
-| Python runner suite | Local pass (40 tests) |
-| Avalonia `.app` build + host-independent UI walkthrough (arm64) | Local (this machine) |
-| CI Mac arm64 / Intel app publish for correction tip | [41234937796](https://github.com/angaravasist/sqloryn/actions/runs/41234937796) (ubuntu + macos-15 + macos-15-intel pass) |
-| Native Mac arm64/x64 → live SQL walkthrough | **Unverified** — no approved host |
-| VoiceOver device pass | **Unverified** — automation names present only |
+| Prior Preview 0 CI (Mac arm64+Intel app) | [41234937796](https://github.com/angaravasist/sqloryn/actions/runs/41234937796) at `a7fdfc3` tip line |
+| Reviewed implementation | `de4cce0` |
+| Fidelity/lifecycle correction (this delivery) | Tip of branch after push — see PR |
+| SqlDecimal typed path (38-digit probe literal) | Component pass; **live SqlDataReader on SQL Server unverified** |
+| Mid-row budget + `RenderForDisplay` truncation marker | Component pass |
+| One-row-then-throw → row + error + partial | Component pass |
+| Deferred Open/Quit dirty protection | Component pass + local macOS `.app` dirty-sequence walkthrough |
+| Target verification separated from SQL outcome | Component pass; live USE/refresh **unverified** |
+| Python runner suite | Pass (40 tests) |
+| Native Mac live SQL walkthrough | **Unverified** — no approved host |
 
 ## Reviewer can do today (no SQL host)
 
@@ -41,10 +41,9 @@ bash scripts/build_macos_app.sh
 open artifacts/macos/osx-arm64/SQLoryn.app   # or osx-x64 on Intel
 ```
 
-Follow [WALKTHROUGH.md](WALKTHROUGH.md) host-independent steps. Live connect
-awaits maintainer host approval.
+Follow [WALKTHROUGH.md](WALKTHROUGH.md) dirty Open/Quit sequences.
 
 ## Next
 
-Approved disposable SQL Server for SPEC-002 live walkthrough; keep arm64 and
-Intel evidence separate. Do not treat SSH probe success as desktop acceptance.
+Approved disposable SQL Server for live fidelity and target-verification cases;
+keep arm64 and Intel evidence separate.
