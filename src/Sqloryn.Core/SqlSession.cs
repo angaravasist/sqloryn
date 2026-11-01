@@ -1,4 +1,5 @@
 using System.Data;
+using System.Data.Common;
 using Microsoft.Data.SqlClient;
 
 namespace Sqloryn.Core;
@@ -167,86 +168,75 @@ public sealed class SqlSession : IAsyncDisposable
             };
             infoConnection.InfoMessage += onInfo;
 
-            var sets = new List<ResultSet>();
             var budget = new ResultBudget();
-            string? errorSummary = null;
-            var completion = QueryCompletionKind.Succeeded;
-            var partial = false;
             int? transactionState = null;
             var cancelGenAtStart = Volatile.Read(ref _cancelGeneration);
+            var obs = new BatchObserver.Observation();
             var sqlPhaseComplete = false;
 
             try
             {
-                await using var reader = await command.ExecuteReaderAsync(
-                    System.Data.CommandBehavior.SequentialAccess, linked.Token).ConfigureAwait(false);
-                do
+                DbDataReader reader;
+                try
                 {
-                    if (sets.Count >= QueryLimits.MaxResultSets || budget.Exceeded)
-                    {
-                        partial = true;
-                        break;
-                    }
-                    var outcome = await ResultMaterializer.ReadResultSetAsync(reader, budget, linked.Token)
-                        .ConfigureAwait(false);
-                    sets.Add(outcome.Set);
-                    if (outcome.Set.Truncated || outcome.Set.BudgetExceeded)
-                        partial = true;
-                    if (outcome.RowFailure is not null)
-                    {
-                        completion = QueryCompletionKind.Failed;
-                        partial = true;
-                        errorSummary =
-                            $"Row read failed after {outcome.Set.Rows.Count} complete row(s): {SanitizeMessage(outcome.RowFailure.Message)}. Incomplete row omitted; SQL was not replayed.";
-                        messages.Add(new QueryMessage(16, 0, SanitizeMessage(outcome.RowFailure.Message)));
-                        break;
-                    }
-                } while (completion == QueryCompletionKind.Succeeded &&
-                         await reader.NextResultAsync(linked.Token).ConfigureAwait(false));
-                sqlPhaseComplete = true;
-            }
-            catch (OperationCanceledException) when (_disconnectRequested)
-            {
-                completion = QueryCompletionKind.UnknownAfterDisconnect;
-                partial = sets.Count > 0;
-                errorSummary = "Disconnected during execution; server-side outcome unknown; SQL was not replayed.";
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested ||
-                                                     Volatile.Read(ref _cancelGeneration) != cancelGenAtStart)
-            {
-                var verified = await TryProbeAfterCancelAsync().ConfigureAwait(false);
-                completion = ExecutionOutcomes.FromCancellation(
-                    disconnectRequested: false,
-                    userCancellation: true,
-                    serverStateVerified: verified.Verified);
-                transactionState = verified.TransactionState;
-                partial = sets.Count > 0;
-                errorSummary = verified.Verified
-                    ? $"Cancellation: client command ended; server probe OK (XACT_STATE={verified.TransactionState}). Cancel does not imply rollback."
-                    : "Cancellation: client command ended; server/transaction state was not verified. SQL was not replayed.";
-            }
-            catch (OperationCanceledException)
-            {
-                completion = QueryCompletionKind.TimedOut;
-                partial = sets.Count > 0;
-                errorSummary = "Command cancelled by client timeout watchdog; SQL was not replayed.";
-            }
-            catch (SqlException ex)
-            {
-                completion = ExecutionOutcomes.FromSqlError(ex.Number);
-                partial = sets.Count > 0;
-                errorSummary = completion switch
+                    reader = await command.ExecuteReaderAsync(
+                        System.Data.CommandBehavior.SequentialAccess, linked.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is SqlException or OperationCanceledException or ProviderErrorException)
                 {
-                    QueryCompletionKind.TimedOut =>
-                        $"Provider timeout (SQL -2): {SanitizeMessage(ex.Message)}. Rows read before timeout are retained; SQL was not replayed.",
-                    QueryCompletionKind.UnknownAfterDisconnect =>
-                        $"Connection lost during execution (SQL {ex.Number}); outcome unknown; SQL was not replayed.",
-                    _ => $"SQL error {ex.Number}: {SanitizeMessage(ex.Message)}"
-                };
-                messages.Add(new QueryMessage(ex.Class, ex.Number, SanitizeMessage(ex.Message)));
-                if (completion == QueryCompletionKind.UnknownAfterDisconnect)
-                    await DisposeConnectionAsync().ConfigureAwait(false);
-                sqlPhaseComplete = true; // SQL outcome preserved; target verification is separate.
+                    if (ex is OperationCanceledException && _disconnectRequested)
+                        BatchObserver.ApplyStop(obs, ex, disconnectRequested: true, userCancellation: false);
+                    else if (ex is OperationCanceledException &&
+                             (cancellationToken.IsCancellationRequested ||
+                              Volatile.Read(ref _cancelGeneration) != cancelGenAtStart))
+                        BatchObserver.ApplyStop(obs, ex, disconnectRequested: false, userCancellation: true);
+                    else
+                        BatchObserver.ApplyStop(obs, ex, disconnectRequested: false, userCancellation: false);
+                    if (obs.Completion == QueryCompletionKind.UnknownAfterDisconnect)
+                        await DisposeConnectionAsync().ConfigureAwait(false);
+                    sqlPhaseComplete = true;
+                    goto AfterObserve;
+                }
+
+                await using (reader)
+                {
+                    using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    // Bounded observation after retention stops; does not replay SQL.
+                    drainCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(_options.CommandTimeoutSeconds, 5, 60)));
+                    obs = await BatchObserver.ObserveOpenedReaderAsync(
+                        reader, budget, linked.Token, drainCts.Token).ConfigureAwait(false);
+
+                    if (obs.Completion is QueryCompletionKind.CancelledClientEnded
+                        or QueryCompletionKind.CancelledServerVerified
+                        || (obs.Completion == QueryCompletionKind.TimedOut &&
+                            (cancellationToken.IsCancellationRequested ||
+                             Volatile.Read(ref _cancelGeneration) != cancelGenAtStart)))
+                    {
+                        // Reclassify user cancel with optional server probe.
+                        if (cancellationToken.IsCancellationRequested ||
+                            Volatile.Read(ref _cancelGeneration) != cancelGenAtStart)
+                        {
+                            var verified = await TryProbeAfterCancelAsync().ConfigureAwait(false);
+                            obs.Completion = ExecutionOutcomes.FromCancellation(
+                                disconnectRequested: false,
+                                userCancellation: true,
+                                serverStateVerified: verified.Verified);
+                            transactionState = verified.TransactionState;
+                            var rows = obs.RetainedSets.Sum(s => s.Rows.Count);
+                            obs.ErrorSummary = verified.Verified
+                                ? $"Cancellation: client command ended; server probe OK (XACT_STATE={verified.TransactionState}). Retained {rows} complete row(s). Cancel does not imply rollback."
+                                : BatchObserver.SummarizeFailure(
+                                    new OperationCanceledException(),
+                                    QueryCompletionKind.CancelledClientEnded,
+                                    rows);
+                        }
+                    }
+
+                    if (obs.Completion == QueryCompletionKind.UnknownAfterDisconnect)
+                        await DisposeConnectionAsync().ConfigureAwait(false);
+
+                    sqlPhaseComplete = true;
+                }
             }
             finally
             {
@@ -254,14 +244,18 @@ public sealed class SqlSession : IAsyncDisposable
                     infoConnection.InfoMessage -= onInfo;
             }
 
+            AfterObserve:
+            foreach (var msg in messages)
+                obs.Messages.Insert(0, msg);
+
             // Separate target verification from SQL completion. Never replay the batch.
             var targetConfidence = TargetConfidence.Known;
-            if (completion == QueryCompletionKind.UnknownAfterDisconnect || _connection is null)
+            if (obs.Completion == QueryCompletionKind.UnknownAfterDisconnect || _connection is null)
             {
                 _targetUnknown = true;
                 targetConfidence = TargetConfidence.Unknown;
             }
-            else if (sqlPhaseComplete || completion is QueryCompletionKind.Succeeded or QueryCompletionKind.Failed
+            else if (sqlPhaseComplete || obs.Completion is QueryCompletionKind.Succeeded or QueryCompletionKind.Failed
                      or QueryCompletionKind.TimedOut or QueryCompletionKind.CancelledClientEnded
                      or QueryCompletionKind.CancelledServerVerified)
             {
@@ -271,9 +265,9 @@ public sealed class SqlSession : IAsyncDisposable
                     _targetUnknown = true;
                     targetConfidence = TargetConfidence.Unknown;
                     var verifyNote = "Target verification failed after the batch; database is unknown until revalidation. SQL was not replayed.";
-                    errorSummary = string.IsNullOrEmpty(errorSummary)
+                    obs.ErrorSummary = string.IsNullOrEmpty(obs.ErrorSummary)
                         ? verifyNote
-                        : errorSummary + " " + verifyNote;
+                        : obs.ErrorSummary + " " + verifyNote;
                 }
                 else
                 {
@@ -283,21 +277,13 @@ public sealed class SqlSession : IAsyncDisposable
                 }
             }
 
-            return new QueryResult
-            {
-                ExecutedSql = sql,
-                Server = ServerDisplay ?? "",
-                Database = targetConfidence == TargetConfidence.Unknown
-                    ? (Database ?? "(unknown)")
-                    : (Database ?? ""),
-                Completion = completion,
-                ResultSets = sets,
-                Messages = messages,
-                ErrorSummary = errorSummary,
-                PartialResults = partial,
-                TransactionState = transactionState,
-                TargetConfidence = targetConfidence
-            };
+            return BatchObserver.BuildResult(
+                sql,
+                ServerDisplay ?? "",
+                targetConfidence == TargetConfidence.Unknown ? (Database ?? "(unknown)") : (Database ?? ""),
+                obs,
+                targetConfidence,
+                transactionState);
         }
         finally
         {
@@ -366,7 +352,9 @@ public sealed class SqlSession : IAsyncDisposable
                 ErrorSummary = sqlOutcome.ErrorSummary,
                 PartialResults = sqlOutcome.PartialResults,
                 TransactionState = sqlOutcome.TransactionState,
-                TargetConfidence = TargetConfidence.Known
+                TargetConfidence = TargetConfidence.Known,
+                FinalCompletionUnobserved = sqlOutcome.FinalCompletionUnobserved,
+                RetentionLimitReached = sqlOutcome.RetentionLimitReached
             };
         }
 
@@ -384,7 +372,9 @@ public sealed class SqlSession : IAsyncDisposable
                 : sqlOutcome.ErrorSummary + " " + note,
             PartialResults = sqlOutcome.PartialResults,
             TransactionState = sqlOutcome.TransactionState,
-            TargetConfidence = TargetConfidence.Unknown
+            TargetConfidence = TargetConfidence.Unknown,
+            FinalCompletionUnobserved = sqlOutcome.FinalCompletionUnobserved,
+            RetentionLimitReached = sqlOutcome.RetentionLimitReached
         };
     }
 

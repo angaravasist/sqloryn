@@ -179,14 +179,31 @@ public static class DocumentLifecycle
         }
     }
 
+    /// <summary>
+    /// Cancels pending intents. Deferred Discard never mutated the document, so no snapshot
+    /// restoration is performed (avoids clobbering newer edits).
+    /// </summary>
     public static void Rollback(IEnumerable<PendingAction> actions)
     {
-        foreach (var action in actions.Reverse())
-        {
-            if (action.Kind == PendingActionKind.Discard)
-                action.Document.RestoreSnapshot(action.Before);
-            // Saved actions already wrote to disk; buffer content stays as saved unless user edited again.
-        }
+        // Discard was deferred and never applied — nothing to restore.
+        // Saved actions already persisted; leave buffer as-is.
+        _ = actions;
+    }
+
+    /// <summary>
+    /// Applies a successful Open replacement only when the document version is unchanged
+    /// since <paramref name="versionAtReadStart"/>. Newer edits win; replacement is abandoned.
+    /// </summary>
+    public static bool TryCommitOpenReplacement(
+        ScriptDocument document,
+        string path,
+        string fileText,
+        long versionAtReadStart)
+    {
+        if (document.Version != versionAtReadStart)
+            return false;
+        document.LoadFrom(path, fileText);
+        return true;
     }
 
     /// <summary>

@@ -400,7 +400,7 @@ public partial class MainWindow : Window
         });
         if (files.Count == 0)
         {
-            // Cancelled picker — restore any pending discard so unsaved buffer stays dirty.
+            // Cancelled picker — deferred discard never modified the document.
             if (pending is not null)
                 DocumentLifecycle.Rollback([pending]);
             RefreshHeader(tab);
@@ -419,6 +419,8 @@ public partial class MainWindow : Window
                 DocumentLifecycle.Rollback([pending]);
             return;
         }
+        // Capture version before awaiting the replacement read.
+        var versionAtReadStart = tab.Document.Version;
         try
         {
             var text = await ScriptDocument.ReadFileTextAsync(path);
@@ -428,8 +430,21 @@ public partial class MainWindow : Window
                     DocumentLifecycle.Rollback([pending]);
                 return;
             }
-            // LoadFrom replaces the buffer; pending discard must not be committed (would restore old text).
-            tab.Document.LoadFrom(path, text);
+            // Pull any intervening editor edits into the document first.
+            if (ReferenceEquals(tab, _active))
+                tab.Document.SetText(Editor.Text ?? "");
+            if (!DocumentLifecycle.TryCommitOpenReplacement(tab.Document, path, text, versionAtReadStart))
+            {
+                if (pending is not null)
+                    DocumentLifecycle.Rollback([pending]);
+                RefreshHeader(tab);
+                if (ReferenceEquals(_active, tab))
+                {
+                    Editor.Text = tab.Document.Text;
+                    StatusBar.Text = "Open abandoned: newer edits arrived while reading the file. Unsaved text kept.";
+                }
+                return;
+            }
             if (ReferenceEquals(_active, tab))
                 Editor.Text = tab.Document.Text;
             RefreshHeader(tab);
@@ -438,6 +453,9 @@ public partial class MainWindow : Window
         {
             if (pending is not null)
                 DocumentLifecycle.Rollback([pending]);
+            // Preserve latest buffer (including edits during the failed read).
+            if (ReferenceEquals(tab, _active))
+                tab.Document.SetText(Editor.Text ?? "");
             RefreshHeader(tab);
             if (ReferenceEquals(_active, tab))
                 StatusBar.Text = SafeUi("Open failed; unsaved buffer preserved. " + ex.Message);

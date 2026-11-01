@@ -18,9 +18,9 @@ results/messages → cancel → disconnect. Single-batch execution only (no GO).
 | Connection options / TLS requirements | E1 validation tests | Wrong cert/password + successful connect |
 | Async ownership; stale OE rejection; Qualify3 | E1 | Two DBs / identical names under load |
 | SqlDecimal via typed reader path (38-digit probe literal); no `System.Decimal` | E1 `ISqlTypedCellSource` | Provider `SqlDataReader.GetSqlDecimal` on SQL Server |
-| Output budget mid-row; omit incomplete row; UI truncation marker | E1 + `RenderForDisplay` | Wide live result sets |
-| One-row-then-throw preserves complete row + error + partial | E1 fake reader | Late SQL error after rows |
-| Deferred Open/Quit discard; cancel picker / later Cancel keeps dirty | E1 DocumentLifecycle + macOS manual dirty sequences | — |
+| Output retention vs completion; drain after limit; unobserved completion | E1 `BatchObserver` | Wide live result sets |
+| One row then cancel / timeout(-2) / transport(-1); limit then later error | E1 production observation path + display assert | Late SQL error after rows |
+| Deferred Open/Quit; Open version race; failed read + intervening edit | E1 DocumentLifecycle; manual arm64 dirty Open/Quit in WALKTHROUGH | — |
 | SQL outcome vs target verification; block run when target unknown; no replay | E1 `WithTargetVerification` | USE+error; write+failed DB_NAME |
 | Run guard; cancel kinds; timeout -2 ≠ break | E1 | Delayed cancel / disconnect |
 | Keyboard / menu expand ≠ Insert SELECT | UI wiring | Live metadata |

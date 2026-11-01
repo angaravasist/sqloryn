@@ -139,8 +139,9 @@ public static class ResultMaterializer
             {
                 hasRow = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
+                // Preserve fully read rows even when cancellation/timeout stops further reading.
                 rowFailure = ex;
                 truncated = true;
                 break;
@@ -152,41 +153,52 @@ public static class ResultMaterializer
             if (budget.Exceeded || rows.Count >= QueryLimits.MaxRowsPerSet)
             {
                 truncated = true;
+                // Row already fetched: skip columns so SequentialAccess drain can continue.
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    if (!reader.IsDBNull(i))
+                        _ = reader.GetValue(i);
+                }
                 break;
             }
 
-            CellValue[]? cells = null;
             try
             {
-                cells = new CellValue[reader.FieldCount];
+                var cells = new CellValue[reader.FieldCount];
                 var rowOk = true;
-                for (var i = 0; i < reader.FieldCount; i++)
+                var ordinal = 0;
+                for (; ordinal < reader.FieldCount; ordinal++)
                 {
                     var cell = sqlSource is not null
-                        ? FormatSqlTypedCell(sqlSource, i)
-                        : FormatFallbackCell(reader, i);
+                        ? FormatSqlTypedCell(sqlSource, ordinal)
+                        : FormatFallbackCell(reader, ordinal);
                     var charge = budget.ChargeFor(cell);
                     if (!budget.TryReserve(charge))
                     {
-                        // Do not retain the over-budget cell or any partial row.
                         rowOk = false;
                         truncated = true;
                         break;
                     }
-                    cells[i] = cell;
+                    cells[ordinal] = cell;
+                }
+
+                // SequentialAccess: skip unread columns of an omitted incomplete row.
+                for (; ordinal < reader.FieldCount; ordinal++)
+                {
+                    if (!reader.IsDBNull(ordinal))
+                        _ = reader.GetValue(ordinal);
                 }
 
                 if (!rowOk)
                 {
-                    // Incomplete row omitted; prior complete rows kept.
+                    // Incomplete row omitted; prior complete rows kept. Drain continues outside.
                     break;
                 }
 
                 rows.Add(cells);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
-                // Omit incomplete row; preserve fully read rows already in `rows`.
                 rowFailure = ex;
                 truncated = true;
                 break;
@@ -383,6 +395,10 @@ public static class ResultMaterializer
         sb.AppendLine($"Server: {result.Server}  Database: {result.Database}");
         sb.AppendLine($"Target: {result.TargetConfidence}");
         sb.AppendLine($"Partial: {result.PartialResults}");
+        if (result.RetentionLimitReached)
+            sb.AppendLine("RetentionLimitReached: true");
+        if (result.FinalCompletionUnobserved)
+            sb.AppendLine("FinalCompletionUnobserved: true");
         if (!string.IsNullOrEmpty(result.ErrorSummary))
             sb.AppendLine(result.ErrorSummary);
         if (result.ResultSets.Count == 0)

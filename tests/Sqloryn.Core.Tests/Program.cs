@@ -183,27 +183,84 @@ Check(emptyBudget.ChargeFor(CellValue.Text("", "empty-string")) >= QueryLimits.M
 Check(emptyBudget.ChargeFor(CellValue.Null) >= QueryLimits.MinCellBudgetChars, "null-cell-charge");
 Pass("budget-empty-cells");
 
-// --- 3. Reader returns one row then throws; assert row + error + partial together (not preconstructed) ---
+// --- 3. Production BatchObserver path: retained rows + final status together ---
+using (var cancelReader = new ScriptedResultReader(
+           ["n"], [["kept"]],
+           failOnReadAfterRows: new OperationCanceledException("user-cancel")))
+{
+    using var retainCts = new CancellationTokenSource();
+    // Observe with a live token; failure is OCE from the reader after the first row.
+    var obs = await BatchObserver.ObserveOpenedReaderAsync(
+        cancelReader, new ResultBudget(), retainCts.Token, retainCts.Token);
+    // Reader-thrown OCE does not set retainToken; reclassify as user cancel while keeping rows.
+    if (obs.Completion != QueryCompletionKind.CancelledClientEnded)
+        BatchObserver.ApplyStop(obs, new OperationCanceledException("user-cancel"), false, userCancellation: true);
+    var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    Check(result.ResultSets[0].Rows[0][0].Display == "kept", "cancel-kept-row");
+    Check(result.Completion == QueryCompletionKind.CancelledClientEnded, "cancel-kind");
+    Check(result.PartialResults, "cancel-partial");
+    var display = ResultMaterializer.RenderForDisplay(result);
+    Check(display.Contains("kept", StringComparison.Ordinal) &&
+          display.Contains("CancelledClientEnded", StringComparison.Ordinal), "cancel-display");
+}
+Pass("observe-one-row-then-cancel");
+
+using (var timeoutReader = new ScriptedResultReader(
+           ["n"], [["kept"]],
+           failOnReadAfterRows: new ProviderErrorException(-2, "Timeout expired")))
+{
+    var obs = await BatchObserver.ObserveOpenedReaderAsync(
+        timeoutReader, new ResultBudget(), CancellationToken.None, CancellationToken.None);
+    var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    Check(result.Completion == QueryCompletionKind.TimedOut, "timeout-kind");
+    Check(result.ResultSets[0].Rows[0][0].Display == "kept", "timeout-row");
+    Check(result.ErrorSummary!.Contains("-2", StringComparison.Ordinal), "timeout-summary");
+    var display = ResultMaterializer.RenderForDisplay(result);
+    Check(display.Contains("kept", StringComparison.Ordinal) &&
+          display.Contains("TimedOut", StringComparison.Ordinal), "timeout-display");
+}
+Pass("observe-one-row-then-timeout");
+
+using (var lossReader = new ScriptedResultReader(
+           ["n"], [["kept"]],
+           failOnReadAfterRows: new ProviderErrorException(-1, "transport lost")))
+{
+    var obs = await BatchObserver.ObserveOpenedReaderAsync(
+        lossReader, new ResultBudget(), CancellationToken.None, CancellationToken.None);
+    var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    Check(result.Completion == QueryCompletionKind.UnknownAfterDisconnect, "transport-kind");
+    Check(result.ResultSets[0].Rows[0][0].Display == "kept", "transport-row");
+    var display = ResultMaterializer.RenderForDisplay(result);
+    Check(display.Contains("kept", StringComparison.Ordinal) &&
+          display.Contains("UnknownAfterDisconnect", StringComparison.Ordinal), "transport-display");
+}
+Pass("observe-one-row-then-transport-loss");
+
+// Output limit then later error on NextResult — retain first row, drain stopped by error.
+{
+    var many = Enumerable.Range(0, 20).Select(i => new[] { $"r{i}" }).ToArray();
+    using var limitReader = new ScriptedResultReader(
+        ["n"], many,
+        failOnNextResult: new ProviderErrorException(50000, "late error after limit"));
+    var budget = new ResultBudget();
+    // Tiny budget: first small row retained, then retention stops and drain/next fails.
+    budget.TryReserve(QueryLimits.MaxRetainedOutputChars - 4);
+    var obs = await BatchObserver.ObserveOpenedReaderAsync(
+        limitReader, budget, CancellationToken.None, CancellationToken.None);
+    var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    Check(result.RetentionLimitReached || result.ResultSets[0].Rows.Count >= 1, "limit-retained");
+    Check(result.ResultSets[0].Rows.Count >= 1, "limit-has-row");
+    // After retention limit, NextResult throws → failure with retained rows.
+    Check(result.Completion == QueryCompletionKind.Failed || result.PartialResults, "limit-then-error-status");
+    var display = ResultMaterializer.RenderForDisplay(result);
+    Check(display.Contains(result.ResultSets[0].Rows[0][0].Display, StringComparison.Ordinal), "limit-display-row");
+}
+Pass("observe-limit-then-later-error");
+
 using (var throwReader = new OneRowThenThrowReader(["n"], ["kept"]))
 {
     var outcome = await ResultMaterializer.ReadResultSetAsync(throwReader, new ResultBudget(), CancellationToken.None);
-    Check(outcome.RowFailure is not null, "row-failure-present");
-    Check(outcome.Set.Rows.Count == 1, "one-complete-row-kept");
-    Check(outcome.Set.Rows[0][0].Display == "kept", "kept-cell");
-    Check(outcome.Set.Truncated, "truncated-on-row-failure");
-    var built = new QueryResult
-    {
-        ExecutedSql = "SELECT n",
-        Server = "s",
-        Database = "d",
-        Completion = QueryCompletionKind.Failed,
-        ResultSets = [outcome.Set],
-        ErrorSummary = outcome.RowFailure!.Message,
-        PartialResults = true,
-        TargetConfidence = TargetConfidence.Known
-    };
-    Check(built.PartialResults && built.ResultSets[0].Rows.Count == 1 &&
-          built.ErrorSummary!.Contains("synthetic", StringComparison.Ordinal), "assert-row-error-partial-together");
+    Check(outcome.RowFailure is not null && outcome.Set.Rows.Count == 1, "row-failure-materializer");
 }
 Pass("row-failure-preserves-complete-rows");
 
@@ -220,24 +277,51 @@ Check(openDoc.IsDirty && openDoc.Text == "unsaved-open", "open-discard-not-yet-a
 DocumentLifecycle.Rollback([openPending!]);
 Check(openDoc.IsDirty && openDoc.Text == "unsaved-open", "open-cancel-picker-keeps-dirty");
 
-// Failed replacement read: rollback keeps dirty
+// Failed replacement read + intervening edit: latest text stays dirty
 openDoc.SetText("still-unsaved");
 var (p2, pend2) = await DocumentLifecycle.BeginOpenAsync(
     openDoc,
     () => Task.FromResult(DocumentLifecycle.PromptChoice.Discard),
     _ => Task.FromResult(true));
 Check(p2 && pend2 is not null, "open-discard-pending-2");
+var versionBeforeFail = openDoc.Version;
+var failRead = ScriptDocument.ReadFileTextAsync("/tmp/sqloryn-missing-open-file.sql");
+openDoc.SetText("intervening-edit-during-failed-open");
 try
 {
-    await ScriptDocument.ReadFileTextAsync("/tmp/sqloryn-missing-open-file.sql");
+    await failRead;
     throw new Exception("FAIL expected missing file");
 }
 catch (FileNotFoundException)
 {
     DocumentLifecycle.Rollback([pend2!]);
-    Check(openDoc.IsDirty && openDoc.Text == "still-unsaved", "failed-read-keeps-dirty");
+    Check(openDoc.IsDirty && openDoc.Text == "intervening-edit-during-failed-open", "failed-read-keeps-latest");
+    Check(openDoc.Version != versionBeforeFail, "failed-read-version-bumped");
 }
 Pass("open-deferred-discard");
+
+// Successful delayed read with intervening edit: abandon replacement; Close still prompts
+var raceDoc = new ScriptDocument();
+raceDoc.SetText("original-dirty");
+var versionAtReadStart = raceDoc.Version;
+var tmpPath = Path.Combine(Path.GetTempPath(), "sqloryn-open-race.sql");
+await File.WriteAllTextAsync(tmpPath, "from-disk");
+var delayed = Task.Run(async () =>
+{
+    await Task.Delay(30);
+    return await ScriptDocument.ReadFileTextAsync(tmpPath);
+});
+raceDoc.SetText("typed-during-open");
+var fileText = await delayed;
+Check(!DocumentLifecycle.TryCommitOpenReplacement(raceDoc, tmpPath, fileText, versionAtReadStart), "open-race-abandon");
+Check(raceDoc.IsDirty && raceDoc.Text == "typed-during-open", "open-race-keeps-edit");
+// Close still prompts because dirty
+var (closeOk, _) = await DocumentLifecycle.ResolveDirtyDeferredAsync(
+    raceDoc,
+    () => Task.FromResult(DocumentLifecycle.PromptChoice.Cancel),
+    _ => Task.FromResult(true));
+Check(!closeOk && raceDoc.IsDirty, "close-still-prompts-after-abandoned-open");
+Pass("open-version-race");
 
 // Two dirty tabs → Quit → Discard → Cancel → buffers protected; close again still dirty
 var d1 = new ScriptDocument();

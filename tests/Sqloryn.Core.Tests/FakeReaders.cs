@@ -77,21 +77,31 @@ sealed class FakeSqlTypedCellSource : ISqlTypedCellSource
     }
 }
 
-/// <summary>DbDataReader that yields one complete string row, then throws on the next Read.</summary>
-sealed class OneRowThenThrowReader : DbDataReader
+/// <summary>
+/// Scripted reader for production BatchObserver path: yields rows, then optional failure on Read/NextResult.
+/// </summary>
+class ScriptedResultReader : DbDataReader
 {
     readonly string[] _columns;
-    readonly string[] _cells;
-    int _state; // 0=before first, 1=on first, 2=throw
+    readonly string[][] _rows;
+    readonly Exception? _failOnReadAfterRows;
+    readonly Exception? _failOnNextResult;
+    int _rowIndex = -1;
 
-    public OneRowThenThrowReader(string[] columns, string[] cells)
+    public ScriptedResultReader(
+        string[] columns,
+        string[][] rows,
+        Exception? failOnReadAfterRows = null,
+        Exception? failOnNextResult = null)
     {
         _columns = columns;
-        _cells = cells;
+        _rows = rows;
+        _failOnReadAfterRows = failOnReadAfterRows;
+        _failOnNextResult = failOnNextResult;
     }
 
     public override int FieldCount => _columns.Length;
-    public override bool HasRows => true;
+    public override bool HasRows => _rows.Length > 0;
     public override bool IsClosed => false;
     public override int RecordsAffected => 0;
     public override int Depth => 0;
@@ -100,33 +110,54 @@ sealed class OneRowThenThrowReader : DbDataReader
 
     public override bool Read()
     {
-        if (_state == 0)
+        if (_rowIndex + 1 < _rows.Length)
         {
-            _state = 1;
+            _rowIndex++;
             return true;
         }
-        throw new InvalidOperationException("synthetic mid-result failure");
+
+        if (_failOnReadAfterRows is not null)
+            throw _failOnReadAfterRows;
+        return false;
     }
 
     public override Task<bool> ReadAsync(CancellationToken cancellationToken)
-        => Task.FromResult(Read());
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Read());
+    }
+
+    public override bool NextResult()
+    {
+        if (_failOnNextResult is not null)
+            throw _failOnNextResult;
+        return false;
+    }
+
+    public override Task<bool> NextResultAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_failOnNextResult is not null)
+            throw _failOnNextResult;
+        return Task.FromResult(false);
+    }
 
     public override string GetName(int ordinal) => _columns[ordinal];
     public override int GetOrdinal(string name) => Array.IndexOf(_columns, name);
     public override Type GetFieldType(int ordinal) => typeof(string);
     public override string GetDataTypeName(int ordinal) => "nvarchar";
     public override bool IsDBNull(int ordinal) => false;
-    public override object GetValue(int ordinal) => _cells[ordinal];
+    public override object GetValue(int ordinal) => _rows[_rowIndex][ordinal];
     public override int GetValues(object[] values)
     {
-        for (var i = 0; i < _cells.Length; i++)
-            values[i] = _cells[i];
-        return _cells.Length;
+        for (var i = 0; i < FieldCount; i++)
+            values[i] = GetValue(i);
+        return FieldCount;
     }
 
     public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
     {
-        var s = _cells[ordinal];
+        var s = _rows[_rowIndex][ordinal];
         if (buffer is null)
             return s.Length;
         var take = Math.Min(length, s.Length - (int)dataOffset);
@@ -134,7 +165,6 @@ sealed class OneRowThenThrowReader : DbDataReader
         return take;
     }
 
-    public override bool NextResult() => false;
     public override void Close() { }
     public override DataTable GetSchemaTable() => throw new NotSupportedException();
     public override IEnumerator GetEnumerator() => throw new NotSupportedException();
@@ -152,5 +182,14 @@ sealed class OneRowThenThrowReader : DbDataReader
     public override short GetInt16(int ordinal) => throw new NotSupportedException();
     public override int GetInt32(int ordinal) => throw new NotSupportedException();
     public override long GetInt64(int ordinal) => throw new NotSupportedException();
-    public override string GetString(int ordinal) => _cells[ordinal];
+    public override string GetString(int ordinal) => _rows[_rowIndex][ordinal];
+}
+
+/// <summary>Backward-compatible alias used by older tests.</summary>
+sealed class OneRowThenThrowReader : ScriptedResultReader
+{
+    public OneRowThenThrowReader(string[] columns, string[] cells)
+        : base(columns, [cells], failOnReadAfterRows: new InvalidOperationException("synthetic mid-result failure"))
+    {
+    }
 }
