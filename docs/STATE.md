@@ -20,7 +20,7 @@ session ([ADR-003](decisions/003-desktop-avalonia.md),
 |---|---|
 | Prior Preview 0 CI (Mac arm64+Intel app) | [41234937796](https://github.com/angaravasist/sqloryn/actions/runs/41234937796) at `a7fdfc3` tip line |
 | Reviewed implementation | `de4cce0` |
-| Fidelity/lifecycle correction (this delivery) | Tip of branch after push — see PR |
+| Fidelity/lifecycle correction (this delivery) | `ac03bcc71f7c3172b970e7fb107f2562806b9b7b` (arm64 component + .app dirty walkthrough) |
 | SqlDecimal typed path (38-digit probe literal) | Component pass; **live SqlDataReader on SQL Server unverified** |
 | Mid-row budget + `RenderForDisplay` truncation marker | Component pass |
 | One-row-then-throw → row + error + partial | Component pass |
