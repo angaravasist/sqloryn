@@ -13,10 +13,20 @@ open "artifacts/macos/$(uname -m | sed 's/arm64/osx-arm64/;s/x86_64/osx-x64/')/S
 
 ## Automated Core tests (not a substitute for UI)
 
-The component suite exercises BatchObserver production paths (one row then
-cancel / timeout / transport loss; retention limit then later error), deferred
-Open/Quit with intervening edits, and SqlDecimal typed formatting. Those PASS
-lines are **automated**. They do not prove Avalonia dialogs or focus behaviour.
+The component suite exercises BatchObserver production paths with the same
+`QueryOutcomeFormatter` status strings the app uses for tab status, results and
+messages:
+
+- one retained row then UserCancel / Disconnect / Watchdog / provider timeout(-2) /
+  transport loss(-1)
+- retention limit then value-free drain; later SQL error still observed
+  (`DiscardValueGuardReader` rejects discarded GetValue)
+- drain deadline expiry → `FinalCompletionUnobserved` (not Succeeded); target
+  verification must not upgrade Completion/StopCause
+- deferred Open/Quit with intervening edits; SqlDecimal typed formatting
+
+Those PASS lines are **automated**. They do not prove Avalonia dialogs or focus
+behaviour.
 
 ## Manual host-independent UI (arm64 `.app`)
 

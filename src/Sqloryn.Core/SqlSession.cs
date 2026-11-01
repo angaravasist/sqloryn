@@ -173,50 +173,61 @@ public sealed class SqlSession : IAsyncDisposable
             var cancelGenAtStart = Volatile.Read(ref _cancelGeneration);
             var obs = new BatchObserver.Observation();
             var sqlPhaseComplete = false;
+            var drainDeadline = TimeSpan.FromSeconds(Math.Clamp(_options.CommandTimeoutSeconds, 5, 60));
+
+            StopContext ResolveStop() => new(
+                DisconnectRequested: _disconnectRequested,
+                UserCancelRequested: cancellationToken.IsCancellationRequested ||
+                                     Volatile.Read(ref _cancelGeneration) != cancelGenAtStart,
+                WatchdogCancelRequested: true,
+                DrainDeadlineRequested: false);
 
             try
             {
-                DbDataReader reader;
+                DbDataReader? reader = null;
                 try
                 {
-                    reader = await command.ExecuteReaderAsync(
-                        System.Data.CommandBehavior.SequentialAccess, linked.Token).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is SqlException or OperationCanceledException or ProviderErrorException)
-                {
-                    if (ex is OperationCanceledException && _disconnectRequested)
-                        BatchObserver.ApplyStop(obs, ex, disconnectRequested: true, userCancellation: false);
-                    else if (ex is OperationCanceledException &&
-                             (cancellationToken.IsCancellationRequested ||
-                              Volatile.Read(ref _cancelGeneration) != cancelGenAtStart))
-                        BatchObserver.ApplyStop(obs, ex, disconnectRequested: false, userCancellation: true);
-                    else
-                        BatchObserver.ApplyStop(obs, ex, disconnectRequested: false, userCancellation: false);
-                    if (obs.Completion == QueryCompletionKind.UnknownAfterDisconnect)
-                        await DisposeConnectionAsync().ConfigureAwait(false);
-                    sqlPhaseComplete = true;
-                    goto AfterObserve;
-                }
-
-                await using (reader)
-                {
-                    using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    // Bounded observation after retention stops; does not replay SQL.
-                    drainCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(_options.CommandTimeoutSeconds, 5, 60)));
-                    obs = await BatchObserver.ObserveOpenedReaderAsync(
-                        reader, budget, linked.Token, drainCts.Token).ConfigureAwait(false);
-
-                    if (obs.Completion is QueryCompletionKind.CancelledClientEnded
-                        or QueryCompletionKind.CancelledServerVerified
-                        || (obs.Completion == QueryCompletionKind.TimedOut &&
-                            (cancellationToken.IsCancellationRequested ||
-                             Volatile.Read(ref _cancelGeneration) != cancelGenAtStart)))
+                    try
                     {
-                        // Reclassify user cancel with optional server probe.
-                        if (cancellationToken.IsCancellationRequested ||
-                            Volatile.Read(ref _cancelGeneration) != cancelGenAtStart)
+                        reader = await command.ExecuteReaderAsync(
+                            System.Data.CommandBehavior.SequentialAccess, linked.Token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is SqlException or OperationCanceledException or ProviderErrorException)
+                    {
+                        BatchObserver.ApplyStop(obs, ex, ResolveStop());
+                        if (obs.Completion == QueryCompletionKind.UnknownAfterDisconnect)
+                            await DisposeConnectionAsync().ConfigureAwait(false);
+                        sqlPhaseComplete = true;
+                        goto AfterObserve;
+                    }
+
+                    // Drain deadline starts inside Observe when retention stops — not before.
+                    obs = await BatchObserver.ObserveOpenedReaderAsync(
+                        reader, budget, linked.Token, drainDeadline, ResolveStop).ConfigureAwait(false);
+                    sqlPhaseComplete = true;
+                }
+                finally
+                {
+                    // Dispose the active reader before same-session verification / cancel probe.
+                    if (reader is not null)
+                        await reader.DisposeAsync().ConfigureAwait(false);
+                }
+
+                if (obs.StopCause == StopCause.UserCancel ||
+                    (obs.Completion is QueryCompletionKind.CancelledClientEnded
+                        or QueryCompletionKind.CancelledServerVerified) ||
+                    (obs.Completion == QueryCompletionKind.TimedOut &&
+                     ResolveStop().UserCancelRequested))
+                {
+                    if (ResolveStop().UserCancelRequested)
+                    {
+                        var verified = await TryProbeAfterCancelAsync().ConfigureAwait(false);
+                        // Refine cancel verification only — never upgrade a non-cancel SQL outcome.
+                        if (obs.StopCause is StopCause.UserCancel or StopCause.None ||
+                            obs.Completion is QueryCompletionKind.CancelledClientEnded
+                                or QueryCompletionKind.TimedOut)
                         {
-                            var verified = await TryProbeAfterCancelAsync().ConfigureAwait(false);
+                            obs.StopCause = StopCause.UserCancel;
                             obs.Completion = ExecutionOutcomes.FromCancellation(
                                 disconnectRequested: false,
                                 userCancellation: true,
@@ -225,18 +236,13 @@ public sealed class SqlSession : IAsyncDisposable
                             var rows = obs.RetainedSets.Sum(s => s.Rows.Count);
                             obs.ErrorSummary = verified.Verified
                                 ? $"Cancellation: client command ended; server probe OK (XACT_STATE={verified.TransactionState}). Retained {rows} complete row(s). Cancel does not imply rollback."
-                                : BatchObserver.SummarizeFailure(
-                                    new OperationCanceledException(),
-                                    QueryCompletionKind.CancelledClientEnded,
-                                    rows);
+                                : BatchObserver.SummarizeStop(StopCause.UserCancel, null, rows);
                         }
                     }
-
-                    if (obs.Completion == QueryCompletionKind.UnknownAfterDisconnect)
-                        await DisposeConnectionAsync().ConfigureAwait(false);
-
-                    sqlPhaseComplete = true;
                 }
+
+                if (obs.Completion == QueryCompletionKind.UnknownAfterDisconnect)
+                    await DisposeConnectionAsync().ConfigureAwait(false);
             }
             finally
             {
@@ -248,16 +254,16 @@ public sealed class SqlSession : IAsyncDisposable
             foreach (var msg in messages)
                 obs.Messages.Insert(0, msg);
 
-            // Separate target verification from SQL completion. Never replay the batch.
+            // Separate target verification from SQL completion. Never replay; never upgrade Completion.
+            var sqlCompletion = obs.Completion;
+            var sqlStop = obs.StopCause;
             var targetConfidence = TargetConfidence.Known;
             if (obs.Completion == QueryCompletionKind.UnknownAfterDisconnect || _connection is null)
             {
                 _targetUnknown = true;
                 targetConfidence = TargetConfidence.Unknown;
             }
-            else if (sqlPhaseComplete || obs.Completion is QueryCompletionKind.Succeeded or QueryCompletionKind.Failed
-                     or QueryCompletionKind.TimedOut or QueryCompletionKind.CancelledClientEnded
-                     or QueryCompletionKind.CancelledServerVerified)
+            else if (sqlPhaseComplete)
             {
                 var verify = await TryVerifyTargetNoLockAsync().ConfigureAwait(false);
                 if (!verify.Ok)
@@ -276,6 +282,10 @@ public sealed class SqlSession : IAsyncDisposable
                     Database = verify.Database ?? Database;
                 }
             }
+
+            // Target checks must not change SQL completion / stop cause.
+            obs.Completion = sqlCompletion;
+            obs.StopCause = sqlStop;
 
             return BatchObserver.BuildResult(
                 sql,
@@ -353,8 +363,8 @@ public sealed class SqlSession : IAsyncDisposable
                 PartialResults = sqlOutcome.PartialResults,
                 TransactionState = sqlOutcome.TransactionState,
                 TargetConfidence = TargetConfidence.Known,
-                FinalCompletionUnobserved = sqlOutcome.FinalCompletionUnobserved,
-                RetentionLimitReached = sqlOutcome.RetentionLimitReached
+                RetentionLimitReached = sqlOutcome.RetentionLimitReached,
+                StopCause = sqlOutcome.StopCause
             };
         }
 
@@ -373,8 +383,8 @@ public sealed class SqlSession : IAsyncDisposable
             PartialResults = sqlOutcome.PartialResults,
             TransactionState = sqlOutcome.TransactionState,
             TargetConfidence = TargetConfidence.Unknown,
-            FinalCompletionUnobserved = sqlOutcome.FinalCompletionUnobserved,
-            RetentionLimitReached = sqlOutcome.RetentionLimitReached
+            RetentionLimitReached = sqlOutcome.RetentionLimitReached,
+            StopCause = sqlOutcome.StopCause
         };
     }
 

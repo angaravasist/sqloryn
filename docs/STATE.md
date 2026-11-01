@@ -13,12 +13,15 @@ Branch `codex/developer-preview-0` — Developer Preview 0
 
 | Claim | Status |
 |---|---|
-| Reviewed implementation | `ac03bcc` |
-| Retention/completion + Open version correction | `22d3ab81cd7aff37690b544a2e73b4f4880ba16e` (Core + arm64 manual dirty smoke) |
-| BatchObserver: cancel / timeout(-2) / transport(-1) / limit+error | Automated Core PASS |
+| Reviewed implementation (prior tip) | `22d3ab81cd7aff37690b544a2e73b4f4880ba16e` |
+| StopCause / unobserved / value-free drain correction | *(this commit — stamped after push)* |
+| Distinct `FinalCompletionUnobserved`; tab/results/messages via `QueryOutcomeFormatter` | Automated Core PASS |
+| Drain without discarded GetValue; later SQL error under drain deadline | Automated Core PASS (`DiscardValueGuardReader`) |
+| Stop causes: UserCancel / Disconnect / Watchdog / ProviderTimeout(-2) / Transport(-1) / DrainDeadline | Automated Core PASS + shared status formatter |
+| Target verification never upgrades SQL Completion/StopCause | Automated Core PASS |
 | Open version race + failed read with intervening edit | Automated Core PASS |
-| Ordinary dirty Open/Quit in arm64 `.app` | Manual (distinct from Core) — recorded with tip |
-| Hosted ubuntu + macos-15 + macos-15-intel | [41301640670](https://github.com/angaravasist/sqloryn/actions/runs/41301640670) |
+| Ordinary dirty Open/Quit in arm64 `.app` | Manual (prior tip) — not re-run this correction |
+| Hosted ubuntu + macos-15 + macos-15-intel | *(pending this push)* |
 | Live SQL / provider SqlDataReader decimal(38) | **Unverified** — no host |
 
 ## Reviewer launch

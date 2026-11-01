@@ -183,41 +183,74 @@ Check(emptyBudget.ChargeFor(CellValue.Text("", "empty-string")) >= QueryLimits.M
 Check(emptyBudget.ChargeFor(CellValue.Null) >= QueryLimits.MinCellBudgetChars, "null-cell-charge");
 Pass("budget-empty-cells");
 
-// --- 3. Production BatchObserver path: retained rows + final status together ---
+// --- 3. Production BatchObserver: stop causes, drain, unobserved, shared UI formatter ---
+void AssertUiSurfaces(QueryResult result, string expectedStatus, string name)
+{
+    var status = QueryOutcomeFormatter.DescribeStatus(result);
+    Check(status == expectedStatus, name + "-status-text");
+    Check(QueryOutcomeFormatter.UiSurfacesAgree(result, out var detail), name + "-ui-agree:" + detail);
+    Check(QueryOutcomeFormatter.FormatResults(result).Contains(expectedStatus, StringComparison.Ordinal), name + "-results");
+    Check(QueryOutcomeFormatter.FormatMessages(result).Contains(expectedStatus, StringComparison.Ordinal), name + "-messages");
+}
+
 using (var cancelReader = new ScriptedResultReader(
            ["n"], [["kept"]],
            failOnReadAfterRows: new OperationCanceledException("user-cancel")))
 {
-    using var retainCts = new CancellationTokenSource();
-    // Observe with a live token; failure is OCE from the reader after the first row.
     var obs = await BatchObserver.ObserveOpenedReaderAsync(
-        cancelReader, new ResultBudget(), retainCts.Token, retainCts.Token);
-    // Reader-thrown OCE does not set retainToken; reclassify as user cancel while keeping rows.
-    if (obs.Completion != QueryCompletionKind.CancelledClientEnded)
-        BatchObserver.ApplyStop(obs, new OperationCanceledException("user-cancel"), false, userCancellation: true);
+        cancelReader, new ResultBudget(), CancellationToken.None, TimeSpan.FromSeconds(30),
+        new StopContext(false, UserCancelRequested: true, WatchdogCancelRequested: false, false));
     var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
     Check(result.ResultSets[0].Rows[0][0].Display == "kept", "cancel-kept-row");
+    Check(result.StopCause == StopCause.UserCancel, "cancel-stop");
     Check(result.Completion == QueryCompletionKind.CancelledClientEnded, "cancel-kind");
-    Check(result.PartialResults, "cancel-partial");
-    var display = ResultMaterializer.RenderForDisplay(result);
-    Check(display.Contains("kept", StringComparison.Ordinal) &&
-          display.Contains("CancelledClientEnded", StringComparison.Ordinal), "cancel-display");
+    AssertUiSurfaces(result, "Cancelled (client ended)", "cancel");
 }
 Pass("observe-one-row-then-cancel");
+
+using (var disconnectReader = new ScriptedResultReader(
+           ["n"], [["kept"]],
+           failOnReadAfterRows: new OperationCanceledException("disconnect")))
+{
+    var obs = await BatchObserver.ObserveOpenedReaderAsync(
+        disconnectReader, new ResultBudget(), CancellationToken.None, TimeSpan.FromSeconds(30),
+        new StopContext(DisconnectRequested: true, false, false, false));
+    var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    Check(result.StopCause == StopCause.Disconnect, "disconnect-stop");
+    Check(result.Completion == QueryCompletionKind.UnknownAfterDisconnect, "disconnect-kind");
+    Check(result.ResultSets[0].Rows[0][0].Display == "kept", "disconnect-row");
+    AssertUiSurfaces(result, "Unknown after disconnect", "disconnect");
+}
+Pass("observe-one-row-then-disconnect");
+
+using (var watchdogReader = new ScriptedResultReader(
+           ["n"], [["kept"]],
+           failOnReadAfterRows: new OperationCanceledException("watchdog")))
+{
+    var obs = await BatchObserver.ObserveOpenedReaderAsync(
+        watchdogReader, new ResultBudget(), CancellationToken.None, TimeSpan.FromSeconds(30),
+        new StopContext(false, false, WatchdogCancelRequested: true, false));
+    var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    Check(result.StopCause == StopCause.WatchdogTimeout, "watchdog-stop");
+    Check(result.Completion == QueryCompletionKind.TimedOut, "watchdog-kind");
+    AssertUiSurfaces(result, "Timed out", "watchdog");
+}
+Pass("observe-one-row-then-watchdog");
 
 using (var timeoutReader = new ScriptedResultReader(
            ["n"], [["kept"]],
            failOnReadAfterRows: new ProviderErrorException(-2, "Timeout expired")))
 {
     var obs = await BatchObserver.ObserveOpenedReaderAsync(
-        timeoutReader, new ResultBudget(), CancellationToken.None, CancellationToken.None);
+        timeoutReader, new ResultBudget(), CancellationToken.None, TimeSpan.FromSeconds(30),
+        new StopContext(false, false, false, false));
     var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    Check(result.StopCause == StopCause.ProviderTimeout, "provider-timeout-stop");
     Check(result.Completion == QueryCompletionKind.TimedOut, "timeout-kind");
     Check(result.ResultSets[0].Rows[0][0].Display == "kept", "timeout-row");
-    Check(result.ErrorSummary!.Contains("-2", StringComparison.Ordinal), "timeout-summary");
-    var display = ResultMaterializer.RenderForDisplay(result);
-    Check(display.Contains("kept", StringComparison.Ordinal) &&
-          display.Contains("TimedOut", StringComparison.Ordinal), "timeout-display");
+    Check(result.ErrorSummary!.Contains("-2", StringComparison.Ordinal) ||
+          result.ErrorSummary.Contains("Provider timeout", StringComparison.Ordinal), "timeout-summary");
+    AssertUiSurfaces(result, "Timed out (provider)", "provider-timeout");
 }
 Pass("observe-one-row-then-timeout");
 
@@ -226,36 +259,58 @@ using (var lossReader = new ScriptedResultReader(
            failOnReadAfterRows: new ProviderErrorException(-1, "transport lost")))
 {
     var obs = await BatchObserver.ObserveOpenedReaderAsync(
-        lossReader, new ResultBudget(), CancellationToken.None, CancellationToken.None);
+        lossReader, new ResultBudget(), CancellationToken.None, TimeSpan.FromSeconds(30),
+        new StopContext(false, false, false, false));
     var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    Check(result.StopCause == StopCause.TransportLoss, "transport-stop");
     Check(result.Completion == QueryCompletionKind.UnknownAfterDisconnect, "transport-kind");
     Check(result.ResultSets[0].Rows[0][0].Display == "kept", "transport-row");
-    var display = ResultMaterializer.RenderForDisplay(result);
-    Check(display.Contains("kept", StringComparison.Ordinal) &&
-          display.Contains("UnknownAfterDisconnect", StringComparison.Ordinal), "transport-display");
+    AssertUiSurfaces(result, "Unknown after disconnect", "transport");
 }
 Pass("observe-one-row-then-transport-loss");
 
-// Output limit then later error on NextResult — retain first row, drain stopped by error.
+// Drain without discarded-value access; later SQL error still observed.
 {
-    var many = Enumerable.Range(0, 20).Select(i => new[] { $"r{i}" }).ToArray();
-    using var limitReader = new ScriptedResultReader(
-        ["n"], many,
-        failOnNextResult: new ProviderErrorException(50000, "late error after limit"));
+    var many = Enumerable.Range(0, 12).Select(i => new[] { $"r{i}" }).ToArray();
+    using var guardReader = new DiscardValueGuardReader(
+        ["n"], many, retainableRows: 1,
+        lateError: new ProviderErrorException(50000, "late error after limit"));
     var budget = new ResultBudget();
-    // Tiny budget: first small row retained, then retention stops and drain/next fails.
+    // Room for one short retained cell ("r0"); further rows must be drained without GetValue.
+    budget.TryReserve(QueryLimits.MaxRetainedOutputChars - 2);
+    var obs = await BatchObserver.ObserveOpenedReaderAsync(
+        guardReader, budget, CancellationToken.None, TimeSpan.FromSeconds(30),
+        new StopContext(false, false, false, false));
+    var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+    Check(guardReader.DiscardedValueAccessAttempts == 0, "drain-no-discarded-getvalue");
+    Check(result.RetentionLimitReached, "limit-retained-flag");
+    Check(result.ResultSets[0].Rows.Count >= 1, "limit-has-row");
+    Check(result.StopCause == StopCause.SqlError, "limit-then-error-stop");
+    Check(result.Completion == QueryCompletionKind.Failed, "limit-then-error-kind");
+    AssertUiSurfaces(result, "Failed", "limit-then-error");
+}
+Pass("observe-limit-drain-then-later-error");
+
+// Drain deadline expiry → distinct FinalCompletionUnobserved; target check must not upgrade.
+{
+    using var hangReader = new HangAfterFirstRowReader(["n"], ["kept"]);
+    var budget = new ResultBudget();
     budget.TryReserve(QueryLimits.MaxRetainedOutputChars - 4);
     var obs = await BatchObserver.ObserveOpenedReaderAsync(
-        limitReader, budget, CancellationToken.None, CancellationToken.None);
+        hangReader, budget, CancellationToken.None, TimeSpan.FromMilliseconds(20),
+        new StopContext(false, false, false, false));
     var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
-    Check(result.RetentionLimitReached || result.ResultSets[0].Rows.Count >= 1, "limit-retained");
-    Check(result.ResultSets[0].Rows.Count >= 1, "limit-has-row");
-    // After retention limit, NextResult throws → failure with retained rows.
-    Check(result.Completion == QueryCompletionKind.Failed || result.PartialResults, "limit-then-error-status");
-    var display = ResultMaterializer.RenderForDisplay(result);
-    Check(display.Contains(result.ResultSets[0].Rows[0][0].Display, StringComparison.Ordinal), "limit-display-row");
+    Check(result.Completion == QueryCompletionKind.FinalCompletionUnobserved, "drain-deadline-kind");
+    Check(result.StopCause == StopCause.DrainDeadline, "drain-deadline-stop");
+    Check(result.ResultSets[0].Rows.Count >= 1 && result.ResultSets[0].Rows[0][0].Display == "kept", "drain-deadline-row");
+    AssertUiSurfaces(result, "Final completion unobserved", "drain-deadline");
+
+    var afterVerify = SqlSession.WithTargetVerification(result, verificationSucceeded: true, verifiedDatabase: "d");
+    Check(afterVerify.Completion == QueryCompletionKind.FinalCompletionUnobserved, "target-no-upgrade-completion");
+    Check(afterVerify.StopCause == StopCause.DrainDeadline, "target-no-upgrade-stop");
+    AssertUiSurfaces(afterVerify, "Final completion unobserved", "drain-deadline-after-verify");
 }
-Pass("observe-limit-then-later-error");
+Pass("observe-drain-deadline-unobserved");
 
 using (var throwReader = new OneRowThenThrowReader(["n"], ["kept"]))
 {
@@ -414,15 +469,34 @@ var useThenError = new QueryResult
     Completion = QueryCompletionKind.Failed,
     ResultSets = [],
     ErrorSummary = "SQL error 8134: Divide by zero",
-    PartialResults = false
+    PartialResults = false,
+    StopCause = StopCause.SqlError
 };
 var useVerifyOk = SqlSession.WithTargetVerification(useThenError, verificationSucceeded: true, verifiedDatabase: "otherdb");
 Check(useVerifyOk.Completion == QueryCompletionKind.Failed && useVerifyOk.Database == "otherdb" &&
-      useVerifyOk.TargetConfidence == TargetConfidence.Known, "use-then-error-target-verified");
+      useVerifyOk.TargetConfidence == TargetConfidence.Known &&
+      useVerifyOk.StopCause == StopCause.SqlError, "use-then-error-target-verified");
 
 var useVerifyFail = SqlSession.WithTargetVerification(useThenError, verificationSucceeded: false, null);
 Check(useVerifyFail.Completion == QueryCompletionKind.Failed &&
-      useVerifyFail.TargetConfidence == TargetConfidence.Unknown, "use-then-error-verify-failed");
+      useVerifyFail.TargetConfidence == TargetConfidence.Unknown &&
+      useVerifyFail.StopCause == StopCause.SqlError, "use-then-error-verify-failed");
+
+var unobserved = new QueryResult
+{
+    ExecutedSql = "SELECT …",
+    Server = "s",
+    Database = "d",
+    Completion = QueryCompletionKind.FinalCompletionUnobserved,
+    StopCause = StopCause.DrainDeadline,
+    ResultSets = [new ResultSet { Columns = ["n"], Rows = [[CellValue.Text("kept", "string")]], Truncated = true }],
+    PartialResults = true,
+    RetentionLimitReached = true
+};
+var unobservedVerify = SqlSession.WithTargetVerification(unobserved, true, "d");
+Check(unobservedVerify.Completion == QueryCompletionKind.FinalCompletionUnobserved &&
+      unobservedVerify.StopCause == StopCause.DrainDeadline, "unobserved-not-upgraded");
+AssertUiSurfaces(unobservedVerify, "Final completion unobserved", "unobserved-target");
 Pass("target-verification-separated");
 
 var flag = 0;

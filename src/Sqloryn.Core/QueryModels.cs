@@ -11,7 +11,23 @@ public enum QueryCompletionKind
     /// <summary>Client command ended due to cancel and a follow-up probe verified session/transaction state.</summary>
     CancelledServerVerified,
     TimedOut,
-    UnknownAfterDisconnect
+    UnknownAfterDisconnect,
+    /// <summary>Display retention stopped; batch end was not observed within the drain deadline.</summary>
+    FinalCompletionUnobserved
+}
+
+/// <summary>Actual stop cause at ExecuteReader / Read / NextResult. Distinct from target confidence.</summary>
+public enum StopCause
+{
+    None,
+    UserCancel,
+    Disconnect,
+    WatchdogTimeout,
+    ProviderTimeout,
+    DrainDeadline,
+    TransportLoss,
+    SqlError,
+    Other
 }
 
 public enum TargetConfidence
@@ -51,13 +67,10 @@ public sealed class QueryResult
     public bool PartialResults { get; init; }
     public int? TransactionState { get; init; }
     public TargetConfidence TargetConfidence { get; init; } = TargetConfidence.Known;
-    /// <summary>
-    /// True when a display/retention limit was hit and the batch was not fully observed
-    /// through to a definitive end (drain deadline or stop before end).
-    /// </summary>
-    public bool FinalCompletionUnobserved { get; init; }
     /// <summary>True when retained output stopped early due to row/budget/result-set limits.</summary>
     public bool RetentionLimitReached { get; init; }
+    /// <summary>Stop cause preserved from ExecuteReader / Read / NextResult. Never upgraded by target checks.</summary>
+    public StopCause StopCause { get; init; }
 }
 
 public static class QueryLimits

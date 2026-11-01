@@ -30,6 +30,12 @@ public sealed class ResultBudget
         RetainedChars += chars;
         return true;
     }
+
+    /// <summary>True when <paramref name="chars"/> could still be reserved without reading cell values.</summary>
+    public bool HasCapacity(int chars)
+        => !Exceeded && RetainedChars + chars <= QueryLimits.MaxRetainedOutputChars;
+
+    public void MarkExceeded() => Exceeded = true;
 }
 
 public sealed class ResultSetReadOutcome
@@ -153,12 +159,16 @@ public static class ResultMaterializer
             if (budget.Exceeded || rows.Count >= QueryLimits.MaxRowsPerSet)
             {
                 truncated = true;
-                // Row already fetched: skip columns so SequentialAccess drain can continue.
-                for (var i = 0; i < reader.FieldCount; i++)
-                {
-                    if (!reader.IsDBNull(i))
-                        _ = reader.GetValue(i);
-                }
+                budget.MarkExceeded();
+                // Do not materialise discarded cells — BatchObserver drains by Read only.
+                break;
+            }
+
+            // Stop before touching cell values when the next row cannot fit.
+            if (!budget.HasCapacity(QueryLimits.MinCellBudgetChars * Math.Max(1, reader.FieldCount)))
+            {
+                truncated = true;
+                budget.MarkExceeded();
                 break;
             }
 
@@ -182,16 +192,10 @@ public static class ResultMaterializer
                     cells[ordinal] = cell;
                 }
 
-                // SequentialAccess: skip unread columns of an omitted incomplete row.
-                for (; ordinal < reader.FieldCount; ordinal++)
-                {
-                    if (!reader.IsDBNull(ordinal))
-                        _ = reader.GetValue(ordinal);
-                }
-
                 if (!rowOk)
                 {
-                    // Incomplete row omitted; prior complete rows kept. Drain continues outside.
+                    // Incomplete row omitted without reading remaining discarded cells.
+                    // Prior complete rows kept; BatchObserver drains by advancing Read only.
                     break;
                 }
 
@@ -389,18 +393,19 @@ public static class ResultMaterializer
 
     /// <summary>Same rendering path the Results pane uses (intact rows + truncation marker).</summary>
     public static string RenderForDisplay(QueryResult result)
+        => QueryOutcomeFormatter.FormatResults(result);
+
+    /// <summary>Result-set body without status chrome (used by <see cref="QueryOutcomeFormatter"/>).</summary>
+    public static string FormatResultSets(QueryResult result)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"Completion: {result.Completion}");
         sb.AppendLine($"Server: {result.Server}  Database: {result.Database}");
         sb.AppendLine($"Target: {result.TargetConfidence}");
         sb.AppendLine($"Partial: {result.PartialResults}");
         if (result.RetentionLimitReached)
             sb.AppendLine("RetentionLimitReached: true");
-        if (result.FinalCompletionUnobserved)
+        if (result.Completion == QueryCompletionKind.FinalCompletionUnobserved)
             sb.AppendLine("FinalCompletionUnobserved: true");
-        if (!string.IsNullOrEmpty(result.ErrorSummary))
-            sb.AppendLine(result.ErrorSummary);
         if (result.ResultSets.Count == 0)
         {
             sb.AppendLine("(no result sets)");

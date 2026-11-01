@@ -5,16 +5,22 @@ namespace Sqloryn.Core;
 
 /// <summary>
 /// Test stand-in for provider errors when constructing <see cref="SqlException"/> is impractical.
-/// Classified identically to SqlException numbers.
 /// </summary>
 public sealed class ProviderErrorException(int number, string message) : Exception(message)
 {
     public int Number { get; } = number;
 }
 
+/// <summary>Signals available when an OperationCanceledException is observed.</summary>
+public readonly record struct StopContext(
+    bool DisconnectRequested,
+    bool UserCancelRequested,
+    bool WatchdogCancelRequested,
+    bool DrainDeadlineRequested);
+
 /// <summary>
 /// Separates retained display output from command observation/completion.
-/// Never replays SQL. Classifies timeout and transport loss at every read boundary.
+/// Never replays SQL. Preserves stop cause across ExecuteReader / Read / NextResult.
 /// </summary>
 public static class BatchObserver
 {
@@ -22,80 +28,113 @@ public static class BatchObserver
     {
         public List<ResultSet> RetainedSets { get; } = [];
         public QueryCompletionKind Completion { get; set; } = QueryCompletionKind.Succeeded;
+        public StopCause StopCause { get; set; } = StopCause.None;
         public bool PartialResults { get; set; }
         public bool RetentionLimitReached { get; set; }
-        public bool FinalCompletionUnobserved { get; set; }
         public string? ErrorSummary { get; set; }
         public List<QueryMessage> Messages { get; } = [];
     }
 
+    /// <summary>Advance the reader without accessing discarded cell values.</summary>
     public static async Task DrainResultSetAsync(DbDataReader reader, CancellationToken cancellationToken)
     {
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            for (var i = 0; i < reader.FieldCount; i++)
-            {
-                if (!reader.IsDBNull(i))
-                    _ = reader.GetValue(i);
-            }
+            // Intentionally no GetValue / GetChars / IsDBNull — discarded rows are not materialised.
         }
     }
 
-    public static QueryCompletionKind ClassifyFailure(
-        Exception ex,
-        bool disconnectRequested,
-        bool userCancellation)
+    public static StopCause ClassifyStop(Exception ex, StopContext context)
     {
         if (ex is OperationCanceledException)
-            return ExecutionOutcomes.FromCancellation(disconnectRequested, userCancellation, serverStateVerified: false);
+        {
+            if (context.DisconnectRequested)
+                return StopCause.Disconnect;
+            // Drain deadline only when the drain CTS fired without a competing user cancel.
+            if (context.DrainDeadlineRequested && !context.UserCancelRequested)
+                return StopCause.DrainDeadline;
+            if (context.UserCancelRequested)
+                return StopCause.UserCancel;
+            if (context.WatchdogCancelRequested)
+                return StopCause.WatchdogTimeout;
+            return StopCause.WatchdogTimeout;
+        }
 
-        if (ex is SqlException sql)
-            return ExecutionOutcomes.FromSqlError(sql.Number);
+        var number = ex is SqlException sql ? sql.Number
+            : ex is ProviderErrorException provider ? provider.Number
+            : (int?)null;
+        if (number is int n)
+        {
+            if (ExecutionOutcomes.IsProviderTimeout(n))
+                return StopCause.ProviderTimeout;
+            if (ExecutionOutcomes.IsBrokenConnection(n))
+                return StopCause.TransportLoss;
+            return StopCause.SqlError;
+        }
 
-        if (ex is ProviderErrorException provider)
-            return ExecutionOutcomes.FromSqlError(provider.Number);
-
-        return QueryCompletionKind.Failed;
+        return StopCause.Other;
     }
 
-    public static string SummarizeFailure(Exception ex, QueryCompletionKind kind, int retainedRowCount)
+    public static QueryCompletionKind CompletionFor(StopCause cause) => cause switch
+    {
+        StopCause.None => QueryCompletionKind.Succeeded,
+        StopCause.UserCancel => QueryCompletionKind.CancelledClientEnded,
+        StopCause.Disconnect => QueryCompletionKind.UnknownAfterDisconnect,
+        StopCause.WatchdogTimeout => QueryCompletionKind.TimedOut,
+        StopCause.ProviderTimeout => QueryCompletionKind.TimedOut,
+        StopCause.DrainDeadline => QueryCompletionKind.FinalCompletionUnobserved,
+        StopCause.TransportLoss => QueryCompletionKind.UnknownAfterDisconnect,
+        StopCause.SqlError => QueryCompletionKind.Failed,
+        _ => QueryCompletionKind.Failed
+    };
+
+    public static string SummarizeStop(StopCause cause, Exception? ex, int retainedRowCount)
     {
         var retained = retainedRowCount > 0
             ? $" Retained {retainedRowCount} complete row(s)."
             : "";
-        var number = ex is SqlException s ? s.Number
-            : ex is ProviderErrorException p ? p.Number
-            : 0;
-        return kind switch
+        var detail = ex is null ? "" : " " + Sanitize(ex.Message);
+        return cause switch
         {
-            QueryCompletionKind.TimedOut when number == -2 =>
-                $"Provider timeout (SQL -2): {Sanitize(ex.Message)}.{retained} SQL was not replayed.",
-            QueryCompletionKind.TimedOut =>
-                $"Command timed out or observation deadline elapsed.{retained} SQL was not replayed.",
-            QueryCompletionKind.UnknownAfterDisconnect when number != 0 =>
-                $"Connection lost during execution (SQL {number}); outcome unknown.{retained} SQL was not replayed.",
-            QueryCompletionKind.UnknownAfterDisconnect =>
-                $"Connection lost during execution; outcome unknown.{retained} SQL was not replayed.",
-            QueryCompletionKind.CancelledClientEnded or QueryCompletionKind.CancelledServerVerified =>
+            StopCause.UserCancel =>
                 $"Cancellation stopped observation.{retained} SQL was not replayed.",
-            QueryCompletionKind.Failed when number != 0 =>
-                $"SQL error {number}: {Sanitize(ex.Message)}.{retained} SQL was not replayed.",
-            _ => $"{Sanitize(ex.Message)}.{retained} SQL was not replayed."
+            StopCause.Disconnect =>
+                $"Disconnected during execution; outcome unknown.{retained} SQL was not replayed.",
+            StopCause.WatchdogTimeout =>
+                $"Watchdog timeout stopped observation.{detail}.{retained} SQL was not replayed.",
+            StopCause.ProviderTimeout =>
+                $"Provider timeout (SQL -2).{detail}.{retained} SQL was not replayed.",
+            StopCause.DrainDeadline =>
+                $"Display retention limit reached; final batch completion was unobserved within the drain deadline.{retained} SQL was not replayed.",
+            StopCause.TransportLoss =>
+                $"Connection lost during execution.{detail}.{retained} SQL was not replayed.",
+            StopCause.SqlError =>
+                $"SQL error.{detail}.{retained} SQL was not replayed.",
+            _ => $"{Sanitize(ex?.Message ?? "Stopped")}.{retained} SQL was not replayed."
         };
     }
 
     /// <summary>
-    /// Production observation loop over an already-opened reader.
-    /// When retention limits hit, continues draining under <paramref name="drainToken"/> without retaining.
+    /// Production observation loop. Drain deadline starts only when retention stops.
     /// </summary>
+    public static Task<Observation> ObserveOpenedReaderAsync(
+        DbDataReader reader,
+        ResultBudget budget,
+        CancellationToken retainToken,
+        TimeSpan drainDeadline,
+        StopContext stopContext)
+        => ObserveOpenedReaderAsync(reader, budget, retainToken, drainDeadline, () => stopContext);
+
     public static async Task<Observation> ObserveOpenedReaderAsync(
         DbDataReader reader,
         ResultBudget budget,
         CancellationToken retainToken,
-        CancellationToken drainToken)
+        TimeSpan drainDeadline,
+        Func<StopContext> resolveStopContext)
     {
         var obs = new Observation();
         var retaining = true;
+        CancellationTokenSource? drainCts = null;
 
         try
         {
@@ -106,6 +145,7 @@ public static class BatchObserver
                     obs.RetentionLimitReached = true;
                     obs.PartialResults = true;
                     retaining = false;
+                    drainCts = BeginDrainDeadline(retainToken, drainDeadline);
                 }
 
                 if (retaining)
@@ -118,28 +158,25 @@ public static class BatchObserver
                         obs.PartialResults = true;
                         obs.RetentionLimitReached = true;
                         retaining = false;
+                        drainCts?.Dispose();
+                        drainCts = BeginDrainDeadline(retainToken, drainDeadline);
                     }
 
                     if (outcome.RowFailure is not null)
                     {
-                        var userCancel = outcome.RowFailure is OperationCanceledException &&
-                                         retainToken.IsCancellationRequested;
-                        // Reader-thrown OCE after retained rows still preserves those rows.
-                        if (outcome.RowFailure is OperationCanceledException)
-                            userCancel = true; // treat mid-batch cancel as user/client cancel unless drain deadline
-                        ApplyStop(obs, outcome.RowFailure, disconnectRequested: false, userCancellation: userCancel);
+                        ApplyStop(obs, outcome.RowFailure, resolveStopContext());
                         return obs;
                     }
 
                     if (!retaining)
-                        await DrainResultSetAsync(reader, drainToken).ConfigureAwait(false);
+                        await DrainResultSetAsync(reader, drainCts!.Token).ConfigureAwait(false);
                 }
                 else
                 {
-                    await DrainResultSetAsync(reader, drainToken).ConfigureAwait(false);
+                    await DrainResultSetAsync(reader, drainCts!.Token).ConfigureAwait(false);
                 }
 
-                var more = await reader.NextResultAsync(retaining ? retainToken : drainToken)
+                var more = await reader.NextResultAsync(retaining ? retainToken : drainCts!.Token)
                     .ConfigureAwait(false);
                 if (!more)
                     break;
@@ -148,28 +185,28 @@ public static class BatchObserver
             if (obs.RetentionLimitReached)
                 obs.PartialResults = true;
             obs.Completion = QueryCompletionKind.Succeeded;
+            obs.StopCause = StopCause.None;
             return obs;
         }
         catch (Exception ex)
         {
-            // Drain-deadline cancellation after a retention limit → unobserved final completion.
-            if (obs.RetentionLimitReached &&
-                ex is OperationCanceledException &&
-                drainToken.IsCancellationRequested &&
-                !retainToken.IsCancellationRequested)
-            {
-                obs.FinalCompletionUnobserved = true;
-                obs.PartialResults = true;
-                obs.Completion = QueryCompletionKind.Succeeded;
-                obs.ErrorSummary =
-                    "Display retention limit reached; final batch completion was unobserved within the drain deadline. SQL was not replayed.";
-                return obs;
-            }
-
-            var userCancel = retainToken.IsCancellationRequested && ex is OperationCanceledException;
-            ApplyStop(obs, ex, disconnectRequested: false, userCancellation: userCancel);
+            var ctx = resolveStopContext();
+            if (!retaining && drainCts is { IsCancellationRequested: true })
+                ctx = ctx with { DrainDeadlineRequested = true };
+            ApplyStop(obs, ex, ctx);
             return obs;
         }
+        finally
+        {
+            drainCts?.Dispose();
+        }
+    }
+
+    static CancellationTokenSource BeginDrainDeadline(CancellationToken userToken, TimeSpan drainDeadline)
+    {
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(userToken);
+        cts.CancelAfter(drainDeadline);
+        return cts;
     }
 
     public static QueryResult BuildResult(
@@ -189,25 +226,24 @@ public static class BatchObserver
             ResultSets = obs.RetainedSets,
             Messages = obs.Messages,
             ErrorSummary = obs.ErrorSummary,
-            PartialResults = obs.PartialResults || obs.RetentionLimitReached || obs.FinalCompletionUnobserved,
+            PartialResults = obs.PartialResults || obs.RetentionLimitReached ||
+                             obs.Completion == QueryCompletionKind.FinalCompletionUnobserved,
             TransactionState = transactionState,
             TargetConfidence = targetConfidence,
-            FinalCompletionUnobserved = obs.FinalCompletionUnobserved,
-            RetentionLimitReached = obs.RetentionLimitReached
+            RetentionLimitReached = obs.RetentionLimitReached,
+            StopCause = obs.StopCause
         };
     }
 
-    public static void ApplyStop(
-        Observation obs,
-        Exception ex,
-        bool disconnectRequested,
-        bool userCancellation)
+    public static void ApplyStop(Observation obs, Exception ex, StopContext context)
     {
-        var kind = ClassifyFailure(ex, disconnectRequested, userCancellation);
-        obs.Completion = kind;
+        var cause = ClassifyStop(ex, context);
+        obs.StopCause = cause;
+        obs.Completion = CompletionFor(cause);
         var rows = obs.RetainedSets.Sum(s => s.Rows.Count);
-        obs.PartialResults = rows > 0 || obs.RetentionLimitReached;
-        obs.ErrorSummary = SummarizeFailure(ex, kind, rows);
+        obs.PartialResults = rows > 0 || obs.RetentionLimitReached ||
+                             cause == StopCause.DrainDeadline;
+        obs.ErrorSummary = SummarizeStop(cause, ex, rows);
         var number = ex is SqlException s ? s.Number : ex is ProviderErrorException p ? p.Number : 0;
         obs.Messages.Add(new QueryMessage(16, number, Sanitize(ex.Message)));
     }

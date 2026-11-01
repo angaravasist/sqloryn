@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Text;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
@@ -287,7 +286,7 @@ public partial class MainWindow : Window
             if (!OwnerStillCurrent(tab, binding))
                 return;
             tab.LastResult = result;
-            tab.Status = Describe(result);
+            tab.Status = QueryOutcomeFormatter.DescribeStatus(result);
             if (ReferenceEquals(_active, tab))
             {
                 RenderResult(result);
@@ -857,33 +856,9 @@ public partial class MainWindow : Window
             MessagesBox.Text = "";
             return;
         }
-        var rendered = ResultMaterializer.RenderForDisplay(result);
-        ResultsBox.Text = rendered;
-        var msg = new StringBuilder();
-        msg.AppendLine($"Completion: {result.Completion}");
-        msg.AppendLine($"Target: {result.TargetConfidence}");
-        if (result.TransactionState is int xact)
-            msg.AppendLine($"XACT_STATE: {xact}");
-        if (!string.IsNullOrEmpty(result.ErrorSummary))
-            msg.AppendLine(result.ErrorSummary);
-        foreach (var m in result.Messages)
-            msg.AppendLine($"Msg {m.Number} (class {m.Class}): {m.Text}");
-        if (result.PartialResults)
-            msg.AppendLine("Partial or truncated output.");
-        MessagesBox.Text = msg.ToString();
+        ResultsBox.Text = QueryOutcomeFormatter.FormatResults(result);
+        MessagesBox.Text = QueryOutcomeFormatter.FormatMessages(result);
     }
-
-    static string Describe(QueryResult result) => result.Completion switch
-    {
-        QueryCompletionKind.Succeeded => "Succeeded",
-        QueryCompletionKind.Failed => "Failed",
-        QueryCompletionKind.CancellationRequested => "Cancellation requested",
-        QueryCompletionKind.CancelledClientEnded => "Cancelled (client ended)",
-        QueryCompletionKind.CancelledServerVerified => "Cancelled (server verified)",
-        QueryCompletionKind.TimedOut => "Timed out",
-        QueryCompletionKind.UnknownAfterDisconnect => "Unknown after disconnect",
-        _ => result.Completion.ToString()
-    };
 
     static string SafeUi(string message)
     {
