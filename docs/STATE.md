@@ -18,7 +18,7 @@ Branch `codex/developer-preview-0` — Developer Preview 0
 | BatchObserver: cancel / timeout(-2) / transport(-1) / limit+error | Automated Core PASS |
 | Open version race + failed read with intervening edit | Automated Core PASS |
 | Ordinary dirty Open/Quit in arm64 `.app` | Manual (distinct from Core) — recorded with tip |
-| Hosted ubuntu + macos-15 + macos-15-intel | Record CI link after push |
+| Hosted ubuntu + macos-15 + macos-15-intel | [41301640670](https://github.com/angaravasist/sqloryn/actions/runs/41301640670) |
 | Live SQL / provider SqlDataReader decimal(38) | **Unverified** — no host |
 
 ## Reviewer launch
