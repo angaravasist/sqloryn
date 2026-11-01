@@ -18,7 +18,7 @@ session ([ADR-003](decisions/003-desktop-avalonia.md),
 
 | Claim | Status |
 |---|---|
-| Prior Preview 0 CI (Mac arm64+Intel app) | [41234937796](https://github.com/angaravasist/sqloryn/actions/runs/41234937796) at `a7fdfc3` tip line |
+| Hosted checks for fidelity tip | [41300470636](https://github.com/angaravasist/sqloryn/actions/runs/41300470636) (ubuntu + macos-15 + macos-15-intel) |
 | Reviewed implementation | `de4cce0` |
 | Fidelity/lifecycle correction (this delivery) | `ac03bcc71f7c3172b970e7fb107f2562806b9b7b` (arm64 component + .app dirty walkthrough) |
 | SqlDecimal typed path (38-digit probe literal) | Component pass; **live SqlDataReader on SQL Server unverified** |
