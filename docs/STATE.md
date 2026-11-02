@@ -16,7 +16,7 @@ Branch `codex/developer-preview-0` — Developer Preview 0
 | Reviewed implementation (prior tip) | `22d3ab81cd7aff37690b544a2e73b4f4880ba16e` |
 | StopCause / unobserved / value-free drain correction | `d720b17966805fe8f3f86d8494f70d3b9bbb7f30` |
 | Timer attribution: independent watchdog vs drain evidence; late Cancel preserves timeout | `ad288f88bbc3ae0ae641249eab503b8dae4159c0` |
-| Record timer cause before signalling operation token (drain + watchdog) | *(this commit — stamped after push)* |
+| Record timer cause before signalling operation token (drain + watchdog) | `8852059bc7eaccb5fc6f4138d2259fac6220cba0` (Core component suite PASS) |
 | Cause visible inside operation cancel callback (drain + watchdog) + UI status | Automated Core PASS |
 | Watchdog during drain (deadline still pending) → `WatchdogTimeout` on UI | Automated Core PASS |
 | Provider -2 then late Cancel → stays `TimedOut (provider)` | Automated Core PASS |
