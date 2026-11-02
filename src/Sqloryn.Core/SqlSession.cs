@@ -133,6 +133,7 @@ public sealed class SqlSession : IAsyncDisposable
         SqlCommand? command = null;
         CancellationTokenSource? linked = null;
         CancellationTokenSource? watchdogCts = null;
+        CancellationTokenSource? watchdogSignal = null;
         SqlConnection? infoConnection = null;
         SqlInfoMessageEventHandler? onInfo = null;
         try
@@ -146,11 +147,14 @@ public sealed class SqlSession : IAsyncDisposable
 
             var timers = new TimerStopEvidence();
             // Soft wall-clock helper only; provider CommandTimeout / error -2 is authoritative for timeouts.
-            // Dedicated CTS so watchdog attribution is independent of user cancel and drain deadline.
-            watchdogCts = new CancellationTokenSource();
-            watchdogCts.Token.Register(timers.NoteWatchdog);
-            watchdogCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(_options!.CommandTimeoutSeconds + 5, 10)));
-            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, watchdogCts.Token);
+            // Record watchdog cause before cancelling the operation token (no CancelAfter on the
+            // reader-facing linked token — attribution must be visible before cancellation reaches it).
+            watchdogSignal = new CancellationTokenSource();
+            watchdogCts = AttributedTimer.Arm(
+                TimeSpan.FromSeconds(Math.Max(_options!.CommandTimeoutSeconds + 5, 10)),
+                timers.SignalWatchdog,
+                watchdogSignal);
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, watchdogSignal.Token);
             _activeCts = linked;
             Interlocked.Increment(ref _inFlight);
 
@@ -291,6 +295,7 @@ public sealed class SqlSession : IAsyncDisposable
             if (ReferenceEquals(_activeCts, linked))
                 _activeCts = null;
             linked?.Dispose();
+            watchdogSignal?.Dispose();
             watchdogCts?.Dispose();
             Interlocked.Decrement(ref _inFlight);
             _gate.Release();

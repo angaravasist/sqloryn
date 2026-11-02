@@ -315,15 +315,15 @@ Pass("observe-drain-deadline-unobserved");
 // Watchdog fires during drain while drain deadline is still pending → WatchdogTimeout (not DrainDeadline).
 {
     var timers = new TimerStopEvidence();
-    using var watchdogCts = new CancellationTokenSource();
-    watchdogCts.Token.Register(timers.NoteWatchdog);
+    using var watchdogSignal = new CancellationTokenSource();
+    using var watchdogTimer = AttributedTimer.Arm(
+        TimeSpan.FromMilliseconds(40), timers.SignalWatchdog, watchdogSignal);
     using var hangReader = new HangAfterFirstRowReader(["n"], ["kept"]);
     var budget = new ResultBudget();
     budget.TryReserve(QueryLimits.MaxRetainedOutputChars - 4);
     // Long drain deadline; short watchdog — linked drain cancel must not be mis-attributed.
-    watchdogCts.CancelAfter(TimeSpan.FromMilliseconds(40));
     var obs = await BatchObserver.ObserveOpenedReaderAsync(
-        hangReader, budget, watchdogCts.Token, TimeSpan.FromSeconds(60),
+        hangReader, budget, watchdogSignal.Token, TimeSpan.FromSeconds(60),
         () => new StopContext(
             DisconnectRequested: false,
             UserCancelRequested: false,
@@ -339,6 +339,59 @@ Pass("observe-drain-deadline-unobserved");
     AssertUiSurfaces(result, "Timed out", "watchdog-during-drain");
 }
 Pass("observe-watchdog-during-drain");
+
+// Cause is recorded before the operation token's cancellation callbacks run (no sleep race).
+{
+    void AssertRecordedBeforeOperationCallbacks(
+        Action<TimerStopEvidence, CancellationTokenSource> armImmediate,
+        StopCause expectedCause,
+        string expectedStatus,
+        string name)
+    {
+        var timers = new TimerStopEvidence();
+        using var operation = new CancellationTokenSource();
+        StopCause? seenInsideCallback = null;
+        var callbackRan = false;
+        using var reg = operation.Token.Register(() =>
+        {
+            // Must observe attribution before this callback returns — not after all timers settle.
+            seenInsideCallback = timers.CapturedTimerCause;
+            callbackRan = true;
+            Check(seenInsideCallback == expectedCause, name + "-cause-visible-in-operation-callback");
+        });
+        armImmediate(timers, operation);
+        Check(callbackRan, name + "-operation-callback-ran");
+        Check(seenInsideCallback == expectedCause, name + "-cause-after-signal");
+
+        var obs = new BatchObserver.Observation();
+        BatchObserver.ApplyStop(
+            obs,
+            new OperationCanceledException(name),
+            new StopContext(false, false, false, false, timers));
+        Check(obs.StopCause == expectedCause, name + "-classified");
+        var result = BatchObserver.BuildResult("SELECT n", "s", "d", obs);
+        AssertUiSurfaces(result, expectedStatus, name);
+    }
+
+    AssertRecordedBeforeOperationCallbacks(
+        (timers, operation) =>
+        {
+            using var timer = AttributedTimer.Arm(TimeSpan.Zero, timers.SignalDrainDeadline, operation);
+        },
+        StopCause.DrainDeadline,
+        "Final completion unobserved",
+        "attrib-drain");
+
+    AssertRecordedBeforeOperationCallbacks(
+        (timers, operation) =>
+        {
+            using var timer = AttributedTimer.Arm(TimeSpan.Zero, timers.SignalWatchdog, operation);
+        },
+        StopCause.WatchdogTimeout,
+        "Timed out",
+        "attrib-watchdog");
+}
+Pass("timer-cause-visible-before-operation-cancel-callback");
 
 // Provider -2 recorded, then user cancel before verification → TimedOut preserved.
 {

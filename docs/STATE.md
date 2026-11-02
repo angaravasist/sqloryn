@@ -15,7 +15,9 @@ Branch `codex/developer-preview-0` — Developer Preview 0
 |---|---|
 | Reviewed implementation (prior tip) | `22d3ab81cd7aff37690b544a2e73b4f4880ba16e` |
 | StopCause / unobserved / value-free drain correction | `d720b17966805fe8f3f86d8494f70d3b9bbb7f30` |
-| Timer attribution: independent watchdog vs drain evidence; late Cancel preserves timeout | `ad288f88bbc3ae0ae641249eab503b8dae4159c0` (Core component suite PASS) |
+| Timer attribution: independent watchdog vs drain evidence; late Cancel preserves timeout | `ad288f88bbc3ae0ae641249eab503b8dae4159c0` |
+| Record timer cause before signalling operation token (drain + watchdog) | *(this commit — stamped after push)* |
+| Cause visible inside operation cancel callback (drain + watchdog) + UI status | Automated Core PASS |
 | Watchdog during drain (deadline still pending) → `WatchdogTimeout` on UI | Automated Core PASS |
 | Provider -2 then late Cancel → stays `TimedOut (provider)` | Automated Core PASS |
 | Distinct `FinalCompletionUnobserved`; shared `QueryOutcomeFormatter` | Automated Core PASS |
@@ -23,7 +25,7 @@ Branch `codex/developer-preview-0` — Developer Preview 0
 | Target verification never upgrades SQL Completion/StopCause | Automated Core PASS |
 | Open version race + failed read with intervening edit | Automated Core PASS |
 | Ordinary dirty Open/Quit in arm64 `.app` | Manual (prior tip) — not re-run this correction |
-| Hosted ubuntu + macos-15 + macos-15-intel | [41305335602](https://github.com/angaravasist/sqloryn/actions/runs/41305335602) |
+| Hosted ubuntu + macos-15 + macos-15-intel | *(pending this push)* |
 | Live SQL / provider SqlDataReader decimal(38) | **Unverified** — no host |
 
 ## Reviewer launch

@@ -25,6 +25,8 @@ messages:
   verification must not upgrade Completion/StopCause
 - watchdog expiry during drain while drain deadline still pending →
   `WatchdogTimeout` (linked cancel is not drain attribution)
+- timer cause recorded before operation-token cancel callbacks (drain and
+  watchdog exercised separately; no post-callback sleep race)
 - provider -2 then late Cancel before verification → remains TimedOut (provider)
 - deferred Open/Quit with intervening edits; SqlDecimal typed formatting
 

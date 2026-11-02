@@ -13,8 +13,8 @@ public sealed class ProviderErrorException(int number, string message) : Excepti
 
 /// <summary>
 /// Independent evidence of which soft timer expired. A linked token's cancelled state alone
-/// cannot attribute Watchdog vs DrainDeadline — callbacks record the cause when the timer fires.
-/// First timer wins.
+/// cannot attribute Watchdog vs DrainDeadline — the cause is recorded before the operation
+/// token is signalled. First timer wins.
 /// </summary>
 public sealed class TimerStopEvidence
 {
@@ -34,6 +34,56 @@ public sealed class TimerStopEvidence
         2 => StopCause.DrainDeadline,
         _ => null
     };
+
+    /// <summary>Record watchdog expiry, then cancel the operation token.</summary>
+    public void SignalWatchdog(CancellationTokenSource operation)
+    {
+        NoteWatchdog();
+        CancelQuietly(operation);
+    }
+
+    /// <summary>Record drain-deadline expiry, then cancel the operation token.</summary>
+    public void SignalDrainDeadline(CancellationTokenSource operation)
+    {
+        NoteDrainDeadline();
+        CancelQuietly(operation);
+    }
+
+    static void CancelQuietly(CancellationTokenSource operation)
+    {
+        try
+        {
+            operation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Operation already torn down; evidence remains.
+        }
+    }
+}
+
+/// <summary>
+/// Arms a soft timer that records attribution before signalling the operation CTS.
+/// </summary>
+public static class AttributedTimer
+{
+    /// <summary>
+    /// When the timer fires, invokes <paramref name="recordThenSignal"/> (must record cause, then
+    /// cancel <paramref name="operation"/>). Returns the timer CTS for disposal.
+    /// </summary>
+    public static CancellationTokenSource Arm(
+        TimeSpan delay,
+        Action<CancellationTokenSource> recordThenSignal,
+        CancellationTokenSource operation)
+    {
+        var timer = new CancellationTokenSource();
+        timer.Token.Register(() => recordThenSignal(operation));
+        if (delay <= TimeSpan.Zero)
+            timer.Cancel();
+        else
+            timer.CancelAfter(delay);
+        return timer;
+    }
 }
 
 /// <summary>Signals available when an OperationCanceledException is observed.</summary>
@@ -253,24 +303,28 @@ public static class BatchObserver
     static DrainSession BeginDrainDeadline(
         CancellationToken retainToken,
         TimeSpan drainDeadline,
-        TimerStopEvidence? timers)
+        TimerStopEvidence timers)
     {
-        var drainOnly = new CancellationTokenSource();
-        // Record drain-timer expiry independently of retain/watchdog cancellation.
-        drainOnly.Token.Register(timers!.NoteDrainDeadline);
-        drainOnly.CancelAfter(drainDeadline);
-        var linked = CancellationTokenSource.CreateLinkedTokenSource(retainToken, drainOnly.Token);
-        return new DrainSession(drainOnly, linked);
+        // Operation signal is cancelled only after NoteDrainDeadline — never CancelAfter on the
+        // reader-facing token directly (that could race attribution past the reader).
+        var operation = new CancellationTokenSource();
+        var timer = AttributedTimer.Arm(drainDeadline, timers.SignalDrainDeadline, operation);
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(retainToken, operation.Token);
+        return new DrainSession(timer, operation, linked);
     }
 
-    sealed class DrainSession(CancellationTokenSource drainOnly, CancellationTokenSource linked) : IDisposable
+    sealed class DrainSession(
+        CancellationTokenSource timer,
+        CancellationTokenSource operation,
+        CancellationTokenSource linked) : IDisposable
     {
         public CancellationToken Token => linked.Token;
 
         public void Dispose()
         {
             linked.Dispose();
-            drainOnly.Dispose();
+            operation.Dispose();
+            timer.Dispose();
         }
     }
 
