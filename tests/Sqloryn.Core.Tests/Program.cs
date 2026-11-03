@@ -1462,6 +1462,48 @@ Pass("explorer-ownership");
     var commitFailResult = await EditRowsBatch.ApplyAsync(commitFail, cmds);
     Check(commitFailResult.Outcome == EditBatchOutcome.OutcomeUnknown && commitFailResult.RequiresReload && !commitFailResult.Committed, "batch-commit-failure-unknown");
 
+    // Verifier D4: a throwing DisposeAsync must never replace or lose the computed result.
+    var disposeBoom = () => new InvalidOperationException("dispose exploded");
+    var rbFailDisposeFail = new FakeEditTransactionFactory(1, 0)
+    {
+        RollbackFails = new InvalidOperationException("connection broken"),
+        DisposeFails = disposeBoom()
+    };
+    var rbFailDisposeFailResult = await EditRowsBatch.ApplyAsync(rbFailDisposeFail, cmds);
+    Check(rbFailDisposeFailResult.Outcome == EditBatchOutcome.OutcomeUnknown && rbFailDisposeFailResult.RequiresReload
+        && rbFailDisposeFailResult.FailedIndex == 1 && rbFailDisposeFailResult.WritesValidated == 1
+        && rbFailDisposeFailResult.Message.Contains("Rollback could not be confirmed")
+        && rbFailDisposeFailResult.Message.Contains("dispose exploded"), "batch-dispose-throw-keeps-outcome-unknown");
+
+    var commitFailDisposeFail = new FakeEditTransactionFactory(1, 1)
+    {
+        CommitFails = new InvalidOperationException("connection lost"),
+        DisposeFails = disposeBoom()
+    };
+    var commitFailDisposeFailResult = await EditRowsBatch.ApplyAsync(commitFailDisposeFail, cmds);
+    Check(commitFailDisposeFailResult.Outcome == EditBatchOutcome.OutcomeUnknown && commitFailDisposeFailResult.RequiresReload
+        && commitFailDisposeFailResult.Message.Contains("Commit could not be confirmed")
+        && commitFailDisposeFailResult.Message.Contains("dispose exploded"), "batch-dispose-throw-after-commit-failure");
+
+    var conflictDisposeFail = new FakeEditTransactionFactory(1, 0) { DisposeFails = disposeBoom() };
+    var conflictDisposeFailResult = await EditRowsBatch.ApplyAsync(conflictDisposeFail, cmds);
+    Check(conflictDisposeFailResult.Outcome == EditBatchOutcome.RolledBackConflict && conflictDisposeFailResult.FailedIndex == 1
+        && conflictDisposeFailResult.WritesValidated == 1 && !conflictDisposeFailResult.Committed
+        && conflictDisposeFailResult.Message.Contains("conflicted") && conflictDisposeFailResult.Message.Contains("dispose exploded"),
+        "batch-dispose-throw-preserves-conflict");
+
+    var errorDisposeFail = new FakeEditTransactionFactory(1, new InvalidOperationException("synthetic provider failure")) { DisposeFails = disposeBoom() };
+    var errorDisposeFailResult = await EditRowsBatch.ApplyAsync(errorDisposeFail, cmds);
+    Check(errorDisposeFailResult.Outcome == EditBatchOutcome.RolledBackError && errorDisposeFailResult.Message.Contains("dispose exploded"),
+        "batch-dispose-throw-preserves-rolled-back-error");
+
+    // Committed + dispose throws: the connection state is no longer trustworthy, so escalate.
+    var commitDisposeFail = new FakeEditTransactionFactory(1, 1) { DisposeFails = disposeBoom() };
+    var commitDisposeFailResult = await EditRowsBatch.ApplyAsync(commitDisposeFail, cmds);
+    Check(commitDisposeFailResult.Outcome == EditBatchOutcome.OutcomeUnknown && commitDisposeFailResult.RequiresReload
+        && !commitDisposeFailResult.Committed && commitDisposeFailResult.WritesValidated == 2
+        && commitDisposeFailResult.Message.Contains("dispose exploded"), "batch-dispose-throw-after-commit-escalates");
+
     // Begin failure: nothing was written.
     var beginFail = new FakeEditTransactionFactory() { BeginFails = new InvalidOperationException("not connected") };
     var beginFailResult = await EditRowsBatch.ApplyAsync(beginFail, cmds);
