@@ -2,6 +2,10 @@
 
 macOS Database Studio preview. Owner: SQLoryn maintainer. Reviewed: 2026-11-03.
 
+## Feature-by-feature TDD and parity evidence
+
+Use the [parallel TDD contract](ssms/PARALLEL-TDD.md) for every parity claim. Record the reference action and configuration, the red/green assertion, the integrated SQLoryn path, negative cases, platform and cleanup. Keep docs-only, Windows-observed, component and native live results distinct.
+
 ## Component checks
 
 ```sh

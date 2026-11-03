@@ -8,7 +8,9 @@ source of truth. Update relevant documents in the same PR as behaviour.
 
 | Question | Authoritative document |
 |---|---|
+| How do I run the full implementation in Cursor? | [Cursor setup and paste-ready assignment](ssms/CURSOR.md) |
 | Product, users, boundaries | [Product](PRODUCT.md), [candidate catalogue](FEATURE_CATALOG.csv) |
+| What does the Windows comparator expose, and how is the work distributed? | [Versioned SSMS inventory](ssms/README.md), [parallel feature TDD](ssms/PARALLEL-TDD.md) |
 | What actually works? | [Feature matrix](FEATURE_MATRIX.md), [evidence/current state](STATE.md) |
 | Code map, data flow | [Architecture](ARCHITECTURE.md) |
 | Why these choices? | [ADR-001](decisions/001-sqlclient-probe.md), [ADR-002](decisions/002-macos-ssh-sql-probe.md), [ADR-003](decisions/003-desktop-avalonia.md), [ADR-004](decisions/004-macos-database-studio.md) |

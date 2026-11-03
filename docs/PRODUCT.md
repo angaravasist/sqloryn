@@ -9,6 +9,10 @@ schema development, diagnostics and administration where the target supports it.
 Functional fidelity, data safety and accessible Mac interactions take priority
 over visual imitation. There is no supported app or installer yet.
 
+## Compatibility scope
+
+Use the [versioned SSMS comparison contract](ssms/README.md) for the broad product ambition. Preserve optional workloads, service-specific administration, companion applications, historical behaviours and unsupported cases as distinct records. Deliver Mac-native equivalents where feasible. Evaluate independent behaviours concurrently under [feature-owned TDD](ssms/PARALLEL-TDD.md). Existing approvals and the deferred AI decision still apply.
+
 ## Users and core jobs
 
 - Developers: connect, understand objects, execute intended SQL, inspect accurate

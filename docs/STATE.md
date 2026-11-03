@@ -20,7 +20,11 @@ Builds on merged Developer Preview 0 (PR #6 / `f561597`).
 | Live SQL: connect / OE expand / GO / export / design / edit-rows | **Unverified on this branch** (no disposable lab in this session; Windows SSH product path not recreated) |
 | Prior DP0 arm64 connect + `SELECT 1` via disposable lab | Historical on PR #6; lab torn down; do not treat as current tip evidence |
 | Intel Mac desktop SQL | **Unverified** |
-| Hosted CI on this branch | Pending after draft PR push |
+| Hosted CI on this branch | Component CI passed on macOS arm64, macOS Intel and Ubuntu. Repository safeguards and CodeQL passed. SQL integration was skipped. [CI](https://github.com/angaravasist/sqloryn/actions/runs/41718868380) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41718863474) |
+
+## Comparator research
+
+The [SSMS 22.11.3 inventory](ssms/README.md) adds reference-side research and concurrent feature ownership. The Windows binary and optional service combinations have not been independently swept. This documentation update ran no new SQL qualification and changes no supported-platform claim.
 
 ## Reviewer launch
 

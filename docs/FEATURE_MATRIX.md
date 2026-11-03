@@ -17,6 +17,10 @@ This is an **initial outline, not a complete SSMS feature inventory**. Every men
 | Advanced administration | Availability groups, replication, maintenance | Not implemented |
 | BI tooling | SSIS, SSAS and SSRS integration | Not implemented |
 
+## Reference coverage
+
+Use the [pinned SSMS comparison](ssms/README.md) for the reference-side inventory, [actions](ssms/actions.csv) for individual candidate behaviours and [crosswalk](ssms/cap-crosswalk.csv) for all 192 CAP IDs. The categories above describe SQLoryn progress. A documented SSMS command is not evidence that SQLoryn implements it.
+
 ## Evidence rule
 
 Mark a feature as working only after a reproducible test is performed on the relevant macOS architecture and SQL Server version. Track version-specific limitations and platform restrictions. See [STATE.md](STATE.md).

@@ -30,4 +30,8 @@ tab id. Passwords are session-only unless the user opts into Remember (macOS
 Keychain); encryption is mandatory; optional lab pin is explicit and mutually
 exclusive with TrustServerCertificate. `GO` batch separators are split by
 `GoBatchSplitter`. The App uses Avalonia.Controls.DataGrid 12.1.2 (12.1.4 is not
-published on nuget.org). Offline-built only; no live SQL Server evidence.
+published on nuget.org). See [current and historical test evidence](STATE.md) for the distinction between the previously exercised arm64 desktop connection and the unverified live workflows on this branch.
+
+## Parallel development boundaries
+
+[The feature ownership contract](ssms/PARALLEL-TDD.md) assigns changes to the existing application and service boundaries. Workstream names are ownership labels, not a decision to introduce new processes, libraries or framework layers. Each service-specific protocol and redistribution choice needs its own evidence.

@@ -25,6 +25,8 @@ Requires .NET SDK 10.0.403 (see `global.json`). Walkthrough: [docs/WALKTHROUGH.m
 Start with the [context map](docs/README.md), [STATE.md](docs/STATE.md),
 [TESTING.md](docs/TESTING.md) and [FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md).
 
+The [SSMS 22.11.3 comparison inventory](docs/ssms/README.md) lists reference behaviours and gaps. It is separate from verified SQLoryn functionality.
+
 ## Licence
 
 Original SQLoryn code is MIT ([LICENSE](LICENSE)). Third-party packages must be evaluated individually; Avalonia and SqlClient terms are summarised in [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
