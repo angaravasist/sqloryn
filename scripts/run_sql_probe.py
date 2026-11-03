@@ -92,12 +92,24 @@ def parse_ssh_destination(value):
     return user, host
 
 
-def ssh_isolation_options(known_hosts):
+def resolve_ssh_identity_file(identity_file):
+    """Optional dedicated identity; omitted keeps OpenSSH default identity search under isolation."""
+    if identity_file is None:
+        return None
+    if not isinstance(identity_file, str) or not identity_file.strip():
+        raise ProbeError("SSH identity file path must be non-empty when provided.")
+    path = Path(identity_file)
+    if not path.is_file():
+        raise ProbeError("SSH identity file is required and must already exist.")
+    return str(path.resolve())
+
+
+def ssh_isolation_options(known_hosts, identity_file=None):
     path = Path(known_hosts)
     if not path.is_file():
         raise ProbeError("SSH known-hosts file is required and must already exist.")
     # Isolate from user/global ssh_config: no proxy, multiplex, agent or extra trust stores.
-    return [
+    options = [
         "-F", "/dev/null",
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=yes",
@@ -124,33 +136,38 @@ def ssh_isolation_options(known_hosts):
         "-o", "ServerAliveCountMax=3",
         "-o", "ConnectionAttempts=1",
     ]
+    resolved = resolve_ssh_identity_file(identity_file)
+    if resolved is not None:
+        # Explicit -i + IdentityFile so IdentitiesOnly can use this key (and an unlocked agent copy).
+        options.extend(["-i", resolved, "-o", f"IdentityFile={resolved}"])
+    return options
 
 
-def ssh_command_options(known_hosts):
+def ssh_command_options(known_hosts, identity_file=None):
     # ClearAllForwardings must stay on command/scp sessions only. On tunnel sessions it
     # also clears explicit -L forwards (verified via ssh -G).
-    return [*ssh_isolation_options(known_hosts), "-o", "ClearAllForwardings=yes"]
+    return [*ssh_isolation_options(known_hosts, identity_file), "-o", "ClearAllForwardings=yes"]
 
 
-def ssh_tunnel_options(known_hosts):
-    return ssh_isolation_options(known_hosts)
+def ssh_tunnel_options(known_hosts, identity_file=None):
+    return ssh_isolation_options(known_hosts, identity_file)
 
 
-def ssh_common_options(known_hosts):
+def ssh_common_options(known_hosts, identity_file=None):
     """Backward-compatible alias for non-tunnel sessions."""
-    return ssh_command_options(known_hosts)
+    return ssh_command_options(known_hosts, identity_file)
 
 
 def ssh_target(user, host):
     return f"{user}@{host}" if user else host
 
 
-def tunnel_ssh_command(user, host, known_hosts, local_port, remote_port):
+def tunnel_ssh_command(user, host, known_hosts, local_port, remote_port, identity_file=None):
     if not 1024 <= local_port <= 65535 or not 1024 <= remote_port <= 65535:
         raise ProbeError("Invalid tunnel port.")
     forward = f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}"
     return [
-        "ssh", *ssh_tunnel_options(known_hosts),
+        "ssh", *ssh_tunnel_options(known_hosts, identity_file),
         "-N", "-L", forward,
         "--", ssh_target(user, host),
     ]
@@ -183,13 +200,13 @@ def effective_ssh_config(argv):
     return parsed
 
 
-def ssh_run(user, host, known_hosts, remote_argv, *, timeout=60, input_text=None):
+def ssh_run(user, host, known_hosts, remote_argv, *, timeout=60, input_text=None, identity_file=None):
     """Run a fixed remote argv list. Joined for sshd's remote shell; tokens must be safe."""
     for part in remote_argv:
         if not isinstance(part, str) or not part or re.search(r"[\s\"'\\;$`|&<>]", part):
             raise ProbeError("Refusing unsafe remote command token.")
     command = [
-        "ssh", *ssh_command_options(known_hosts),
+        "ssh", *ssh_command_options(known_hosts, identity_file),
         "--", ssh_target(user, host),
         *remote_argv,
     ]
@@ -209,10 +226,10 @@ def validate_remote_helper_path(remote_path):
         raise ProbeError("Refusing unexpected remote upload path.")
 
 
-def scp_upload(user, host, known_hosts, local_path, remote_path):
+def scp_upload(user, host, known_hosts, local_path, remote_path, identity_file=None):
     validate_remote_helper_path(remote_path)
     command = [
-        "scp", *ssh_command_options(known_hosts),
+        "scp", *ssh_command_options(known_hosts, identity_file),
         "--", str(local_path), f"{ssh_target(user, host)}:{remote_path}",
     ]
     try:
@@ -258,9 +275,9 @@ def assert_local_port_free(port):
             raise ProbeError("Refusing to reuse an occupied local loopback port.") from error
 
 
-def start_owned_tunnel(user, host, known_hosts, local_port, remote_port):
+def start_owned_tunnel(user, host, known_hosts, local_port, remote_port, identity_file=None):
     assert_local_port_free(local_port)
-    command = tunnel_ssh_command(user, host, known_hosts, local_port, remote_port)
+    command = tunnel_ssh_command(user, host, known_hosts, local_port, remote_port, identity_file)
     process = None
     try:
         process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -379,7 +396,7 @@ def recovery_message(name, failures):
     )
 
 
-def remote_cleanup(user, host, known_hosts, name, tunnel):
+def remote_cleanup(user, host, known_hosts, name, tunnel, identity_file=None):
     if not NAME_RE.fullmatch(name):
         raise ProbeError("Invalid disposable resource name.")
     failures = []
@@ -392,7 +409,8 @@ def remote_cleanup(user, host, known_hosts, name, tunnel):
         parse_helper_json(ssh_run(
             user, host, known_hosts,
             ["/usr/bin/python3", f"/tmp/{name}/helper.py", "cleanup", name],
-            timeout=90))
+            timeout=90,
+            identity_file=identity_file))
     except ProbeError:
         # No upload/overwrite recovery: ownership must already be established.
         failures.append("remote")
@@ -400,29 +418,43 @@ def remote_cleanup(user, host, known_hosts, name, tunnel):
         raise ProbeError(recovery_message(name, failures))
 
 
-def execute_ssh(destination, known_hosts):
+def require_remote_helper_present(user, host, known_hosts, name, identity_file=None):
+    """Confirm the uploaded helper path exists as a regular file before executing it."""
+    ssh_run(user, host, known_hosts,
+            ["/usr/bin/test", "-f", f"/tmp/{name}/helper.py"], timeout=30,
+            identity_file=identity_file)
+
+
+def execute_ssh(destination, known_hosts, identity_file=None):
     if not PROBE.is_file():
         raise ProbeError("Build the Release configuration first; see docs/TESTING.md.")
     if not REMOTE_HELPER.is_file():
         raise ProbeError("Missing remote helper script.")
     user, host = parse_ssh_destination(destination)
     known_hosts_path = str(Path(known_hosts).resolve())
+    # Validate optional identity early so a missing file fails before mkdir/upload.
+    identity_path = resolve_ssh_identity_file(identity_file)
     name = "sqloryn-probe-" + secrets.token_hex(8)
     password = "Aa1!" + secrets.token_hex(24)
     tunnel = None
-    prepared = False
+    helper_ready = False
     print(f"PROBE-11 run-id={name}; preparing disposable remote instance over isolated SSH.", flush=True)
     try:
         ssh_run(user, host, known_hosts_path,
-                ["/bin/mkdir", "-m", "700", "--", f"/tmp/{name}"], timeout=30)
-        scp_upload(user, host, known_hosts_path, REMOTE_HELPER, f"/tmp/{name}/helper.py")
+                ["/bin/mkdir", "-m", "700", "--", f"/tmp/{name}"], timeout=30,
+                identity_file=identity_path)
+        scp_upload(user, host, known_hosts_path, REMOTE_HELPER, f"/tmp/{name}/helper.py",
+                   identity_file=identity_path)
+        require_remote_helper_present(user, host, known_hosts_path, name, identity_file=identity_path)
+        helper_ready = True
         parse_helper_json(ssh_run(
             user, host, known_hosts_path,
-            ["/usr/bin/python3", f"/tmp/{name}/helper.py", "prepare", name], timeout=30))
-        prepared = True
+            ["/usr/bin/python3", f"/tmp/{name}/helper.py", "prepare", name], timeout=30,
+            identity_file=identity_path))
         engine = parse_helper_json(ssh_run(
             user, host, known_hosts_path,
-            ["/usr/bin/python3", f"/tmp/{name}/helper.py", "engine-check"], timeout=60))
+            ["/usr/bin/python3", f"/tmp/{name}/helper.py", "engine-check"], timeout=60,
+            identity_file=identity_path))
         print(
             f"PROBE-11 remote engine ostype={engine.get('ostype')} arch={engine.get('architecture')} "
             f"docker_host={engine.get('docker_host')} "
@@ -432,7 +464,8 @@ def execute_ssh(destination, known_hosts):
             user, host, known_hosts_path,
             ["/usr/bin/python3", f"/tmp/{name}/helper.py", "provision", name],
             timeout=420,
-            input_text=json.dumps({"password": password, "image": IMAGE})))
+            input_text=json.dumps({"password": password, "image": IMAGE}),
+            identity_file=identity_path))
         remote_port = provision.get("port")
         certificate_pem = provision.get("certificate_pem")
         if provision.get("name") != name or not isinstance(remote_port, int) or not isinstance(certificate_pem, str):
@@ -450,22 +483,26 @@ def execute_ssh(destination, known_hosts):
                  "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
                  "-keyout", str(wrong_key), "-out", str(wrong_cert)])
             local_port = allocate_loopback_port()
-            tunnel = start_owned_tunnel(user, host, known_hosts_path, local_port, remote_port)
+            tunnel = start_owned_tunnel(
+                user, host, known_hosts_path, local_port, remote_port, identity_file=identity_path)
             print(f"Image: {IMAGE}", flush=True)
             print(f"Transport: ssh-loopback local={local_port} remote={remote_port}", flush=True)
             invoke_probe(local_port, name, server_cert, wrong_cert, password)
     finally:
-        if prepared or tunnel is not None:
-            remote_cleanup(user, host, known_hosts_path, name, tunnel)
-        else:
-            try:
-                parse_helper_json(ssh_run(
-                    user, host, known_hosts_path,
-                    ["/usr/bin/python3", f"/tmp/{name}/helper.py", "cleanup", name], timeout=60))
-            except ProbeError:
-                raise ProbeError(recovery_message(name, ["remote"]))
+        if helper_ready or tunnel is not None:
+            remote_cleanup(user, host, known_hosts_path, name, tunnel, identity_file=identity_path)
+        # else: mkdir/upload incomplete — never execute helper.py; preserve the original failure.
     print(f"PASS PROBE-11 disposable remote resources and owned tunnel removed for run-id {name}.")
 
+
+def require_nonempty_remote_args(ssh_host, ssh_known_hosts):
+    if ssh_host is None and ssh_known_hosts is None:
+        return False
+    if ssh_host is None or ssh_known_hosts is None:
+        raise ProbeError("Remote mode requires both --ssh-host and --ssh-known-hosts.")
+    if not str(ssh_host).strip() or not str(ssh_known_hosts).strip():
+        raise ProbeError("Remote mode rejects empty --ssh-host or --ssh-known-hosts.")
+    return True
 
 
 def main(argv=None):
@@ -476,14 +513,21 @@ def main(argv=None):
                         help="Optional approved SSH destination (host or user@host) for Mac-to-Linux qualification.")
     parser.add_argument("--ssh-known-hosts",
                         help="Existing known_hosts file used exclusively for host-key verification.")
+    parser.add_argument("--ssh-identity-file",
+                        help="Optional private key path for remote mode (IdentitiesOnly; omitted keeps default identities).")
     args = parser.parse_args(argv)
     if not args.accept_sql_server_license:
         parser.error("Explicit --accept-sql-server-license is required; no Docker resources were created.")
-    if (args.ssh_host is None) ^ (args.ssh_known_hosts is None):
-        parser.error("Remote mode requires both --ssh-host and --ssh-known-hosts.")
     try:
-        if args.ssh_host:
-            execute_ssh(args.ssh_host, args.ssh_known_hosts)
+        remote = require_nonempty_remote_args(args.ssh_host, args.ssh_known_hosts)
+    except ProbeError as error:
+        print(f"FAIL {error}", file=sys.stderr)
+        return 1
+    if args.ssh_identity_file is not None and not remote:
+        parser.error("--ssh-identity-file requires --ssh-host and --ssh-known-hosts.")
+    try:
+        if remote:
+            execute_ssh(args.ssh_host, args.ssh_known_hosts, args.ssh_identity_file)
         else:
             execute_local()
     except KeyboardInterrupt:

@@ -1,113 +1,46 @@
 # Current engineering state
 
-Owner: SQLoryn maintainer. Reviewed: 2026-10-31. Experimental; no release support.
+Owner: SQLoryn maintainer. Reviewed: 2026-11-03. Experimental; no release support.
 
 ## Work under review
 
-Branch `codex/macos-sqlclient-qualification`, based on `d2eebbc`.
-Draft [PR #5](https://github.com/angaravasist/sqloryn/pull/5) for Mac SSH/loopback
-orchestration ([ADR-002](decisions/002-macos-ssh-sql-probe.md),
-[SPEC-001](specs/001-sqlclient-probe.md) PROBE-11). Review corrections address
-prepare→provision lifecycle, effective SSH `-L` forwarding, local-only Docker
-binding, exception-safe tunnel/cleanup ownership and safe recovery without
-helper overwrite. The SSH/loopback orchestration is implemented and the fresh
-Linux SQL regression has passed; the real Mac-to-server execution has not.
-A candidate Linux x64 host is being prepared separately, but its Mac SSH access,
-trusted host-key handoff and explicit test approval are pending. **Native Mac
-arm64 and Mac x64 SQL integration remain unverified.** Do not mark PROBE-11
-interoperability validated without actual native Mac runs.
+Branch `codex/developer-preview-0` — Developer Preview 0
+([ADR-003](decisions/003-desktop-avalonia.md),
+[SPEC-002](specs/002-developer-preview-0.md)). Draft
+[PR #6](https://github.com/angaravasist/sqloryn/pull/6).
 
-## Merged baseline (main)
+## Evidence
 
-- [PR #3](https://github.com/angaravasist/sqloryn/pull/3) established the
-  SqlClient experiment ([ADR-001](decisions/001-sqlclient-probe.md)).
-- [PR #2](https://github.com/angaravasist/sqloryn/pull/2) installed
-  `actions/checkout` v7.0.1; [PR #4](https://github.com/angaravasist/sqloryn/pull/4)
-  installed `actions/setup-dotnet` v6.0.0. Older workflow runs may still show
-  prior pins; current workflow source is authoritative. The checkout Node 20
-  maintenance item from the probe PR is **resolved** in source.
-- `origin/main` at technical assessment start for this branch: `d2eebbc`.
+| Claim | Status |
+|---|---|
+| Reviewed implementation (prior tip) | `22d3ab81cd7aff37690b544a2e73b4f4880ba16e` |
+| StopCause / unobserved / value-free drain correction | `d720b17966805fe8f3f86d8494f70d3b9bbb7f30` |
+| Timer attribution: independent watchdog vs drain evidence; late Cancel preserves timeout | `ad288f88bbc3ae0ae641249eab503b8dae4159c0` |
+| Record timer cause before signalling operation token (drain + watchdog) | `8852059bc7eaccb5fc6f4138d2259fac6220cba0` (Core component suite PASS) |
+| Cause visible inside operation cancel callback (drain + watchdog) + UI status | Automated Core PASS |
+| Watchdog during drain (deadline still pending) → `WatchdogTimeout` on UI | Automated Core PASS |
+| Provider -2 then late Cancel → stays `TimedOut (provider)` | Automated Core PASS |
+| Distinct `FinalCompletionUnobserved`; shared `QueryOutcomeFormatter` | Automated Core PASS |
+| Drain without discarded GetValue; later SQL error under drain deadline | Automated Core PASS |
+| Target verification never upgrades SQL Completion/StopCause | Automated Core PASS |
+| Open version race + failed read with intervening edit | Automated Core PASS |
+| Ordinary dirty Open/Quit / remaining host-independent walkthrough steps | **Unverified** on this tip (prior dirty Open/Quit only) |
+| Hosted ubuntu + macos-15 + macos-15-intel | [41416613488](https://github.com/angaravasist/sqloryn/actions/runs/41416613488) |
+| Optional `--ssh-identity-file` for PROBE-11 (command/SCP/tunnel/cleanup) | `695061aa8eca91ce9e99eb69d990c2b03af92eb8` (runner unit tests PASS) |
+| Mac **arm64** desktop: connect (SQL auth + pinned cert) → OE system DBs → `SELECT 1 AS test_result` → `1` | **Observed** (Apple Silicon `.app`, disposable loopback tunnel to approved host) |
+| Lab cleanup for that desktop run (owned tunnel stop; remote workdir gone; Docker label absent; local secrets wiped; run-id preserved) | **Verified** (`cleanup_lab.sh` PASS; run-id `sqloryn-probe-9ccabb4ecf0a23ab`) |
+| Full PROBE-11 automated suite / SqlDataReader decimal(38) / cancel-disconnect live matrix | **Unverified** |
+| Intel Mac desktop SQL / Intel walkthrough | **Unverified** |
 
-## Evidence actually obtained
+## Reviewer launch
 
-- All 32 reference-pack entries read; all manifest hashes verified.
-- Python safety tests and C# component assertions pass on Mac component CI and
-  local development hosts for the probe baseline.
-- [Hosted run 41192800910](https://github.com/angaravasist/sqloryn/actions/runs/41192800910)
-  at original PR #5 head `964427a`: 35 C# assertions and 24 Python tests on Linux
-  and both Mac architectures (pre-correction; retained for history).
-- [Hosted run 41193677357](https://github.com/angaravasist/sqloryn/actions/runs/41193677357)
-  at correction head `e11242a`: 35 C# assertions and 37 Python tests on Ubuntu
-  24.04, macos-15 and macos-15-intel; `repo-safeguards` passed; SQL integration
-  skipped (not requested). [CodeQL run 41193673892](https://github.com/angaravasist/sqloryn/actions/runs/41193673892)
-  succeeded for C#, Python and Actions on the same head.
-- [Hosted run 41194422292](https://github.com/angaravasist/sqloryn/actions/runs/41194422292)
-  workflow_dispatch SQL integration **passed** at PR #5 head `8285892` (Linux
-  local-runner regression of the refactored path on GitHub-hosted Ubuntu x64).
-  This re-qualifies Linux PROBE-10 for this branch; it does **not** establish
-  Mac-to-server evidence.
-- [Hosted run 41188623012](https://github.com/angaravasist/sqloryn/actions/runs/41188623012)
-  remains historical Linux E2 at `5ef7c380` (pre-PROBE-11 refactor).
-- [Latest PR CI run 41195204109](https://github.com/angaravasist/sqloryn/actions/runs/41195204109)
-  passed at `83ed8a8`, with Linux and both Mac component jobs and the required
-  safeguards. This is **E1**, not Mac-to-SQL E2; the SQL integration job was not
-  requested in that run.
-- [PR CodeQL run 41195201981](https://github.com/angaravasist/sqloryn/actions/runs/41195201981)
-  passed at `83ed8a8`. A passing scan is not a security audit.
-- Candidate remote test-host preparation (maintainer/operator report, **not**
-  a repository CI or remote SQL result): Windows on physical AMD x64 with
-  x86_64 Ubuntu WSL2 NAT; Docker Desktop integrated via the Unix socket;
-  Linux Docker loopback publishing and internal key-only SSH/SCP/forwarding
-  checks succeeded. **Mac key authorisation, externally verified SSH host
-  identity, Windows-to-WSL SSH forwarding and Mac-to-host connectivity have not
-  been completed.** The host is not yet approved for a PROBE-11 run. Do not
-  commit ephemeral LAN addresses, host-key material or credentials.
-- Local Mac (Apple M3, native arm64) prep on 2026-10-31: SDK 10.0.403 in
-  `~/.dotnet`, Release build, 35 C# assertions, 37 Python tests, probe DLL ready.
-  Docker Desktop here is Linux **aarch64** — unsuitable for SQL Server evidence.
-  No maintainer-approved Linux x64 SSH host is configured for PROBE-11.
-- Native Mac arm64 → SQL Server: **unverified** (SSH/key trust and host
-  authorisation pending; no native Mac E2 execution).
-- Native Mac x64 → SQL Server: **unverified** (requires an Intel Mac client
-  and an approved host; an M3 Mac cannot provide native x64 evidence).
-- Earlier failed probe runs remain visible: Docker internal-only port publishing
-  ([41188114994](https://github.com/angaravasist/sqloryn/actions/runs/41188114994)),
-  XACT_STATE smallint handling
-  ([41188319700](https://github.com/angaravasist/sqloryn/actions/runs/41188319700)),
-  and transaction-state sampling inside SELECT
-  ([41188500385](https://github.com/angaravasist/sqloryn/actions/runs/41188500385)).
-- [CodeQL run 41190629514](https://github.com/angaravasist/sqloryn/actions/runs/41190629514)
-  includes C#, Python and Actions (baseline). Re-check CodeQL on the revised PR
-  head after push. C# uses build mode `none`. See
-  [security baseline](SECURITY_BASELINE.md). No security settings were changed
-  for this note.
-- Live repository protections verified read-only; see [security baseline](SECURITY_BASELINE.md).
+```sh
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
+dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
+dotnet build SQLoryn.slnx --no-restore -c Release
+dotnet run --project tests/Sqloryn.Core.Tests -c Release --no-build
+bash scripts/build_macos_app.sh
+open artifacts/macos/osx-arm64/SQLoryn.app
+```
 
-The maintainer approved PR #3's disposable GitHub-hosted Linux x64 SQL Server
-Developer test run, its test-use terms and temporary credentials. That approval
-does **not** authorise a new remote host, production access, retained credentials,
-merge or release.
-
-## Next bounded outcome and release gates
-
-Review the implemented PROBE-11 orchestration as **experimental, unqualified
-Mac transport tooling**; Linux PROBE-10 regression is verified. A technical-lead
-review may recommend merging this isolated implementation without native Mac E2,
-but must explicitly preserve that missing evidence and obtain maintainer merge
-approval. Completing Mac-to-SQL arm64 qualification requires Mac public-key
-authorisation, independently verified SSH host-key trust, private-LAN-only SSH
-forwarding, test-use/licence approval, actual native Mac execution, and verified
-cleanup. Native Intel x64 remains a separate qualification task. Do not claim
-Mac connectivity or general desktop support on the strength of a merge.
-Before claiming functional Mac connectivity, close its Mac E2 evidence gate.
-Assess SQL Tools Service's exact
-artifacts/licences and a minimal metadata/language-service integration before
-choosing a desktop shell. Test ordinary CA trust/name/expiry rejection,
-restricted logins and interruption of transactions.
-
-No GUI, Keychain, Entra, saved profiles, user-script/GO parser, administration,
-installer, signing/notarisation or full-parity claim exists. Large-cell memory,
-network partition, accessibility and packaged multi-architecture evidence are
-absent. [Threat model](THREAT_MODEL.md) and [dependency assessment](DEPENDENCIES.md)
-track unresolved boundaries. Independent review and maintainer release approval
-remain necessary before distributing an application.
+See [WALKTHROUGH.md](WALKTHROUGH.md) for automated vs manual distinction.

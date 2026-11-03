@@ -32,10 +32,24 @@ class ProbeRunnerTests(unittest.TestCase):
         execute.assert_not_called()
 
     def test_remote_flags_require_both_host_and_known_hosts(self):
-        with contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit) as error:
-                runner.main(["--accept-sql-server-license", "--ssh-host", "example.test"])
-        self.assertEqual(error.exception.code, 2)
+        with patch.object(runner, "execute_local") as local, patch.object(runner, "execute_ssh") as remote, \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(runner.main(["--accept-sql-server-license", "--ssh-host", "example.test"]), 1)
+        local.assert_not_called()
+        remote.assert_not_called()
+
+    def test_empty_ssh_host_or_known_hosts_fails_before_work(self):
+        with tempfile.NamedTemporaryFile() as known:
+            for argv in (
+                ["--accept-sql-server-license", "--ssh-host", "", "--ssh-known-hosts", known.name],
+                ["--accept-sql-server-license", "--ssh-host", "example.test", "--ssh-known-hosts", ""],
+                ["--accept-sql-server-license", "--ssh-host", "   ", "--ssh-known-hosts", known.name],
+            ):
+                with self.subTest(argv=argv), patch.object(runner, "execute_local") as local, \
+                        patch.object(runner, "execute_ssh") as remote, contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(runner.main(argv), 1)
+                local.assert_not_called()
+                remote.assert_not_called()
 
     def test_requires_native_linux_x64_and_local_socket(self):
         for info in ({"OSType": "linux", "Architecture": "aarch64"},
@@ -107,7 +121,31 @@ class ProbeRunnerTests(unittest.TestCase):
         self.assertIn("ProxyCommand=none", joined)
         self.assertIn("ControlMaster=no", joined)
         self.assertIn("ClearAllForwardings=yes", joined)
+        self.assertIn("IdentitiesOnly=yes", joined)
         self.assertNotIn("StrictHostKeyChecking=no", joined)
+        self.assertNotIn("IdentityFile=", joined)
+        self.assertNotIn("-i", options)
+
+    def test_ssh_identity_file_optional_and_applied_to_command_and_tunnel(self):
+        with tempfile.NamedTemporaryFile() as known, tempfile.NamedTemporaryFile() as identity:
+            without = runner.ssh_command_options(known.name)
+            with_id = runner.ssh_command_options(known.name, identity.name)
+            tunnel = runner.tunnel_ssh_command(
+                None, "example.test", known.name, 23456, 14330, identity_file=identity.name)
+            scp_opts = runner.ssh_command_options(known.name, identity.name)
+        self.assertNotIn("-i", without)
+        resolved = str(Path(identity.name).resolve())
+        self.assertIn("-i", with_id)
+        self.assertIn(resolved, with_id)
+        self.assertIn(f"IdentityFile={resolved}", with_id)
+        self.assertIn("IdentitiesOnly=yes", with_id)
+        self.assertIn("StrictHostKeyChecking=yes", with_id)
+        self.assertIn(resolved, tunnel)
+        self.assertIn(resolved, scp_opts)
+        with self.assertRaises(runner.ProbeError):
+            runner.resolve_ssh_identity_file("")
+        with self.assertRaises(runner.ProbeError):
+            runner.resolve_ssh_identity_file("/tmp/sqloryn-missing-identity-key")
 
     def test_tunnel_effective_config_keeps_loopback_forward(self):
         with tempfile.NamedTemporaryFile() as known:
@@ -126,6 +164,63 @@ class ProbeRunnerTests(unittest.TestCase):
             config = runner.effective_ssh_config(argv)
         self.assertEqual(config.get("clearallforwardings"), "yes")
         self.assertEqual(config.get("localforward"), [])
+
+    def test_ssh_identity_file_flag_requires_remote_mode(self):
+        with tempfile.NamedTemporaryFile() as identity, \
+                patch.object(runner, "execute_local") as local, \
+                patch.object(runner, "execute_ssh") as remote, \
+                contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as error:
+                runner.main(["--accept-sql-server-license", "--ssh-identity-file", identity.name])
+        self.assertEqual(error.exception.code, 2)
+        local.assert_not_called()
+        remote.assert_not_called()
+
+    def test_execute_ssh_passes_identity_to_ssh_scp_tunnel_cleanup(self):
+        with tempfile.NamedTemporaryFile() as known, tempfile.NamedTemporaryFile() as identity:
+            probe = Path(known.name)
+            seen = {"ssh": [], "scp": [], "tunnel": [], "cleanup": []}
+            resolved = str(Path(identity.name).resolve())
+
+            def ssh_run(user, host, known_hosts, remote_argv, **kwargs):
+                seen["ssh"].append(kwargs.get("identity_file"))
+                if remote_argv[:1] == ["/bin/mkdir"]:
+                    return ""
+                if remote_argv[:1] == ["/usr/bin/test"]:
+                    return ""
+                if remote_argv[:1] == ["/usr/bin/python3"] and "prepare" in remote_argv:
+                    return '{"ok":true}'
+                if remote_argv[:1] == ["/usr/bin/python3"] and "engine-check" in remote_argv:
+                    raise runner.ProbeError("stop before provision")
+                raise AssertionError(remote_argv)
+
+            def scp_upload(*args, **kwargs):
+                seen["scp"].append(kwargs.get("identity_file"))
+
+            def start_owned_tunnel(*args, **kwargs):
+                seen["tunnel"].append(kwargs.get("identity_file"))
+                raise AssertionError("tunnel should not start")
+
+            def remote_cleanup(*args, **kwargs):
+                seen["cleanup"].append(kwargs.get("identity_file"))
+
+            with patch.object(runner, "PROBE", probe), \
+                    patch.object(runner, "REMOTE_HELPER", probe), \
+                    patch.object(runner, "parse_ssh_destination", return_value=(None, "example.test")), \
+                    patch.object(runner, "secrets") as secrets_mod, \
+                    patch.object(runner, "ssh_run", side_effect=ssh_run), \
+                    patch.object(runner, "scp_upload", side_effect=scp_upload), \
+                    patch.object(runner, "start_owned_tunnel", side_effect=start_owned_tunnel), \
+                    patch.object(runner, "remote_cleanup", side_effect=remote_cleanup):
+                secrets_mod.token_hex.side_effect = ["deadbeefdeadbeef", "ab" * 24]
+                with self.assertRaises(runner.ProbeError):
+                    runner.execute_ssh("example.test", known.name, identity.name)
+            self.assertTrue(seen["ssh"])
+            self.assertTrue(all(item == resolved for item in seen["ssh"]))
+            self.assertEqual(seen["scp"], [resolved])
+            # helper_ready True after test -f → cleanup must receive the same identity.
+            self.assertEqual(seen["cleanup"], [resolved])
+            self.assertEqual(seen["tunnel"], [])
 
     def test_ssh_run_rejects_metacharacter_tokens(self):
         with tempfile.NamedTemporaryFile() as known:
@@ -400,6 +495,46 @@ class ProbeRunnerTests(unittest.TestCase):
         with self.assertRaises(runner.ProbeError):
             runner.parse_helper_json('{"ok":false,"error":"nope"}')
         self.assertEqual(runner.parse_helper_json('{"ok":true,"port":14330}')["port"], 14330)
+
+    def test_failed_mkdir_never_executes_helper(self):
+        with tempfile.NamedTemporaryFile() as known:
+            probe = Path(known.name)
+            with patch.object(runner, "PROBE", probe), \
+                    patch.object(runner, "REMOTE_HELPER", probe), \
+                    patch.object(runner, "parse_ssh_destination", return_value=(None, "example.test")), \
+                    patch.object(runner, "ssh_run", side_effect=runner.ProbeError("mkdir failed")) as ssh_run, \
+                    patch.object(runner, "scp_upload") as scp, \
+                    patch.object(runner, "remote_cleanup") as cleanup:
+                with self.assertRaises(runner.ProbeError):
+                    runner.execute_ssh("example.test", known.name)
+        scp.assert_not_called()
+        cleanup.assert_not_called()
+        self.assertTrue(any(call.args[3][:1] == ["/bin/mkdir"] for call in ssh_run.call_args_list))
+        self.assertFalse(any(call.args[3][:1] == ["/usr/bin/python3"] for call in ssh_run.call_args_list))
+
+    def test_incomplete_helper_upload_never_executes_helper(self):
+        calls = []
+
+        def ssh_run(user, host, known_hosts, remote_argv, **kwargs):
+            calls.append(list(remote_argv))
+            if remote_argv[:1] == ["/bin/mkdir"]:
+                return ""
+            if remote_argv[:1] == ["/usr/bin/test"]:
+                raise runner.ProbeError("helper missing")
+            raise AssertionError(remote_argv)
+
+        with tempfile.NamedTemporaryFile() as known:
+            probe = Path(known.name)
+            with patch.object(runner, "PROBE", probe), \
+                    patch.object(runner, "REMOTE_HELPER", probe), \
+                    patch.object(runner, "parse_ssh_destination", return_value=(None, "example.test")), \
+                    patch.object(runner, "ssh_run", side_effect=ssh_run), \
+                    patch.object(runner, "scp_upload"), \
+                    patch.object(runner, "remote_cleanup") as cleanup:
+                with self.assertRaises(runner.ProbeError):
+                    runner.execute_ssh("example.test", known.name)
+        cleanup.assert_not_called()
+        self.assertFalse(any(argv[:1] == ["/usr/bin/python3"] for argv in calls))
 
 
 def socket_bound_port():
