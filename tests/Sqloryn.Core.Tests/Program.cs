@@ -821,7 +821,7 @@ Pass("explorer-ownership");
             new ColumnDefinition { Name = "Balance", DataType = "decimal(18,2)" }
         ]
     };
-    var create = TableDesignSql.PreviewCreate(draft);
+    var create = TableDesignSql.PreviewCreate(draft).ExecutableSql;
     Check(create.StartsWith("CREATE TABLE [App].[dbo].[Cust]]omer] (", StringComparison.Ordinal), "design-create-header");
     Check(create.Contains("[Id] int IDENTITY(1,1) NOT NULL", StringComparison.Ordinal) &&
           create.Contains("[Name] nvarchar(100) NOT NULL", StringComparison.Ordinal) &&
@@ -837,13 +837,68 @@ Pass("explorer-ownership");
             new ColumnDefinition { Name = "Email", DataType = "varchar", MaxLength = 255 }
         ]
     };
-    var alter = TableDesignSql.PreviewAlter(draft, desired);
-    Check(alter.Contains("DROP COLUMN [Bio]", StringComparison.Ordinal) && alter.Contains("DESTRUCTIVE", StringComparison.Ordinal), "design-alter-drop");
+    var alterPreview = TableDesignSql.PreviewAlter(draft, desired);
+    var alter = alterPreview.ExecutableSql;
+    Check(alter.Contains("DROP COLUMN [Bio]", StringComparison.Ordinal) && !alter.Contains("DESTRUCTIVE", StringComparison.Ordinal) &&
+          alterPreview.Warnings.Any(w => w.Contains("DESTRUCTIVE", StringComparison.Ordinal)), "design-alter-drop");
     Check(alter.Contains("DROP COLUMN [Balance]", StringComparison.Ordinal), "design-alter-drop2");
     Check(alter.Contains("ALTER COLUMN [Name] nvarchar(200) NOT NULL", StringComparison.Ordinal), "design-alter-type");
     Check(alter.Contains("ADD [Email] varchar(255) NULL", StringComparison.Ordinal), "design-alter-add");
     Check(TableDesignSql.HasDestructiveChanges(draft, desired) && !TableDesignSql.HasDestructiveChanges(draft, draft), "design-destructive-flag");
-    Check(TableDesignSql.PreviewAlter(draft, draft).StartsWith("-- No changes", StringComparison.Ordinal), "design-alter-noop");
+    Check(!TableDesignSql.PreviewAlter(draft, draft).HasChanges && TableDesignSql.PreviewAlter(draft, draft).ExecutableSql.Length == 0, "design-alter-noop");
+
+    // Hostile identifiers: metadata must never be embedded in executable SQL comments (PR #7 finding 1).
+    static string StripBracketedIdentifiers(string sql)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (var i = 0; i < sql.Length; i++)
+        {
+            if (sql[i] != '[') { sb.Append(sql[i]); continue; }
+            sb.Append("[]");
+            i++;
+            while (i < sql.Length)
+            {
+                if (sql[i] == ']' && i + 1 < sql.Length && sql[i + 1] == ']') { i += 2; continue; }
+                if (sql[i] == ']') break;
+                i++;
+            }
+        }
+        return sb.ToString();
+    }
+    static void CheckExecutableOnly(string sql, string name)
+    {
+        var skeleton = StripBracketedIdentifiers(sql);
+        Check(!skeleton.Contains("--", StringComparison.Ordinal) && !skeleton.Contains("/*", StringComparison.Ordinal), name + "-no-comments");
+        var statements = skeleton.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Check(statements.Length > 0 && statements.All(st =>
+            st.StartsWith("ALTER TABLE ", StringComparison.Ordinal) || st.StartsWith("CREATE TABLE ", StringComparison.Ordinal)), name + "-only-ddl");
+        Check(!sql.Contains("DESTRUCTIVE", StringComparison.Ordinal) && !sql.Contains("NOTE:", StringComparison.Ordinal), name + "-no-metadata");
+    }
+    const string Hostile = "evil]\nDROP TABLE dbo.Victim;--";
+    var hostileExisting = draft with
+    {
+        Columns =
+        [
+            draft.Columns[0],
+            new ColumnDefinition { Name = Hostile, DataType = "int" },
+            new ColumnDefinition { Name = "Old]\r\n-- x", DataType = "nvarchar", MaxLength = 10 }
+        ]
+    };
+    var hostileDesired = draft with
+    {
+        Columns =
+        [
+            draft.Columns[0],
+            new ColumnDefinition { Name = "New\nCol]", DataType = "int", IsNullable = false },
+            new ColumnDefinition { Name = "Old]\r\n-- x", DataType = "nvarchar", MaxLength = 20 }
+        ]
+    };
+    var hostile = TableDesignSql.PreviewAlter(hostileExisting, hostileDesired);
+    CheckExecutableOnly(hostile.ExecutableSql, "design-hostile-alter");
+    Check(hostile.ExecutableSql.Contains("DROP COLUMN [evil]]\nDROP TABLE dbo.Victim;--]", StringComparison.Ordinal), "design-hostile-quoted");
+    Check(hostile.Warnings.Count >= 2 && hostile.Warnings.All(w => !w.Contains('\n') && !w.Contains('\r')), "design-hostile-warnings-single-line");
+    Check(hostile.Warnings.Any(w => w.Contains("DESTRUCTIVE", StringComparison.Ordinal)), "design-hostile-warnings-destructive");
+    CheckExecutableOnly(TableDesignSql.PreviewCreate(hostileDesired).ExecutableSql, "design-hostile-create");
 
     void ExpectInvalid(ColumnDefinition column, string name)
     {

@@ -14,6 +14,8 @@
     </StackPanel>
 
     <StackPanel DockPanel.Dock="Bottom" Spacing="8" Margin="0,10,0,0">
+      <TextBlock Name="WarningsText" TextWrapping="Wrap" IsVisible="False"
+                 AutomationProperties.Name="Design warnings" />
       <TextBlock Name="StatusText" TextWrapping="Wrap" Classes="muted" />
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
         <Button Name="PreviewButton" Content="Preview DDL" Click="OnPreview" />
