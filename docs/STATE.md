@@ -4,63 +4,65 @@ Owner: SQLoryn maintainer. Reviewed: 2026-11-04. Experimental; no release suppor
 
 ## Work under review
 
-Branch `codex/macos-database-studio` — macOS Database Studio integrated preview
-([SPEC-003](specs/003-macos-database-studio.md), [ADR-004](decisions/004-macos-database-studio.md),
-[PR7 acceptance](ssms/PR7-ACCEPTANCE.md)). Builds on merged Developer Preview 0 (PR #6 / `f561597`).
-Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7). Tip under review: `78fba00`.
+Branch `codex/macos-database-studio` — Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
+Prior tip with hosted green checks: `78fba00`. Follow-up tip under push after D2–D8 + OE/plan merge.
 
 ## Hosted checks on `78fba00`
 
 | Check | Result |
 |---|---|
-| probe-components (ubuntu-24.04, macos-15, macos-15-intel) | PASS |
-| repo-safeguards | PASS |
-| CodeQL / Analyze (csharp, python, actions) | PASS |
-| sql-integration | **SKIPPED** (no hosted SQL fixture) |
+| probe-components (ubuntu / macos-15 / macos-15-intel) | PASS |
+| repo-safeguards · CodeQL · Analyze (csharp/python/actions) | PASS |
+| sql-integration | **SKIPPED** |
 | Runs | [components](https://github.com/angaravasist/sqloryn/actions/runs/41739385983) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41739380738) |
+
+Hosted checks for the post-merge tip are pending after push.
 
 ## PR #7 finding dispositions
 
-Statuses below distinguish **component-tested** from **acceptance-complete**. Incomplete acceptance tests keep the finding **Open** or **Partial** even when Core assertions exist.
-
 | # | Disposition | Evidence / gap |
 |---|---|---|
-| 1 | **Partial** — warnings out of `ExecutableSql` | Core hostile-identifier PASS; live disposable apply of hostile names **unverified** |
-| 2 | **Open (reopened)** — generation-safe autofill implemented; native UI run pending | D8: `ProfileAutofillSession.TryApplySecret(generation, secret)` applies only for the current generation while Waiting; `ConnectAutofillController` models SelectProfile/UserTypedPassword/LookupCompleted/UserChangedServer/ResolveForConnect and `ConnectWindow` uses it. Component tests (typed→late Keychain, host change→late Keychain, Keychain→host change→Connect, A secret never reaches B) pass; not yet exercised in the native Avalonia window |
-| 3 | **Open (reopened)** — batch rollback fakes pass; collation / dispose gaps | Verifier D3 (case-insensitive silent overwrite), D4 (dispose hides outcome); live SqlTransaction **unverified** |
-| 4 | **Partial** — export destination + types | Core `export-from-resultset-types` PASS; independent verifier must recheck integrated UI export path (D1) |
-| 5 | **Open (reopened)** — staged save without external-edit gate | Verifier D2: external file edit must survive Save |
-| 6 | **Partial** — bounded QueryRaw | Core PASS; live MAX/xml **unverified** |
-| 7 | **Component-fixed (local, unmerged)** — preflight maps selection→document line/offset via `ScriptExecutionOrigin`; Core tests `d5-*` PASS; no live GUI run | Verifier D5: error in selected batch must cite document line |
-| 8–12 | **Partial** — shell implemented | Build only; VoiceOver / light-dark mid-session / Finder launch **unverified** |
-| 13 | **Partial** — new-tab script SELECT | Core PASS; UI click path **unverified** |
-| 14 | **Partial** — OE keys/indexes/functions folders + truncation notes | Core component PASS (`metadata-keys-indexes-functions`, `schema-object-catalog`, `oe-schema-folders`); live expand **unverified** |
-| 15 | **Partial** — create-table-with-PK + estimated plan | Core PASS (`table-design-primary-key`, `estimate-plan-*`: DML never executed, SHOWPLAN denial sends no batch, SET OFF always attempted, bypass `SET` options rejected); live SHOWPLAN / CREATE TABLE **unverified**; UI click path **unverified** |
-| 16 | **Partial** — icon required; plist lint; FD package | Clean-Mac install / SC licence audit **pending** |
-| 17 | **Open** — a11y + performance measurements | No VoiceOver walk; no recorded timings |
-| 18 | **Partial** — inventory/docs | CAP catalogue mostly candidates; sql-integration still skipped |
+| 1 | **Partial** | Hostile DDL warnings separated; live hostile apply **unverified** |
+| 2 | **Partial (D8)** | `ConnectAutofillController` + `TryApplySecret` event-sequence tests PASS; native Avalonia window sequence **unverified** |
+| 3 | **Partial (D3/D4)** | BIN2 character concurrency SQL + dispose-preserving batch outcomes PASS (fakes); live collation/transaction **unverified** |
+| 4 | **Partial** | Export types + single destination; await independent D1 recheck on this tip |
+| 5 | **Partial (D2)** | External edit refuses Save; on-disk external bytes preserved — Core `d2-external-edit-survives-save` PASS; UI Save As force path **unverified** |
+| 6 | **Partial** | Bounded QueryRaw; live MAX **unverified** |
+| 7 | **Partial (D5)** | Selection rejections map to document line — Core `d5-*` PASS; editor caret jump **unverified** |
+| 8–12 | **Partial** | Shell build-only |
+| 13 | **Partial** | New-tab script SELECT |
+| 14 | **Partial** | Keys/indexes/functions folders + truncation; live expand **unverified** |
+| 15 | **Partial** | PK create preview + estimated plan fakes prove INSERT never executes on deny/success path; live SHOWPLAN **unverified** |
+| 16 | **Partial** | FD package + icon required |
+| 17 | **Open** | No VoiceOver / timings / screenshots (capture blocked) |
+| 18 | **Partial** | Inventory present; sql-integration still skipped |
 
-## Verifier defects in flight
-
-| ID | Required closure |
-|---|---|
-| D2 | External edit of saved `.sql` survives Save (refuse or prompt; original external content preserved when refused) |
-| D3 | Concurrent text change under case-insensitive collation cannot be silently overwritten |
-| D4 | Transaction dispose cannot replace/hide known or uncertain commit outcome |
-| D5 | Error/rejection inside a selection reports document-relative line |
-| D8 | Delayed Keychain cannot overwrite manually entered password or send secret to changed endpoint; exercise actual UI event sequence |
-| D1 recheck | Independent verifier re-runs integrated export path after D2–D8 land |
-
-## Integrated local checks (tip `78fba00`)
+## Integrated local checks (post D2–D8 + OE/plan merge)
 
 | Check | Result |
 |---|---|
-| Local Release build + Core 72 PASS + probe + Python + preflight + FD `.app` | Recorded at tip push |
-| Live disposable SQL / eight journeys | **Not run** — no authorised fixture present this session |
+| `dotnet build SQLoryn.slnx -c Release` | 0 warnings / 0 errors |
+| Core component executable | **97 PASS**, 0 FAIL |
+| SqlClientProbe.Tests | **35 PASS** |
+| Python tests | **43 OK** |
+| `repo_preflight.py` | PASS |
+| `bash scripts/build_macos_app.sh` | arm64 FD `.app` |
+| Launch smoke | process started |
+| Screenshots | **Blocked** (no Screen Recording grant for agent) |
+| Live disposable SQL / eight journeys | **Not run** — no authorised fixture |
 | Windows SSH product path | **Closed** |
+
+## Reviewer launch
+
+```sh
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
+dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
+dotnet build SQLoryn.slnx --no-restore -c Release
+dotnet run --project tests/Sqloryn.Core.Tests -c Release --no-build
+bash scripts/build_macos_app.sh
+open artifacts/macos/osx-arm64/SQLoryn.app
+```
 
 ## Explicit non-claims
 
-- Not SSMS-compatible; not production-ready; not signed/notarised.
-- No Windows SSH connection feature in the product UI.
-- No Entra / Agent / AG / BI surfaces; CAP-176 AI remains deferred.
+Not SSMS-compatible; not signed/notarised; AI assistant deferred; no Windows SSH product path.
