@@ -96,13 +96,17 @@ public partial class MainWindow
                     : C("_Run", () => OnRun(this, e), Key.Enter, KeyModifiers.Control, display: Key.F5),
                 IsMac
                     ? C("_Cancel", () => OnCancel(this, e), Key.OemPeriod, KeyModifiers.Meta)
-                    : C("_Cancel", () => OnCancel(this, e), display: Key.Escape)
+                    : C("_Cancel", () => OnCancel(this, e), display: Key.Escape),
+                null,
+                // Compiles under SET SHOWPLAN_XML; the SQL is never executed.
+                C("Display _Estimated Plan", () => OnDisplayEstimatedPlan(this, e), Key.L, Primary)
             ]),
             ("_Object",
             [
                 C("_Expand Selected", () => OnExpandSelected(this, e), Key.E, Primary),
                 C("Script _SELECT in New Tab (Table/View)", () => OnScriptSelect(this, e), Key.E, Primary | KeyModifiers.Shift),
                 null,
+                C("_New Table…", () => OnNewTable(this, e)),
                 C("_Design Table…", () => OnDesignTable(this, e)),
                 C("Edit Top _200 Rows…", () => OnEditRows(this, e))
             ]),

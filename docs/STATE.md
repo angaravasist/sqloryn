@@ -34,8 +34,8 @@ Statuses below distinguish **component-tested** from **acceptance-complete**. In
 | 7 | **Open (reopened)** — preflight exists; selection→document line mapping incomplete | Verifier D5: error in selected batch must cite document line |
 | 8–12 | **Partial** — shell implemented | Build only; VoiceOver / light-dark mid-session / Finder launch **unverified** |
 | 13 | **Partial** — new-tab script SELECT | Core PASS; UI click path **unverified** |
-| 14 | **Open** — OE truncation only | Keys, indexes, functions still incomplete |
-| 15 | **Open** — create-table-with-PK + estimated plan / SHOWPLAN denial | Not implemented |
+| 14 | **Partial** — OE keys/indexes/functions folders + truncation notes | Core component PASS (`metadata-keys-indexes-functions`, `schema-object-catalog`, `oe-schema-folders`); live expand **unverified** |
+| 15 | **Partial** — create-table-with-PK + estimated plan | Core PASS (`table-design-primary-key`, `estimate-plan-*`: DML never executed, SHOWPLAN denial sends no batch, SET OFF always attempted, bypass `SET` options rejected); live SHOWPLAN / CREATE TABLE **unverified**; UI click path **unverified** |
 | 16 | **Partial** — icon required; plist lint; FD package | Clean-Mac install / SC licence audit **pending** |
 | 17 | **Open** — a11y + performance measurements | No VoiceOver walk; no recorded timings |
 | 18 | **Partial** — inventory/docs | CAP catalogue mostly candidates; sql-integration still skipped |

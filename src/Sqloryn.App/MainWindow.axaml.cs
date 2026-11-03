@@ -35,7 +35,7 @@ public partial class MainWindow : Window
     sealed class TreeNode(string title, string kind, string? database = null, string? schema = null, string? objectName = null)
     {
         public string Title { get; } = title;
-        /// <summary>database, schema, tables, views, procedures (folders), table, view, procedure, column, placeholder.</summary>
+        /// <summary>database, schema, tables, views, keys, indexes, procedures, functions (folders), table, view, key, index, procedure, function, column, placeholder.</summary>
         public string Kind { get; } = kind;
         public string? Database { get; } = database;
         public string? Schema { get; } = schema;
@@ -93,7 +93,7 @@ public partial class MainWindow : Window
             case "database":
                 text.FontWeight = FontWeight.SemiBold;
                 break;
-            case "tables" or "views" or "procedures":
+            case "tables" or "views" or "keys" or "indexes" or "procedures" or "functions":
                 text.Classes.Add("muted");
                 break;
             case "column" or "placeholder":
@@ -463,6 +463,86 @@ public partial class MainWindow : Window
             else
             {
                 _lastError = ex.Message;
+            }
+        }
+        finally
+        {
+            tab.EndRun();
+            if (ReferenceEquals(tab.RunCts, cts))
+                tab.RunCts = null;
+            if (ReferenceEquals(_active, tab))
+                UpdateStatus();
+        }
+    }
+
+    /// <summary>
+    /// Query > Display Estimated Plan. Compiles the selection/document under SET SHOWPLAN_XML and shows the XML in Messages.
+    /// This handler never calls ExecuteAsync: every outcome (success, refusal, permission denied, failure, cancel) ends here.
+    /// </summary>
+    async void OnDisplayEstimatedPlan(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        CaptureSelection();
+        var sql = tab.BatchToRun;
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            StatusBar.Text = "Nothing to estimate.";
+            return;
+        }
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect before displaying an estimated plan.";
+            return;
+        }
+        if (tab.Session.TargetUnknown)
+        {
+            StatusBar.Text = "Database target unknown after a prior batch. Reconnect or revalidate first.";
+            return;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand || !tab.TryBeginRun())
+        {
+            StatusBar.Text = "A command is already running on this tab. Wait or cancel before estimating a plan.";
+            return;
+        }
+
+        tab.RunCts = new CancellationTokenSource();
+        var cts = tab.RunCts;
+        var binding = tab.CaptureBinding();
+        tab.Status = "Estimating plan (SQL is not executed)…";
+        if (ReferenceEquals(_active, tab))
+            UpdateStatus();
+        try
+        {
+            EstimatedPlanResult result;
+            try
+            {
+                result = await tab.Session.EstimatePlanAsync(sql, cts.Token);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or ObjectDisposedException)
+            {
+                // Fail closed: show the refusal; never fall back to running the SQL.
+                result = new EstimatedPlanResult(EstimatedPlanStatus.Failed, [], SafeUi(ex.Message), false);
+            }
+            if (!OwnerStillCurrent(tab, binding))
+                return;
+            tab.Status = result.Status == EstimatedPlanStatus.Succeeded
+                ? "Estimated plan ready (not executed)"
+                : "Estimated plan unavailable (not executed)";
+            if (result.Status != EstimatedPlanStatus.Succeeded)
+                _lastError = result.Error ?? "";
+            if (ReferenceEquals(_active, tab))
+            {
+                RenderResult(tab.LastResult);
+                MessagesBox.Text = EstimatedPlanService.FormatForMessages(result);
+                ResultSummary.Text = "Estimated plan · statement not executed";
+                SetResultsVisible(true);
+                ShowMessagesTab();
+                UpdateStatus();
+                StatusBar.Text = result.Status == EstimatedPlanStatus.Succeeded
+                    ? "Estimated plan shown in Messages. The statement was not executed."
+                    : SafeUi(result.Error ?? "Estimated plan unavailable.");
             }
         }
         finally
@@ -918,10 +998,16 @@ public partial class MainWindow : Window
             "schema" => "Schema",
             "tables" => "Tables folder",
             "views" => "Views folder",
+            "keys" => "Keys folder",
+            "indexes" => "Indexes folder",
             "procedures" => "Procedures folder",
+            "functions" => "Functions folder",
             "table" => "Table",
             "view" => "View",
+            "key" => "Key",
+            "index" => "Index",
             "procedure" => "Stored procedure",
+            "function" => "Function",
             "column" => "Column",
             _ => "Item"
         };
@@ -929,13 +1015,13 @@ public partial class MainWindow : Window
         Line("Server", _active?.Session.ServerDisplay);
         Line("Database", node.Database);
         Line("Schema", node.Schema);
-        Line(node.Kind == "column" ? "Table" : "Name", node.Kind == "column" || node.Kind is "table" or "view" or "procedure" ? node.ObjectName : null);
+        Line(node.Kind == "column" ? "Table" : "Name", node.Kind == "column" || node.Kind is "table" or "view" or "procedure" or "key" or "index" or "function" ? node.ObjectName : null);
         if (node.Kind is "table" or "view" && node.Database is not null && node.Schema is not null && node.ObjectName is not null)
             Line("Qualified", SqlIdentity.Qualify3(node.Database, node.Schema, node.ObjectName));
         var loadedCount = node.Children.Count(c => c.Kind != "placeholder").ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (node.Kind is "table" or "view" && node.Loaded)
             Line("Columns", loadedCount);
-        if (node.Kind is "tables" or "views" or "procedures" && node.Loaded)
+        if (node.Kind is "tables" or "views" or "keys" or "indexes" or "procedures" or "functions" && node.Loaded)
             Line("Items", loadedCount);
         if (!string.IsNullOrEmpty(node.Info))
             sb.Append('\n').Append(node.Info).Append('\n');
@@ -1085,7 +1171,7 @@ public partial class MainWindow : Window
 
     async Task ExpandNodeAsync(TreeNode node)
     {
-        if (_active is null || node.Loaded || node.Loading || node.Kind is "placeholder" or "column" or "procedure")
+        if (_active is null || node.Loaded || node.Loading || node.Kind is "placeholder" or "column" or "procedure" or "function" or "key" or "index")
             return;
         var tab = _active;
         var session = tab.Session;
@@ -1107,12 +1193,10 @@ public partial class MainWindow : Window
                 {
                     // Folders are static; the catalog query runs when a folder expands.
                     var schema = node.Schema;
-                    await LoadChildrenAsync(node, tab, binding, () => Task.FromResult((new List<TreeNode>
-                    {
-                        WithPlaceholder(new TreeNode("Tables", "tables", db, schema)),
-                        WithPlaceholder(new TreeNode("Views", "views", db, schema)),
-                        WithPlaceholder(new TreeNode("Programmability · Procedures", "procedures", db, schema))
-                    }, (string?)null)));
+                    await LoadChildrenAsync(node, tab, binding, () => Task.FromResult((
+                        ObjectExplorerService.SchemaFolders
+                            .Select(f => WithPlaceholder(new TreeNode(f.Title, f.FolderKind, db, schema)))
+                            .ToList(), (string?)null)));
                     break;
                 }
 
@@ -1134,6 +1218,29 @@ public partial class MainWindow : Window
                             var child = new TreeNode(n, childKind, db, schema, n);
                             return childKind == "procedure" ? child : WithPlaceholder(child);
                         }).ToList(), names.TruncationNote);
+                    });
+                    break;
+                }
+
+                case "keys" or "indexes" or "functions" when db is not null && node.Schema is not null:
+                {
+                    var schema = node.Schema;
+                    var kind = node.Kind;
+                    await LoadChildrenAsync(node, tab, binding, async () =>
+                    {
+                        var items = kind switch
+                        {
+                            "keys" => await CatalogClient.ListKeysAsync(session, db, schema),
+                            "indexes" => await CatalogClient.ListIndexesAsync(session, db, schema),
+                            _ => await CatalogClient.ListFunctionsAsync(session, db, schema)
+                        };
+                        var childKind = kind switch { "keys" => "key", "indexes" => "index", _ => "function" };
+                        return (items.Items.Select(o => new TreeNode(SchemaObjectCatalog.Title(childKind, o), childKind, db, schema, o.Name)
+                        {
+                            Info = o.Parent is null
+                                ? $"Name     {o.Name}\nType     {o.TypeDescription}"
+                                : $"Name     {o.Name}\nTable    {o.Parent}\nType     {o.TypeDescription}{(o.IsUnique ? "\nUnique   yes" : "")}"
+                        }).ToList(), items.TruncationNote);
                     });
                     break;
                 }
@@ -1201,6 +1308,46 @@ public partial class MainWindow : Window
             ResetNode(node);
             StatusBar.Text = "Table changed; collapse and expand it to reload columns.";
         }
+    }
+
+    async void OnNewTable(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        if (SelectedNode is not { Database: { } database, Schema: { } schema } node)
+        {
+            StatusBar.Text = "Select a schema (or one of its folders) in Object Explorer first.";
+            return;
+        }
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect first.";
+            return;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return;
+        }
+        var window = new TableDesignWindow(tab.Session, database, schema);
+        await window.ShowDialog(this);
+        if (window.Applied && ReferenceEquals(_active, tab))
+        {
+            var tables = FindTablesFolder(node);
+            if (tables is { Loaded: true })
+                ResetNode(tables);
+            StatusBar.Text = "Table created; expand Tables again (or Refresh) to see it.";
+        }
+    }
+
+    /// <summary>The Tables folder for the node's schema, searched among the tree's loaded nodes.</summary>
+    TreeNode? FindTablesFolder(TreeNode from)
+    {
+        IEnumerable<TreeNode> All(IEnumerable<TreeNode> nodes) => nodes.SelectMany(n => new[] { n }.Concat(All(n.Children)));
+        return All(_treeRoots).FirstOrDefault(n => n.Kind == "tables" &&
+            string.Equals(n.Database, from.Database, StringComparison.Ordinal) &&
+            string.Equals(n.Schema, from.Schema, StringComparison.Ordinal));
     }
 
     async void OnEditRows(object? sender, RoutedEventArgs e)
