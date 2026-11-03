@@ -14,6 +14,7 @@
         <MenuItem Header="_Close Tab" Name="MenuCloseTab" HotKey="Ctrl+W" Click="OnCloseTab" />
         <Separator />
         <MenuItem Header="Export Results as _CSV…" Name="MenuExportCsv" Click="OnExportCsv" />
+        <MenuItem Header="Export Results as CSV (Spreadsheet-_safe)…" Name="MenuExportCsvSafe" Click="OnExportCsvSafe" />
         <MenuItem Header="Export Results as _JSON…" Name="MenuExportJson" Click="OnExportJson" />
         <Separator />
         <MenuItem Header="_Quit" Name="MenuQuit" HotKey="Ctrl+Q" Click="OnQuit" />

@@ -767,16 +767,20 @@ Pass("explorer-ownership");
     Check(lines[2] == "2,\"\",,,false", "csv-empty-string-quoted");
     Check(csv.Contains("3,\"a,\"\"b\"\"\nc\",0.5,1,", StringComparison.Ordinal) && csv.EndsWith("\r\n", StringComparison.Ordinal), "csv-quoting-crlf");
 
-    var jsonOut = System.Text.Json.JsonDocument.Parse(JsonExporter.ToJson(view)).RootElement;
-    Check(jsonOut.GetArrayLength() == 3, "json-array");
-    var r0 = jsonOut[0];
-    var r1 = jsonOut[1];
-    Check(r0.GetProperty("id").ValueKind == System.Text.Json.JsonValueKind.Number, "json-int-number");
-    Check(r0.GetProperty("note").ValueKind == System.Text.Json.JsonValueKind.Null, "json-null");
-    Check(r1.GetProperty("note").ValueKind == System.Text.Json.JsonValueKind.String && r1.GetProperty("note").GetString() == "", "json-empty-string");
-    Check(r0.GetProperty("amt").GetString() == "12345678901234567890.123456789", "json-decimal-string");
-    Check(r0.GetProperty("big").GetString() == "9007199254740993", "json-bigint-string");
-    Check(r0.GetProperty("flag").ValueKind == System.Text.Json.JsonValueKind.True && r1.GetProperty("flag").ValueKind == System.Text.Json.JsonValueKind.False, "json-bit-bool");
+    var jsonRoot = System.Text.Json.JsonDocument.Parse(JsonExporter.ToJson(view)).RootElement;
+    Check(jsonRoot.GetProperty("format").GetString() == JsonExporter.FormatId, "json-format-id");
+    var set0 = jsonRoot.GetProperty("resultSets")[0];
+    var jsonRows = set0.GetProperty("rows");
+    Check(jsonRows.GetArrayLength() == 3, "json-array");
+    Check(set0.GetProperty("columns").GetArrayLength() == 5 && jsonRows[0].GetArrayLength() == 5, "json-column-metadata-and-row-arrays");
+    var r0 = jsonRows[0];
+    var r1 = jsonRows[1];
+    Check(r0[0].ValueKind == System.Text.Json.JsonValueKind.Number, "json-int-number");
+    Check(r0[1].ValueKind == System.Text.Json.JsonValueKind.Null, "json-null");
+    Check(r1[1].ValueKind == System.Text.Json.JsonValueKind.String && r1[1].GetString() == "", "json-empty-string");
+    Check(r0[2].GetString() == "12345678901234567890.123456789", "json-decimal-string");
+    Check(r0[3].GetString() == "9007199254740993", "json-bigint-string");
+    Check(r0[4].ValueKind == System.Text.Json.JsonValueKind.True && r1[4].ValueKind == System.Text.Json.JsonValueKind.False, "json-bit-bool");
     using var sw = new StringWriter();
     JsonExporter.Write(sw, view);
     Check(sw.ToString() == JsonExporter.ToJson(view), "json-writer");
@@ -948,6 +952,244 @@ Pass("explorer-ownership");
 }
 
 
+// F4: loss-aware JSON (ordinal column metadata + row arrays)
+{
+    var dup = new ResultSetView
+    {
+        Columns = [new ResultColumn("id", "int"), new ResultColumn("x", "nvarchar"), new ResultColumn("x", "nvarchar"), new ResultColumn("", "int")],
+        Rows = [[ResultCell.Of("7"), ResultCell.Of("a"), ResultCell.Null, ResultCell.Of("9")]]
+    };
+    var root = System.Text.Json.JsonDocument.Parse(JsonExporter.ToJson(dup)).RootElement;
+    var set = root.GetProperty("resultSets")[0];
+    var cols = set.GetProperty("columns");
+    Check(cols.GetArrayLength() == 4, "json-dup-col-count");
+    Check(cols[1].GetProperty("ordinal").GetInt32() == 1 && cols[2].GetProperty("ordinal").GetInt32() == 2, "json-dup-ordinals");
+    Check(cols[1].GetProperty("name").GetString() == "x" && cols[2].GetProperty("name").GetString() == "x", "json-dup-names-preserved");
+    Check(cols[3].GetProperty("name").GetString() == "" && cols[3].GetProperty("sqlType").GetString() == "int", "json-blank-name-and-type");
+    var row = set.GetProperty("rows")[0];
+    Check(row.GetArrayLength() == 4 && row[1].GetString() == "a" && row[2].ValueKind == System.Text.Json.JsonValueKind.Null && row[3].GetInt64() == 9, "json-dup-values-all-present");
+    Check(!set.GetProperty("truncated").GetBoolean(), "json-truncated-flag");
+
+    var two = JsonExporter.ToJson([dup, dup]);
+    Check(System.Text.Json.JsonDocument.Parse(two).RootElement.GetProperty("resultSets").GetArrayLength() == 2, "json-multi-set-single-document");
+    Pass("json-duplicate-columns-preserved");
+}
+
+// F4: spreadsheet-safe CSV
+{
+    var view = new ResultSetView
+    {
+        Columns = [new ResultColumn("=h", "nvarchar"), new ResultColumn("n", "int"), new ResultColumn("d", "decimal")],
+        Rows =
+        [
+            [ResultCell.Of("=1+1"), ResultCell.Of("-5"), ResultCell.Of("-1.5")],
+            [ResultCell.Of("+cmd"), ResultCell.Of("3"), ResultCell.Of("0.5")],
+            [ResultCell.Of("@SUM(A1)"), ResultCell.Null, ResultCell.Of("")],
+            [ResultCell.Of("\t=x"), ResultCell.Of("1"), ResultCell.Of("2")],
+            [ResultCell.Of("-text"), ResultCell.Of("1"), ResultCell.Of("2")],
+            [ResultCell.Of("plain"), ResultCell.Of("1"), ResultCell.Of("2")]
+        ]
+    };
+    var raw = CsvExporter.ToCsv(view).Split("\r\n");
+    Check(raw[0] == "=h,n,d" && raw[1] == "=1+1,-5,-1.5", "csv-default-is-faithful");
+    var safe = CsvExporter.ToCsv(view, new CsvOptions { SpreadsheetSafe = true }).Split("\r\n");
+    Check(safe[0] == "'=h,n,d", "csv-safe-header");
+    Check(safe[1] == "'=1+1,-5,-1.5", "csv-safe-formula-prefixed-numbers-untouched");
+    Check(safe[2] == "'+cmd,3,0.5", "csv-safe-plus");
+    Check(safe[3] == "'@SUM(A1),,\"\"", "csv-safe-at-null-empty");
+    Check(safe[4].StartsWith("\"'\t=x\"", StringComparison.Ordinal) || safe[4].StartsWith("'\t=x", StringComparison.Ordinal), "csv-safe-tab");
+    Check(safe[5] == "'-text,1,2" && safe[6] == "plain,1,2", "csv-safe-minus-text-and-plain");
+    Pass("csv-spreadsheet-safe");
+}
+
+// F4/F5: staged atomic writes
+{
+    var dir = Path.Combine(Path.GetTempPath(), "sqloryn-f4-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    try
+    {
+        static string[] Temps(string d) => Directory.GetFiles(d, "*.tmp", SearchOption.AllDirectories);
+        var utf8 = new System.Text.UTF8Encoding(false);
+
+        // new destination
+        var fresh = Path.Combine(dir, "fresh.sql");
+        await SafeFileWriter.WriteUtf8Async(fresh, "héllo ✓");
+        Check(File.ReadAllBytes(fresh).AsSpan().SequenceEqual(utf8.GetBytes("héllo ✓")) && Temps(dir).Length == 0, "safe-write-new-utf8-no-bom");
+
+        // replace failure after successful staging: original intact, temp removed
+        var target = Path.Combine(dir, "target.sql");
+        File.WriteAllText(target, "ORIGINAL");
+        var stagedSeen = "";
+        try
+        {
+            await SafeFileWriter.WriteUtf8Async(target, "NEW", committer: new FailingCommitter(staged => stagedSeen = File.ReadAllText(staged)));
+            throw new Exception("FAIL replace-failure-should-throw");
+        }
+        catch (IOException) { }
+        Check(stagedSeen == "NEW", "stage-written-before-replace");
+        Check(File.ReadAllText(target) == "ORIGINAL" && Temps(dir).Length == 0, "replace-failure-preserves-original");
+
+        // ScriptDocument: write ok, replace fails -> original intact, doc stays dirty
+        var script = new ScriptDocument();
+        script.LoadFrom(target, "ORIGINAL");
+        script.SetText("EDITED");
+        try
+        {
+            await script.SaveAsync(writer: (p, t, ct) => SafeFileWriter.WriteUtf8Async(p, t, ct, new FailingCommitter()));
+            throw new Exception("FAIL script-save-should-throw");
+        }
+        catch (IOException) { }
+        Check(File.ReadAllText(target) == "ORIGINAL" && script.IsDirty && Temps(dir).Length == 0, "script-save-replace-failure-keeps-original-and-dirty");
+        await script.SaveAsync();
+        Check(File.ReadAllText(target) == "EDITED" && !script.IsDirty && Temps(dir).Length == 0, "script-save-default-uses-staging");
+
+        // external edit before save: save replaces atomically, never a partial merge; external edit after failed replace survives
+        File.WriteAllText(target, "EXTERNAL");
+        try
+        {
+            await SafeFileWriter.WriteUtf8Async(target, "MINE", committer: new FailingCommitter());
+        }
+        catch (IOException) { }
+        Check(File.ReadAllText(target) == "EXTERNAL", "external-edit-survives-failed-save");
+        await SafeFileWriter.WriteUtf8Async(target, "MINE");
+        Check(File.ReadAllText(target) == "MINE", "last-writer-wins-whole-file");
+
+        // external edit lands between staging and replace -> last writer wins with complete content
+        await SafeFileWriter.WriteUtf8Async(target, "SAVED", beforeCommit: _ =>
+        {
+            File.WriteAllText(target, "EXTERNAL-DURING");
+            return Task.CompletedTask;
+        });
+        Check(File.ReadAllText(target) == "SAVED" && Temps(dir).Length == 0, "external-edit-during-stage-policy");
+
+        // cancellation before replace leaves destination untouched
+        var cts = new CancellationTokenSource();
+        try
+        {
+            await SafeFileWriter.WriteUtf8Async(target, "CANCELLED", cts.Token, beforeCommit: _ =>
+            {
+                cts.Cancel();
+                return Task.CompletedTask;
+            });
+            throw new Exception("FAIL cancel-should-throw");
+        }
+        catch (OperationCanceledException) { }
+        Check(File.ReadAllText(target) == "SAVED" && Temps(dir).Length == 0, "cancel-before-replace-leaves-original");
+
+        // interleaved saves: file is exactly one complete payload, no temp files
+        var race = Path.Combine(dir, "race.sql");
+        var payloads = Enumerable.Range(0, 8).Select(i => new string((char)('a' + i), 50_000 + i)).ToArray();
+        await Task.WhenAll(payloads.Select(p => Task.Run(() => SafeFileWriter.WriteUtf8Async(race, p))));
+        Check(payloads.Contains(File.ReadAllText(race)) && Temps(dir).Length == 0, "interleaved-saves-no-torn-file");
+
+        // directory missing: fail, nothing created
+        try
+        {
+            await SafeFileWriter.WriteUtf8Async(Path.Combine(dir, "missing", "x.sql"), "x");
+            throw new Exception("FAIL missing-dir-should-throw");
+        }
+        catch (DirectoryNotFoundException) { }
+        Check(!Directory.Exists(Path.Combine(dir, "missing")), "missing-dir-not-created");
+
+        if (!OperatingSystem.IsWindows())
+        {
+            // permissions preserved on replace
+            var perm = Path.Combine(dir, "perm.sql");
+            File.WriteAllText(perm, "old");
+            File.SetUnixFileMode(perm, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);
+            await SafeFileWriter.WriteUtf8Async(perm, "new");
+            Check(File.GetUnixFileMode(perm) == (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead), "permissions-preserved");
+
+            // symlink policy: write through to the target; the link survives
+            var real = Path.Combine(dir, "real.sql");
+            var link = Path.Combine(dir, "link.sql");
+            File.WriteAllText(real, "old");
+            File.CreateSymbolicLink(link, real);
+            await SafeFileWriter.WriteUtf8Async(link, "through");
+            Check(new FileInfo(link).LinkTarget is not null && File.ReadAllText(real) == "through" && File.ReadAllText(link) == "through" && Temps(dir).Length == 0, "symlink-written-through-link-preserved");
+
+            // dangling symlink: target created, link survives
+            var dangling = Path.Combine(dir, "dangling.sql");
+            var danglingTarget = Path.Combine(dir, "dangling-target.sql");
+            File.CreateSymbolicLink(dangling, danglingTarget);
+            await SafeFileWriter.WriteUtf8Async(dangling, "made");
+            Check(new FileInfo(dangling).LinkTarget is not null && File.ReadAllText(danglingTarget) == "made", "dangling-symlink-creates-target");
+        }
+        Pass("safe-file-writer");
+
+        // F4: export writer — one destination, siblings untouched
+        var exportDir = Path.Combine(dir, "export");
+        Directory.CreateDirectory(exportDir);
+        var results = Path.Combine(exportDir, "results.csv");
+        var sibling = Path.Combine(exportDir, "results-2.csv");
+        File.WriteAllText(results, "OLD1");
+        File.WriteAllText(sibling, "SIBLING");
+        var v1 = new ResultSetView { Columns = [new ResultColumn("a", "int")], Rows = [[ResultCell.Of("1")]] };
+        var v2 = new ResultSetView { Columns = [new ResultColumn("b", "int")], Rows = [[ResultCell.Of("2")]], Truncated = true };
+
+        var outcome = await ResultExportWriter.ExportAsync(results, ResultExportFormat.Csv, [v1]);
+        Check(File.ReadAllText(results) == "a\r\n1\r\n" && File.ReadAllText(sibling) == "SIBLING" && !outcome.Incomplete, "export-single-destination-sibling-untouched");
+
+        var truncOutcome = await ResultExportWriter.ExportAsync(results, ResultExportFormat.Csv, [v2]);
+        Check(truncOutcome.Incomplete, "export-reports-truncation");
+
+        try
+        {
+            await ResultExportWriter.ExportAsync(results, ResultExportFormat.Csv, [v1, v2]);
+            throw new Exception("FAIL csv-multi-set-should-throw");
+        }
+        catch (ArgumentException) { }
+        Check(File.ReadAllText(sibling) == "SIBLING" && File.ReadAllText(results).StartsWith("b", StringComparison.Ordinal), "csv-multi-set-refused-nothing-written");
+
+        var jsonPath = Path.Combine(exportDir, "results.json");
+        await ResultExportWriter.ExportAsync(jsonPath, ResultExportFormat.Json, [v1, v2]);
+        Check(System.Text.Json.JsonDocument.Parse(File.ReadAllText(jsonPath)).RootElement.GetProperty("resultSets").GetArrayLength() == 2 && File.ReadAllText(sibling) == "SIBLING", "export-json-multi-set-one-file");
+
+        var before = File.ReadAllText(results);
+        var exportCts = new CancellationTokenSource();
+        try
+        {
+            await ResultExportWriter.ExportAsync(results, ResultExportFormat.Csv, [v1], cancellationToken: exportCts.Token, beforeCommit: _ =>
+            {
+                exportCts.Cancel();
+                return Task.CompletedTask;
+            });
+            throw new Exception("FAIL export-cancel-should-throw");
+        }
+        catch (OperationCanceledException) { }
+        Check(File.ReadAllText(results) == before && File.ReadAllText(sibling) == "SIBLING" && Temps(dir).Length == 0, "export-cancel-leaves-files-untouched");
+
+        try
+        {
+            await ResultExportWriter.ExportAsync(results, ResultExportFormat.Csv, [v1], committer: new FailingCommitter());
+            throw new Exception("FAIL export-replace-failure-should-throw");
+        }
+        catch (IOException) { }
+        Check(File.ReadAllText(results) == before && File.ReadAllText(sibling) == "SIBLING" && Temps(dir).Length == 0, "export-replace-failure-preserves-files");
+
+        var safeOut = Path.Combine(exportDir, "safe.csv");
+        await ResultExportWriter.ExportAsync(safeOut, ResultExportFormat.Csv,
+            [new ResultSetView { Columns = [new ResultColumn("c", "nvarchar")], Rows = [[ResultCell.Of("=1+1")]] }],
+            new ResultExportOptions { SpreadsheetSafeCsv = true });
+        Check(File.ReadAllText(safeOut) == "c\r\n'=1+1\r\n", "export-spreadsheet-safe-option");
+        Pass("result-export-writer");
+    }
+    finally
+    {
+        Directory.Delete(dir, recursive: true);
+    }
+}
+
+
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
 Console.WriteLine("NOTE: live SqlDataReader decimal(38) against SQL Server remains provider-only / live-host verification.");
 return 0;
+
+sealed class FailingCommitter(Action<string>? onStaged = null) : IStagedFileCommitter
+{
+    public void Commit(string stagedPath, string destinationPath)
+    {
+        onStaged?.Invoke(stagedPath);
+        throw new IOException("simulated replace failure");
+    }
+}

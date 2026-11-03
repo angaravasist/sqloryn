@@ -30,7 +30,7 @@ Do **not** point at production. Use an isolated SQL Server with synthetic data.
 3. **GO batches** — `SELECT 1 AS a; GO SELECT 2 AS b;` → two result grids; Messages tab.
 4. **Selection run** — Highlight a subset; F5 runs selection only.
 5. **Cancel / timeout** — Long query → Cancel; status distinguishes request vs verified cancel / timeout / unobserved (Core-tested).
-6. **Export** — CSV/JSON of the active grid (NULL vs empty string rules in Core tests).
+6. **Export** — One save dialog per export, one file written (no derived `-2` siblings). CSV = the selected result tab (optional spreadsheet-safe variant prefixes formula-like text with `'`); JSON = columns by ordinal + row arrays, all sets in one document. Writes are staged and replaced atomically; failure/cancel leaves existing files untouched.
 7. **Design Table** — Object → Design Table → Preview DDL → Confirm → Apply (expect clear failure text on error).
 8. **Edit Top 200** — Requires primary key; conflict when another actor changed the row.
 

@@ -179,8 +179,11 @@ public partial class MainWindow
 
     // ---- Export ---------------------------------------------------------------------------
 
-    void OnExportCsv(object? sender, RoutedEventArgs e) => _ = ExportAsync(json: false);
-    void OnExportJson(object? sender, RoutedEventArgs e) => _ = ExportAsync(json: true);
+    void OnExportCsv(object? sender, RoutedEventArgs e) => _ = ExportAsync(ResultExportFormat.Csv, spreadsheetSafe: false);
+    void OnExportCsvSafe(object? sender, RoutedEventArgs e) => _ = ExportAsync(ResultExportFormat.Csv, spreadsheetSafe: true);
+    void OnExportJson(object? sender, RoutedEventArgs e) => _ = ExportAsync(ResultExportFormat.Json, spreadsheetSafe: false);
+
+    CancellationTokenSource? _exportCts;
 
     /// <summary>Result-set indexes to export: the selected result tab, or every result set when Messages is selected.</summary>
     List<int> ExportTargets(QueryResult result)
@@ -190,7 +193,12 @@ public partial class MainWindow
         return Enumerable.Range(0, result.ResultSets.Count).ToList();
     }
 
-    async Task ExportAsync(bool json)
+    /// <summary>
+    /// One export = one user-chosen file. No sibling names are derived, so no other file can be overwritten.
+    /// CSV holds a single result set (select its tab); JSON holds all sets for the scope in one document.
+    /// The write is staged beside the destination and replaced only if the active result is still the one exported.
+    /// </summary>
+    async Task ExportAsync(ResultExportFormat format, bool spreadsheetSafe)
     {
         if (_active?.LastResult is not { } result || result.ResultSets.Count == 0)
         {
@@ -199,7 +207,17 @@ public partial class MainWindow
         }
         var tab = _active;
         var targets = ExportTargets(result);
+        var json = format == ResultExportFormat.Json;
+        if (!json && targets.Count != 1)
+        {
+            StatusBar.Text = "CSV holds one result set per file: select a result tab, then export again (or export JSON for all sets).";
+            return;
+        }
+
         var extension = json ? "json" : "csv";
+        var cts = new CancellationTokenSource();
+        var previous = Interlocked.Exchange(ref _exportCts, cts);
+        try { previous?.Cancel(); } catch (ObjectDisposedException) { /* previous export already finished */ }
         try
         {
             var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
@@ -218,36 +236,46 @@ public partial class MainWindow
             var path = file?.TryGetLocalPath();
             if (path is null)
                 return;
-            // The user may have switched tabs or re-run while the picker was open.
-            if (!ReferenceEquals(_active, tab) || !ReferenceEquals(tab.LastResult, result))
+
+            bool Stale() => !ReferenceEquals(_active, tab) || !ReferenceEquals(tab.LastResult, result);
+            if (Stale())
             {
                 StatusBar.Text = "Export cancelled: the active result changed while choosing a file.";
                 return;
             }
 
-            var written = new List<string>();
-            var incomplete = false;
-            foreach (var (setIndex, n) in targets.Select((s, n) => (s, n)))
-            {
-                var target = n == 0
-                    ? path
-                    : Path.Combine(
-                        Path.GetDirectoryName(path) ?? "",
-                        $"{Path.GetFileNameWithoutExtension(path)}-{setIndex + 1}{Path.GetExtension(path)}");
-                var view = ResultSetView.FromResultSet(result.ResultSets[setIndex]);
-                incomplete |= view.Truncated;
-                var text = json ? JsonExporter.ToJson(view) : CsvExporter.ToCsv(view);
-                await File.WriteAllTextAsync(target, text, new UTF8Encoding(false));
-                written.Add(Path.GetFileName(target));
-            }
+            var views = targets.Select(i => ResultSetView.FromResultSet(result.ResultSets[i])).ToList();
+            var outcome = await ResultExportWriter.ExportAsync(
+                path,
+                format,
+                views,
+                new ResultExportOptions { SpreadsheetSafeCsv = spreadsheetSafe },
+                cts.Token,
+                beforeCommit: ct =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (Stale())
+                        throw new OperationCanceledException("The active result changed before the file was replaced.");
+                    return Task.CompletedTask;
+                });
 
-            StatusBar.Text = $"Exported {written.Count} file(s): {string.Join(", ", written)}" +
-                             (incomplete ? " — WARNING: retained rows were truncated, so the export is incomplete." : "") +
-                             (json ? " (JSON column types are not recorded; values are written as strings except NULL.)" : "");
+            StatusBar.Text = $"Exported {outcome.ResultSetCount} result set(s) to {outcome.Path}" +
+                             (outcome.Incomplete ? " — WARNING: retained rows were truncated, so the export is incomplete." : "") +
+                             (spreadsheetSafe ? " (spreadsheet-safe: formula-like text cells were prefixed with ')" : "") +
+                             (json ? " (JSON: columns by ordinal with SQL types; values are strings except NULL, int and bit.)" : "");
+        }
+        catch (OperationCanceledException)
+        {
+            StatusBar.Text = "Export cancelled: no file was changed.";
         }
         catch (Exception ex)
         {
-            ReportError("Export failed: " + ex.Message);
+            ReportError("Export failed (existing files were left unchanged): " + ex.Message);
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _exportCts, null, cts);
+            cts.Dispose();
         }
     }
 }

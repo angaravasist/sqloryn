@@ -7,7 +7,7 @@ This is an **initial outline, not a complete SSMS feature inventory**. Every men
 | Connectivity | SQL auth, Entra ID, TLS, connection profiles | Preview: SQL auth + mandatory TLS; saved profiles (no secrets in JSON); optional Keychain remember-password; Entra not implemented |
 | Object Explorer | Instances, databases, tables, views, procs, functions | Preview: databases → schemas → tables/views/procs → columns; properties read-only; live expand evidence pending |
 | Query editing | T-SQL IntelliSense, multiple tabs, scripts, GO | Preview: tabs + UTF-8 scripts + find/replace + GO batches; no IntelliSense |
-| Results | Grid, messages, multiple result sets, export | Preview: DataGrid per set + messages; CSV/JSON export; live fidelity evidence pending |
+| Results | Grid, messages, multiple result sets, export | Preview: DataGrid per set + messages; CSV/JSON export to one chosen file with staged atomic replace (PR #7 finding 4); ordinal-column JSON; opt-in spreadsheet-safe CSV; script save staged the same way (finding 5); live fidelity evidence pending |
 | Query diagnostics | Plans, profiling, statistics, cancellation | Preview: cancel + outcome mapping; no plans |
 | Data editing | Edit rows, generate scripts, table designer | Preview: Design Table (DDL preview/confirm) + Edit Top 200 (optimistic); live apply evidence pending |
 | Security administration | Logins, roles, permissions | Not implemented |
