@@ -14,43 +14,73 @@ public static class GoBatchSplitter
         BlockComment
     }
 
+    /// <summary>
+    /// Compatibility path: expands repeat counts into plain trimmed batch texts.
+    /// Throws <see cref="SqlScriptRejectedException"/> (an <see cref="ArgumentException"/>) for rejected scripts.
+    /// </summary>
     public static IReadOnlyList<string> Split(string sql)
     {
-        ArgumentNullException.ThrowIfNull(sql);
-        var batches = new List<string>();
-        Scan(sql, (text, count) =>
-        {
-            for (var i = 0; i < count; i++)
-            {
-                if (batches.Count >= MaxTotalBatches)
-                    throw new ArgumentException($"Script expands to more than {MaxTotalBatches} batches.");
-                batches.Add(text);
-            }
-        }, out _);
+        var script = Parse(sql);
+        var batches = new List<string>(script.ExpandedBatchCount);
+        foreach (var batch in script.Batches)
+            for (var i = 0; i < batch.RepeatCount; i++)
+                batches.Add(batch.Text);
         return batches;
     }
 
-    /// <summary>True when at least one line outside strings/comments is a GO separator.</summary>
-    public static bool ContainsSeparator(string sql)
+    /// <summary>
+    /// Preflight parse of the whole script. Returns batches with source spans, or throws
+    /// <see cref="SqlScriptRejectedException"/> (with line/offset) for SQLCMD directives, malformed GO lines,
+    /// or repeat counts beyond the bounds. Nothing is executed here.
+    /// </summary>
+    public static SqlScript Parse(string sql)
     {
         ArgumentNullException.ThrowIfNull(sql);
-        Scan(sql, static (_, _) => { }, out var found);
-        return found;
+        var batches = new List<SqlBatch>();
+        var expanded = 0;
+        var hasSeparator = false;
+        Scan(sql, (batch, location) =>
+        {
+            expanded += batch.RepeatCount;
+            if (expanded > MaxTotalBatches)
+                throw new SqlScriptRejectedException(SqlScriptRejectionKind.TooManyBatches,
+                    $"Script expands to more than {MaxTotalBatches} batches.", location);
+            batches.Add(batch);
+        }, out hasSeparator);
+        return new SqlScript(batches, hasSeparator, expanded);
     }
 
-    static void Scan(string sql, Action<string, int> emit, out bool foundSeparator)
+    /// <summary>True when at least one line outside strings/comments is a GO separator.</summary>
+    public static bool ContainsSeparator(string sql) => Parse(sql).HasSeparator;
+
+    static void Scan(string sql, Action<SqlBatch, SqlScriptLocation> emit, out bool foundSeparator)
     {
         foundSeparator = false;
+        var separatorSeen = false;
         var state = LexState.Normal;
         var blockDepth = 0;
         var batchStart = 0;
+        var batchStartLine = 1;
         var pos = 0;
+        var lineNo = 1;
 
-        void Flush(int end, int count)
+        // location = where a rejection caused by this emit is reported.
+        void Flush(int end, int count, SqlScriptLocation location)
         {
-            var text = sql.AsSpan(batchStart, end - batchStart).Trim().ToString();
-            if (text.Length > 0)
-                emit(text, count);
+            var raw = sql.AsSpan(batchStart, end - batchStart);
+            var trimmedStart = raw.Length - raw.TrimStart().Length;
+            var text = raw.Trim().ToString();
+            if (text.Length == 0)
+                return;
+            var line = batchStartLine;
+            for (var i = batchStart; i < batchStart + trimmedStart; i++)
+            {
+                if (sql[i] == '\n')
+                    line++;
+                else if (sql[i] == '\r' && !(i + 1 < sql.Length && sql[i + 1] == '\n'))
+                    line++;
+            }
+            emit(new SqlBatch(text, batchStart + trimmedStart, text.Length, line, count), location);
         }
 
         while (pos < sql.Length)
@@ -62,21 +92,50 @@ public static class GoBatchSplitter
             if (next < sql.Length)
                 next += sql[next] == '\r' && next + 1 < sql.Length && sql[next + 1] == '\n' ? 2 : 1;
 
-            var line = sql.AsSpan(pos, lineEnd - pos);
-            if (state == LexState.Normal && TryParseGoLine(line, out var count))
+            var lineSpan = sql.AsSpan(pos, lineEnd - pos);
+            if (state == LexState.Normal)
             {
-                foundSeparator = true;
-                Flush(pos, count);
-                batchStart = next;
-                pos = next;
-                continue;
+                var indent = lineSpan.Length - lineSpan.TrimStart().Length;
+                var lineLocation = new SqlScriptLocation(pos + indent, lineNo, indent + 1);
+                var trimmedLine = lineSpan.Trim();
+
+                if (trimmedLine.Length > 0 && trimmedLine[0] == ':')
+                {
+                    var nameEnd = 1;
+                    while (nameEnd < trimmedLine.Length && !char.IsWhiteSpace(trimmedLine[nameEnd]) && trimmedLine[nameEnd] != '(')
+                        nameEnd++;
+                    var name = trimmedLine[..nameEnd].ToString();
+                    throw new SqlScriptRejectedException(SqlScriptRejectionKind.SqlcmdDirective,
+                        $"SQLCMD directive '{name}' is not supported.", lineLocation);
+                }
+
+                var go = ClassifyGoLine(trimmedLine, out var count);
+                if (go == GoLine.Malformed)
+                    throw new SqlScriptRejectedException(SqlScriptRejectionKind.MalformedGo,
+                        "Malformed GO separator. Use 'GO', or 'GO <count>' with an optional -- comment.", lineLocation);
+                if (go == GoLine.RepeatOutOfRange)
+                    throw new SqlScriptRejectedException(SqlScriptRejectionKind.RepeatCountOutOfRange,
+                        $"GO repeat count must be between 1 and {MaxRepeatCount}.", lineLocation);
+                if (go == GoLine.Separator)
+                {
+                    separatorSeen = true;
+                    Flush(pos, count, lineLocation);
+                    batchStart = next;
+                    batchStartLine = lineNo + 1;
+                    pos = next;
+                    lineNo++;
+                    continue;
+                }
             }
 
-            ScanLine(line, ref state, ref blockDepth);
+            ScanLine(lineSpan, ref state, ref blockDepth);
             pos = next;
+            lineNo++;
         }
 
-        Flush(sql.Length, 1);
+        // Final batch: a rejection here is reported at the batch's own start.
+        Flush(sql.Length, 1, new SqlScriptLocation(batchStart, batchStartLine, 1));
+        foundSeparator = separatorSeen;
     }
 
     static void ScanLine(ReadOnlySpan<char> line, ref LexState state, ref int blockDepth)
@@ -148,34 +207,77 @@ public static class GoBatchSplitter
         }
     }
 
-    static bool TryParseGoLine(ReadOnlySpan<char> line, out int count)
+    enum GoLine { NotGo, Separator, Malformed, RepeatOutOfRange }
+
+    static GoLine ClassifyGoLine(ReadOnlySpan<char> trimmed, out int count)
     {
         count = 1;
-        var trimmed = line.Trim();
         if (trimmed.Length < 2 || !trimmed[..2].Equals("GO", StringComparison.OrdinalIgnoreCase))
-            return false;
+            return GoLine.NotGo;
         var rest = trimmed[2..];
         if (rest.Length == 0)
-            return true;
+            return GoLine.Separator;
+        if (rest.StartsWith("--", StringComparison.Ordinal))
+            return GoLine.Separator;
+        if (rest[0] == ';')
+            return GoLine.Malformed;
         if (!char.IsWhiteSpace(rest[0]))
-            return false;
+            return GoLine.NotGo; // GOTO, go.col, etc.
         rest = rest.TrimStart();
         if (rest.Length == 0 || rest.StartsWith("--", StringComparison.Ordinal))
-            return true;
+            return GoLine.Separator;
 
         var digits = 0;
         while (digits < rest.Length && rest[digits] is >= '0' and <= '9')
             digits++;
         if (digits == 0)
-            return false;
+            return GoLine.Malformed;
         var tail = rest[digits..].TrimStart();
         if (tail.Length > 0 && !tail.StartsWith("--", StringComparison.Ordinal))
-            return false;
+            return GoLine.Malformed;
         if (!int.TryParse(rest[..digits], System.Globalization.NumberStyles.None,
                 System.Globalization.CultureInfo.InvariantCulture, out var parsed) ||
             parsed is < 1 or > MaxRepeatCount)
-            throw new ArgumentException($"GO repeat count must be between 1 and {MaxRepeatCount}.");
+            return GoLine.RepeatOutOfRange;
         count = parsed;
-        return true;
+        return GoLine.Separator;
+    }
+}
+
+/// <summary>Source position (0-based UTF-16 offset, 1-based line and column) in the original script.</summary>
+public readonly record struct SqlScriptLocation(int Offset, int Line, int Column);
+
+/// <summary>
+/// One batch from the original script. <see cref="Start"/>/<see cref="Length"/> span the trimmed
+/// <see cref="Text"/> in the source; <see cref="RepeatCount"/> comes from a following <c>GO n</c>.
+/// </summary>
+public sealed record SqlBatch(string Text, int Start, int Length, int StartLine, int RepeatCount);
+
+/// <summary>Result of a preflight parse. <see cref="ExpandedBatchCount"/> is the sum of repeat counts.</summary>
+public sealed record SqlScript(IReadOnlyList<SqlBatch> Batches, bool HasSeparator, int ExpandedBatchCount);
+
+public enum SqlScriptRejectionKind
+{
+    SqlcmdDirective,
+    MalformedGo,
+    RepeatCountOutOfRange,
+    TooManyBatches
+}
+
+/// <summary>Raised by preflight before any batch is sent to the provider. Nothing was executed.</summary>
+public sealed class SqlScriptRejectedException : ArgumentException
+{
+    public SqlScriptRejectionKind Kind { get; }
+    public int Offset { get; }
+    public int Line { get; }
+    public int Column { get; }
+
+    public SqlScriptRejectedException(SqlScriptRejectionKind kind, string reason, SqlScriptLocation location)
+        : base($"Script rejected at line {location.Line}, column {location.Column} (offset {location.Offset}): {reason} Nothing was executed.")
+    {
+        Kind = kind;
+        Offset = location.Offset;
+        Line = location.Line;
+        Column = location.Column;
     }
 }
