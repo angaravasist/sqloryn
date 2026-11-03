@@ -1218,6 +1218,8 @@ Pass("explorer-ownership");
         Check(Id(pin: "/a.crt").Matches(Id(pin: " /a.crt ")) && !Id(pin: "/a.crt").Matches(Id(pin: "/b.crt")), "identity-pin-compare");
         Pass("endpoint-identity");
     }
+}
+
 // Edit rows: transactional batch (PR #7 finding 3)
 {
     var tbl = new TableRef("App", "dbo", "Orders");
