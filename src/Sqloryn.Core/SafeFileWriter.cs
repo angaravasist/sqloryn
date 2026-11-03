@@ -20,8 +20,9 @@ public interface IStagedFileCommitter
 /// <item>Permission policy: an existing destination's Unix mode is copied to the staged file; new files use the
 /// process default (umask-governed) mode. Ownership, ACLs, xattrs and hard links are not preserved (rename
 /// semantics: a hard-linked destination is detached from its other names).</item>
-/// <item>Concurrency policy: last writer wins with a complete file. There is no external-modification detection;
-/// interleaved saves each stage under unique names, so the result is exactly one writer's full payload.</item>
+/// <item>Concurrency policy: last writer wins with a complete file. This writer does no external-modification
+/// detection itself; <see cref="ScriptDocument.SaveAsync"/> does it via <c>beforeCommit</c> (fingerprint check just
+/// before the rename). Interleaved saves each stage under unique names, so the result is exactly one writer's full payload.</item>
 /// <item>The directory must already exist; it is never created. A hard crash can leave a hidden
 /// <c>.name.GUID.tmp</c> file beside the destination.</item>
 /// </list>

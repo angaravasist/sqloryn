@@ -4,6 +4,7 @@ namespace Sqloryn.Core;
 public sealed class ScriptDocument
 {
     long _version;
+    TrackedDiskState? _disk;
 
     public string? FilePath { get; private set; }
     public string Text { get; private set; } = "";
@@ -16,14 +17,22 @@ public sealed class ScriptDocument
         FilePath = null;
         Text = "";
         IsDirty = false;
+        _disk = null;
         _version++;
     }
 
-    public void LoadFrom(string path, string text)
+    /// <summary>
+    /// Replaces the buffer with <paramref name="text"/> read from <paramref name="path"/>.
+    /// Pass the <paramref name="fingerprint"/> of the exact bytes that were read (see <see cref="ReadFileAsync"/>);
+    /// when omitted, the file's current bytes are fingerprinted now (a file that does not exist is tracked as missing).
+    /// </summary>
+    public void LoadFrom(string path, string text, FileFingerprint? fingerprint = null)
     {
         FilePath = path;
         Text = text;
         IsDirty = false;
+        var resolved = SafeFileWriter.ResolveDestination(path);
+        _disk = new TrackedDiskState(resolved, fingerprint ?? FileFingerprint.TryCapture(resolved));
         _version++;
     }
 
@@ -45,11 +54,12 @@ public sealed class ScriptDocument
 
     /// <summary>Snapshot for deferred Open/Quit commit or rollback.</summary>
     public DocumentSnapshot CaptureSnapshot()
-        => new(FilePath, Text, IsDirty, _version);
+        => new(FilePath, Text, IsDirty, _version, _disk);
 
     public void RestoreSnapshot(DocumentSnapshot snapshot)
     {
         FilePath = snapshot.FilePath;
+        _disk = snapshot.Disk;
         Text = snapshot.Text;
         IsDirty = snapshot.IsDirty;
         _version = snapshot.Version + 1;
@@ -57,8 +67,20 @@ public sealed class ScriptDocument
 
     public async Task LoadFileAsync(string path, CancellationToken cancellationToken = default)
     {
-        var text = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
-        LoadFrom(path, text);
+        var (text, fingerprint) = await ReadFileAsync(path, cancellationToken).ConfigureAwait(false);
+        LoadFrom(path, text, fingerprint);
+    }
+
+    /// <summary>
+    /// Reads file text and the fingerprint of the exact bytes decoded, without mutating any document.
+    /// Commit with <see cref="LoadFrom"/> so later saves can detect external edits.
+    /// </summary>
+    public static async Task<(string Text, FileFingerprint Fingerprint)> ReadFileAsync(
+        string path, CancellationToken cancellationToken = default)
+    {
+        var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        using var reader = new StreamReader(new MemoryStream(bytes), detectEncodingFromByteOrderMarks: true);
+        return (reader.ReadToEnd(), FileFingerprint.FromBytes(bytes));
     }
 
     /// <summary>
@@ -66,37 +88,69 @@ public sealed class ScriptDocument
     /// Caller commits via <see cref="LoadFrom"/> only after Open succeeds.
     /// </summary>
     public static async Task<string> ReadFileTextAsync(string path, CancellationToken cancellationToken = default)
-        => await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+        => (await ReadFileAsync(path, cancellationToken).ConfigureAwait(false)).Text;
 
+    /// <summary>
+    /// Stages then replaces the file. When the target is the file this document last loaded/saved and its on-disk
+    /// bytes changed since, throws <see cref="ExternalDocumentChangedException"/> before the replace, leaving the
+    /// external content and this buffer (still dirty) untouched. <paramref name="forceSave"/> skips that check
+    /// (explicit overwrite after user confirmation). The check runs right before the final rename; a write landing
+    /// in the remaining instant between check and rename cannot be detected without OS file locking.
+    /// </summary>
     public async Task SaveAsync(
         string? path = null,
         CancellationToken cancellationToken = default,
         Func<string, string, CancellationToken, Task>? writer = null,
-        Func<Task>? betweenCaptureAndWrite = null)
+        Func<Task>? betweenCaptureAndWrite = null,
+        bool forceSave = false)
     {
         var target = path ?? FilePath ?? throw new InvalidOperationException("Save path is required.");
         var snapshot = Text;
         var version = _version;
         if (betweenCaptureAndWrite is not null)
             await betweenCaptureAndWrite().ConfigureAwait(false);
-        try
+        FileFingerprint? written;
+        if (writer is null)
         {
-            if (writer is null)
-                await SafeFileWriter.WriteUtf8Async(target, snapshot, cancellationToken).ConfigureAwait(false);
-            else
-                await writer(target, snapshot, cancellationToken).ConfigureAwait(false);
+            await SafeFileWriter.WriteUtf8Async(
+                target,
+                snapshot,
+                cancellationToken,
+                beforeCommit: _ =>
+                {
+                    VerifyUnchangedOnDisk(target, forceSave);
+                    return Task.CompletedTask;
+                }).ConfigureAwait(false);
+            written = FileFingerprint.FromBytes(new System.Text.UTF8Encoding(false).GetBytes(snapshot));
         }
-        catch
+        else
         {
-            throw;
+            VerifyUnchangedOnDisk(target, forceSave);
+            await writer(target, snapshot, cancellationToken).ConfigureAwait(false);
+            written = FileFingerprint.TryCapture(SafeFileWriter.ResolveDestination(target));
         }
 
-        CommitSave(target, snapshot, version);
+        CommitSave(target, snapshot, version, written);
+    }
+
+    void VerifyUnchangedOnDisk(string target, bool forceSave)
+    {
+        if (forceSave || _disk is null)
+            return;
+        var resolved = SafeFileWriter.ResolveDestination(target);
+        if (!string.Equals(resolved, _disk.ResolvedPath, StringComparison.Ordinal))
+            return; // Save As to a different file: not the one we are tracking.
+        if (FileFingerprint.TryCapture(resolved) != _disk.Fingerprint)
+            throw new ExternalDocumentChangedException(target);
     }
 
     public void CommitSave(string path, string snapshot, long versionAtCapture)
+        => CommitSave(path, snapshot, versionAtCapture, FileFingerprint.TryCapture(SafeFileWriter.ResolveDestination(path)));
+
+    void CommitSave(string path, string snapshot, long versionAtCapture, FileFingerprint? writtenFingerprint)
     {
         FilePath = path;
+        _disk = new TrackedDiskState(SafeFileWriter.ResolveDestination(path), writtenFingerprint);
         if (_version == versionAtCapture && Text == snapshot)
             IsDirty = false;
     }
@@ -105,7 +159,8 @@ public sealed class ScriptDocument
         => !string.IsNullOrEmpty(selection) ? selection : document;
 }
 
-public readonly record struct DocumentSnapshot(string? FilePath, string Text, bool IsDirty, long Version);
+public readonly record struct DocumentSnapshot(
+    string? FilePath, string Text, bool IsDirty, long Version, TrackedDiskState? Disk = null);
 
 /// <summary>Deferred dirty resolution: destructive changes apply only on commit.</summary>
 public static class DocumentLifecycle
@@ -198,11 +253,12 @@ public static class DocumentLifecycle
         ScriptDocument document,
         string path,
         string fileText,
-        long versionAtReadStart)
+        long versionAtReadStart,
+        FileFingerprint? fingerprint = null)
     {
         if (document.Version != versionAtReadStart)
             return false;
-        document.LoadFrom(path, fileText);
+        document.LoadFrom(path, fileText, fingerprint);
         return true;
     }
 

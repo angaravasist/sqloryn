@@ -586,7 +586,7 @@ public partial class MainWindow : Window
         var versionAtReadStart = tab.Document.Version;
         try
         {
-            var text = await ScriptDocument.ReadFileTextAsync(path);
+            var (text, fingerprint) = await ScriptDocument.ReadFileAsync(path);
             if (!OwnerStillCurrent(tab, binding))
             {
                 if (pending is not null)
@@ -596,7 +596,7 @@ public partial class MainWindow : Window
             // Pull any intervening editor edits into the document first.
             if (ReferenceEquals(tab, _active))
                 tab.Document.SetText(Editor.Text ?? "");
-            if (!DocumentLifecycle.TryCommitOpenReplacement(tab.Document, path, text, versionAtReadStart))
+            if (!DocumentLifecycle.TryCommitOpenReplacement(tab.Document, path, text, versionAtReadStart, fingerprint))
             {
                 if (pending is not null)
                     DocumentLifecycle.Rollback([pending]);
@@ -660,6 +660,15 @@ public partial class MainWindow : Window
                     : $"Saved {tab.Document.Title}";
             // Proceed only when the originating document is clean after save.
             return !tab.Document.IsDirty;
+        }
+        catch (ExternalDocumentChangedException ex)
+        {
+            // File changed on disk since open/last save: nothing was written, the external content is intact,
+            // and the buffer stays dirty. No overwrite path is offered silently; use Save As to keep this text.
+            if (ReferenceEquals(_active, tab))
+                StatusBar.Text = SafeUi(ex.Message + " Your unsaved text is kept; use Save As to write it elsewhere.");
+            RefreshHeader(tab);
+            return false;
         }
         catch (Exception ex)
         {
