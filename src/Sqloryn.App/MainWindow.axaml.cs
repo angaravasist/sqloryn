@@ -405,6 +405,7 @@ public partial class MainWindow : Window
         var tab = _active;
         CaptureSelection();
         var sql = tab.BatchToRun;
+        var origin = tab.BatchOrigin;
         if (string.IsNullOrWhiteSpace(sql))
         {
             StatusBar.Text = "Nothing to run.";
@@ -435,7 +436,7 @@ public partial class MainWindow : Window
             UpdateStatus();
         try
         {
-            var result = await tab.Session.ExecuteAsync(sql, cts.Token);
+            var result = await tab.Session.ExecuteAsync(sql, origin, cts.Token);
             if (!OwnerStillCurrent(tab, binding))
                 return;
             tab.LastResult = result;
@@ -817,6 +818,7 @@ public partial class MainWindow : Window
         var start = Math.Clamp(Math.Min(Editor.SelectionStart, Editor.SelectionEnd), 0, text.Length);
         var end = Math.Clamp(Math.Max(Editor.SelectionStart, Editor.SelectionEnd), 0, text.Length);
         _active.Selection = start == end ? null : text[start..end];
+        _active.SelectionStart = start;
         UpdateRunMode();
     }
 

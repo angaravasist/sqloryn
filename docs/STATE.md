@@ -31,7 +31,7 @@ Statuses below distinguish **component-tested** from **acceptance-complete**. In
 | 4 | **Partial** — export destination + types | Core `export-from-resultset-types` PASS; independent verifier must recheck integrated UI export path (D1) |
 | 5 | **Open (reopened)** — staged save without external-edit gate | Verifier D2: external file edit must survive Save |
 | 6 | **Partial** — bounded QueryRaw | Core PASS; live MAX/xml **unverified** |
-| 7 | **Open (reopened)** — preflight exists; selection→document line mapping incomplete | Verifier D5: error in selected batch must cite document line |
+| 7 | **Component-fixed (local, unmerged)** — preflight maps selection→document line/offset via `ScriptExecutionOrigin`; Core tests `d5-*` PASS; no live GUI run | Verifier D5: error in selected batch must cite document line |
 | 8–12 | **Partial** — shell implemented | Build only; VoiceOver / light-dark mid-session / Finder launch **unverified** |
 | 13 | **Partial** — new-tab script SELECT | Core PASS; UI click path **unverified** |
 | 14 | **Open** — OE truncation only | Keys, indexes, functions still incomplete |

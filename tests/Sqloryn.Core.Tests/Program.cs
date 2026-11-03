@@ -804,6 +804,82 @@ Pass("explorer-ownership");
     }
 }
 
+// D5: rejection locations are reported against the whole document, not the run selection.
+{
+    var executed = new List<string>();
+    await using var session = new SqlSession
+    {
+        BatchExecutorForTests = (text, _, _) =>
+        {
+            executed.Add(text);
+            return Task.FromResult(new QueryResult { ExecutedSql = text, Server = "s", Database = "d", Completion = QueryCompletionKind.Succeeded });
+        }
+    };
+
+    var prefix = string.Concat(Enumerable.Repeat("\n", 50)); // document lines 1..50 are blank
+    var selection = ":setvar Name Value\nSELECT 1";
+    var document = prefix + selection + "\nSELECT 2";
+    var selectionStart = prefix.Length;
+    var origin = ScriptExecutionOrigin.FromDocument(document, selectionStart);
+    Check(origin.DocumentLineOffset == 50 && origin.DocumentOffset == 50, "d5-origin-from-document");
+
+    // Selection on document line 51: :setvar is the selection's first line.
+    try
+    {
+        await session.ExecuteAsync(selection, origin);
+        throw new Exception("FAIL d5-setvar-not-rejected");
+    }
+    catch (SqlScriptRejectedException ex)
+    {
+        Check(ex.Line == 51, "d5-setvar-document-line");
+        Check(ex.Offset == selectionStart, "d5-setvar-document-offset");
+        Check(ex.SelectionLine == 1 && ex.SelectionOffset == 0, "d5-setvar-selection-relative-kept");
+        Check(ex.Message.Contains("line 51,", StringComparison.Ordinal), "d5-setvar-message-document-line");
+        Check(document.AsSpan(ex.Offset).StartsWith(":setvar", StringComparison.Ordinal), "d5-setvar-offset-points-at-directive");
+    }
+
+    // GO rejected mid-selection: selection starts on document line 11 (10 lines before).
+    var doc2 = string.Concat(Enumerable.Repeat("-- pad\n", 10)) + "SELECT 1\nGO\nSELECT 2\nGO nonsense\nSELECT 3";
+    var start2 = doc2.IndexOf("SELECT 1", StringComparison.Ordinal);
+    var sel2 = doc2[start2..];
+    var origin2 = ScriptExecutionOrigin.FromDocument(doc2, start2);
+    Check(origin2.DocumentLineOffset == 10, "d5-origin-line-offset");
+    try
+    {
+        await session.ExecuteAsync(sel2, origin2);
+        throw new Exception("FAIL d5-go-not-rejected");
+    }
+    catch (SqlScriptRejectedException ex)
+    {
+        Check(ex.Kind == SqlScriptRejectionKind.MalformedGo, "d5-go-kind");
+        Check(ex.SelectionLine == 4, "d5-go-selection-line");
+        Check(ex.Line == 14, "d5-go-document-line");
+        Check(doc2.AsSpan(ex.Offset).StartsWith("GO nonsense", StringComparison.Ordinal), "d5-go-offset-points-at-go");
+        Check(ex.Message.Contains("line 14,", StringComparison.Ordinal), "d5-go-message-document-line");
+    }
+    Check(executed.Count == 0, "d5-nothing-executed");
+
+    // CRLF documents and column on a mid-line selection start.
+    var doc3 = "a\r\nb\r\n  :r x";
+    var origin3 = ScriptExecutionOrigin.FromDocument(doc3, doc3.IndexOf(":r", StringComparison.Ordinal));
+    Check(origin3.DocumentLineOffset == 2, "d5-origin-crlf");
+    var doc4 = "SELECT 1; :r x";
+    var start4 = doc4.IndexOf(":r", StringComparison.Ordinal);
+    var origin4 = ScriptExecutionOrigin.FromDocument(doc4, start4);
+    Check(origin4.DocumentLineOffset == 0 && origin4.DocumentColumnOffset == start4, "d5-origin-column");
+    try { await session.ExecuteAsync(doc4[start4..], origin4); throw new Exception("FAIL d5-column"); }
+    catch (SqlScriptRejectedException ex) { Check(ex.Line == 1 && ex.Column == start4 + 1 && ex.Offset == start4, "d5-first-line-column-shifted"); }
+
+    // No origin: behaviour unchanged (selection-relative == document-relative).
+    try { await session.ExecuteAsync("SELECT 1\nGO\n:r x", (ScriptExecutionOrigin?)null); throw new Exception("FAIL d5-null-origin"); }
+    catch (SqlScriptRejectedException ex) { Check(ex.Line == 3 && ex.SelectionLine == 3, "d5-null-origin-unchanged"); }
+
+    // Origin must not be able to produce negative locations.
+    try { _ = new ScriptExecutionOrigin(-1, 0); throw new Exception("FAIL d5-negative-origin"); }
+    catch (ArgumentOutOfRangeException) { }
+    Pass("d5-document-relative-rejection");
+}
+
 // Connection profiles
 {
     var root = Path.Combine(Path.GetTempPath(), "sqloryn-tests-" + Guid.NewGuid().ToString("N"));

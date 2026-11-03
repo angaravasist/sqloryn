@@ -32,7 +32,10 @@ exclusive with TrustServerCertificate. `GO` batch separators are split by
 `GoBatchSplitter.Parse`, which returns batches with source spans and runs as a
 preflight over the whole selection before batch 1: SQLCMD directives (`:setvar`,
 `:r`, ...), malformed `GO` lines and out-of-bounds repeat counts throw
-`SqlScriptRejectedException` (line/column/offset) and nothing executes.
+`SqlScriptRejectedException` (line/column/offset) and nothing executes. When only
+a selection runs, `SqlSession.ExecuteAsync(sql, ScriptExecutionOrigin, ct)` maps
+the rejection to document coordinates (`Line`/`Offset`/`Column`, 1-based line);
+the selection-relative values stay in `SelectionLine`/`SelectionOffset`.
 `$(var)` substitution is not interpreted or rejected. The App uses Avalonia.Controls.DataGrid 12.1.2 (12.1.4 is not
 published on nuget.org). See [current and historical test evidence](STATE.md) for the distinction between the previously exercised arm64 desktop connection and the unverified live workflows on this branch.
 
