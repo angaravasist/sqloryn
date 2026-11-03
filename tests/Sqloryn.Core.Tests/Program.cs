@@ -1641,6 +1641,42 @@ Pass("explorer-ownership");
     }
 }
 
+// F13: scripting an object opens a NEW tab; never appends to the active (possibly dirty) editor
+{
+    var plan = ScriptFromObjectPlan.Create("SalesDb", false, "SalesDb", "dbo", "Orders");
+    Check(plan.NewTab, "script-plan-new-tab");
+    Check(plan.Sql == SqlIdentity.ScriptSelectTop("SalesDb", "dbo", "Orders"), "script-plan-sql-select-only");
+    var dirtyBuffer = "UPDATE x SET y = 1 -- unsaved\n";
+    Check(!plan.Sql.Contains("UPDATE") && !plan.Sql.StartsWith(dirtyBuffer, StringComparison.Ordinal), "script-plan-not-concatenated-with-dirty-buffer");
+    Check(plan.TargetDatabase == "SalesDb" && !plan.RequiresDatabaseChange, "script-plan-same-database");
+
+    var other = ScriptFromObjectPlan.Create("master", false, "SalesDb", "dbo", "Orders");
+    Check(other.NewTab && other.TargetDatabase == "SalesDb" && other.RequiresDatabaseChange, "script-plan-other-database-needs-change");
+    Check(!ScriptFromObjectPlan.Create("SALESDB", false, "salesdb", "dbo", "o").RequiresDatabaseChange, "script-plan-database-case-insensitive");
+    Check(ScriptFromObjectPlan.Create("SalesDb", true, "SalesDb", "dbo", "Orders").RequiresDatabaseChange, "script-plan-unknown-target-forces-change");
+    Check(ScriptFromObjectPlan.Create(null, false, "SalesDb", "dbo", "Orders").RequiresDatabaseChange, "script-plan-no-session-db-forces-change");
+
+    var hostile = ScriptFromObjectPlan.Create("master", false, "A]B", "s]x", "t]; DROP TABLE z;--");
+    Check(hostile.Sql.Contains("[t]]; DROP TABLE z;--]", StringComparison.Ordinal) && hostile.TargetDatabase == "A]B", "script-plan-quotes-identifiers");
+    foreach (var bad in new (string?, string?, string?)[] { (null, "s", "o"), ("d", null, "o"), ("d", "s", null), ("", "s", "o") })
+    {
+        try
+        {
+            ScriptFromObjectPlan.Create("d", false, bad.Item1, bad.Item2, bad.Item3);
+            throw new Exception("FAIL script-plan-incomplete-identity");
+        }
+        catch (ArgumentException) { }
+    }
+    Pass("script-from-object-plan");
+
+    // Object Explorer truncation honesty
+    Check(CatalogTruncation.Describe(5, false, false) is null, "oe-truncation-none");
+    var capped = CatalogTruncation.Describe(5000, true, false);
+    Check(capped is not null && capped.Contains("5000") && capped.Contains("truncated", StringComparison.OrdinalIgnoreCase), "oe-truncation-row-cap");
+    var budget = CatalogTruncation.Describe(12, true, true);
+    Check(budget is not null && budget.Contains("12") && budget.Contains("budget", StringComparison.OrdinalIgnoreCase), "oe-truncation-byte-budget");
+    Pass("oe-truncation-honesty");
+}
 
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
 Console.WriteLine("NOTE: live SqlDataReader decimal(38) against SQL Server remains provider-only / live-host verification.");

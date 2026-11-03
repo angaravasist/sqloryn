@@ -41,7 +41,7 @@ public partial class MainWindow : Window
         public string? Schema { get; } = schema;
         public string? ObjectName { get; } = objectName;
         /// <summary>Extra read-only text shown in the properties panel.</summary>
-        public string? Info { get; init; }
+        public string? Info { get; set; }
         public ObservableCollection<TreeNode> Children { get; } = [];
         public bool Loaded { get; set; }
         public bool Loading { get; set; }
@@ -165,14 +165,15 @@ public partial class MainWindow : Window
         }
     }
 
-    void AddTab()
+    QueryTab AddTab(QueryTab? existing = null)
     {
-        var tab = new QueryTab();
+        var tab = existing ?? new QueryTab();
         _tabs.Add(tab);
         var item = new TabItem { Header = tab.Header, Tag = tab };
         QueryTabs.Items.Add(item);
         QueryTabs.SelectedItem = item;
         ActivateTab(tab);
+        return tab;
     }
 
     void ActivateTab(QueryTab tab)
@@ -870,7 +871,7 @@ public partial class MainWindow : Window
             return;
         if (node.Kind is "table" or "view")
         {
-            InsertSelectScript(node);
+            await ScriptSelectInNewTabAsync(node);
             return;
         }
         await ExpandNodeAsync(node);
@@ -909,44 +910,101 @@ public partial class MainWindow : Window
         Line(node.Kind == "column" ? "Table" : "Name", node.Kind == "column" || node.Kind is "table" or "view" or "procedure" ? node.ObjectName : null);
         if (node.Kind is "table" or "view" && node.Database is not null && node.Schema is not null && node.ObjectName is not null)
             Line("Qualified", SqlIdentity.Qualify3(node.Database, node.Schema, node.ObjectName));
+        var loadedCount = node.Children.Count(c => c.Kind != "placeholder").ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (node.Kind is "table" or "view" && node.Loaded)
-            Line("Columns", node.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            Line("Columns", loadedCount);
         if (node.Kind is "tables" or "views" or "procedures" && node.Loaded)
-            Line("Items", node.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            Line("Items", loadedCount);
         if (!string.IsNullOrEmpty(node.Info))
             sb.Append('\n').Append(node.Info).Append('\n');
         return sb.ToString().TrimEnd();
     }
 
-    void OnScriptSelect(object? sender, RoutedEventArgs e)
+    async void OnScriptSelect(object? sender, RoutedEventArgs e)
     {
         if (SelectedNode is not { } node || _active is null)
             return;
         if (node.Kind is not ("table" or "view") || node.Database is null || node.Schema is null || node.ObjectName is null)
         {
-            StatusBar.Text = "Select a table or view to insert a quoted SELECT.";
+            StatusBar.Text = "Select a table or view to script a quoted SELECT into a new tab.";
             return;
         }
-        InsertSelectScript(node);
+        await ScriptSelectInNewTabAsync(node);
     }
 
-    void InsertSelectScript(TreeNode node)
+    bool _scriptTabInFlight;
+
+    /// <summary>
+    /// Opens a NEW tab holding only the generated SELECT. The originating tab's document, dirty state and
+    /// selection are not touched. The new tab gets its own session, bound to the object's database.
+    /// </summary>
+    async Task ScriptSelectInNewTabAsync(TreeNode node)
     {
-        if (_active is null || node.Database is null || node.Schema is null || node.ObjectName is null)
+        if (_active is null || _scriptTabInFlight)
             return;
-        var tab = _active;
-        var sql = SqlIdentity.ScriptSelectTop(node.Database, node.Schema, node.ObjectName);
-        Editor.Text = (Editor.Text ?? "") + sql;
-        tab.Document.SetText(Editor.Text);
-        RefreshHeader(tab);
-        StatusBar.Text = "Inserted " + SqlIdentity.Qualify3(node.Database, node.Schema, node.ObjectName);
+        var source = _active;
+        var sourceBinding = source.CaptureBinding();
+        var session = source.Session;
+        ScriptFromObjectPlan plan;
+        try
+        {
+            plan = ScriptFromObjectPlan.Create(session.Database, session.TargetUnknown, node.Database, node.Schema, node.ObjectName);
+        }
+        catch (ArgumentException)
+        {
+            StatusBar.Text = "Incomplete object identity; cannot script.";
+            return;
+        }
+        var options = session.IsConnected ? session.CreateSiblingOptions(plan.TargetDatabase) : null;
+        if (options is null)
+        {
+            StatusBar.Text = "Connect first to script an object into a new tab.";
+            return;
+        }
+
+        _scriptTabInFlight = true;
+        var created = new QueryTab();
+        var adopted = false;
+        try
+        {
+            StatusBar.Text = "Opening script tab…";
+            await created.Session.ConnectAsync(options);
+            // The sibling session must target the originating database before any SQL can run in it.
+            if (!string.Equals(created.Session.Database, plan.TargetDatabase, StringComparison.OrdinalIgnoreCase))
+                await created.Session.ChangeDatabaseAsync(plan.TargetDatabase);
+            if (!string.Equals(created.Session.Database, plan.TargetDatabase, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("New tab could not be bound to the originating database.");
+            if (_closeApproved || !OwnerStillCurrent(source, sourceBinding))
+            {
+                StatusBar.Text = "Script tab discarded: source tab/session changed.";
+                return;
+            }
+            // Preserve the source editor text before the editor swaps documents.
+            if (ReferenceEquals(_active, source))
+                source.Document.SetText(Editor.Text ?? "");
+            created.Document.DiscardChangesTo(plan.Sql);
+            created.Status = $"Connected · SQL Server {created.Session.ServerVersion}";
+            AddTab(created);
+            adopted = true;
+            StatusBar.Text = "Scripted " + SqlIdentity.Qualify3(plan.TargetDatabase, node.Schema!, node.ObjectName!) + " into a new tab.";
+        }
+        catch (Exception ex)
+        {
+            ReportError("Script tab failed: " + ex.Message);
+        }
+        finally
+        {
+            _scriptTabInFlight = false;
+            if (!adopted)
+                await created.DisposeAsync();
+        }
     }
 
     /// <summary>
     /// Fetches children off the UI-thread-bound tree, then rejects the result if the tab, session,
     /// database or generation changed while the query was in flight.
     /// </summary>
-    async Task LoadChildrenAsync(TreeNode node, QueryTab tab, OperationBinding binding, Func<Task<List<TreeNode>>> fetch)
+    async Task LoadChildrenAsync(TreeNode node, QueryTab tab, OperationBinding binding, Func<Task<(List<TreeNode> Children, string? TruncationNote)>> fetch)
     {
         if (node.Loading)
             return;
@@ -954,9 +1012,10 @@ public partial class MainWindow : Window
         node.Children.Clear();
         node.Children.Add(new TreeNode("Loading…", "placeholder", node.Database, node.Schema, node.ObjectName));
         List<TreeNode> children;
+        string? truncationNote;
         try
         {
-            children = await fetch();
+            (children, truncationNote) = await fetch();
         }
         catch
         {
@@ -977,6 +1036,13 @@ public partial class MainWindow : Window
         node.Children.Clear();
         foreach (var child in children)
             node.Children.Add(child);
+        node.Info = truncationNote;
+        if (truncationNote is not null)
+        {
+            // Never present a capped catalog read as the complete list.
+            node.Children.Add(new TreeNode("… (truncated)", "placeholder", node.Database, node.Schema, node.ObjectName) { Info = truncationNote });
+            StatusBar.Text = "Object explorer: " + truncationNote;
+        }
         node.Loaded = true;
         if (ReferenceEquals(SelectedNode, node))
             PropertiesBox.Text = DescribeNode(node);
@@ -1011,7 +1077,7 @@ public partial class MainWindow : Window
                     await LoadChildrenAsync(node, tab, binding, async () =>
                     {
                         var schemas = await CatalogClient.ListSchemasAsync(session, db);
-                        return schemas.Select(s => WithPlaceholder(new TreeNode(s, "schema", db, s))).ToList();
+                        return (schemas.Items.Select(s => WithPlaceholder(new TreeNode(s, "schema", db, s))).ToList(), schemas.TruncationNote);
                     });
                     break;
 
@@ -1019,12 +1085,12 @@ public partial class MainWindow : Window
                 {
                     // Folders are static; the catalog query runs when a folder expands.
                     var schema = node.Schema;
-                    await LoadChildrenAsync(node, tab, binding, () => Task.FromResult(new List<TreeNode>
+                    await LoadChildrenAsync(node, tab, binding, () => Task.FromResult((new List<TreeNode>
                     {
                         WithPlaceholder(new TreeNode("Tables", "tables", db, schema)),
                         WithPlaceholder(new TreeNode("Views", "views", db, schema)),
                         WithPlaceholder(new TreeNode("Programmability · Procedures", "procedures", db, schema))
-                    }));
+                    }, (string?)null)));
                     break;
                 }
 
@@ -1041,11 +1107,11 @@ public partial class MainWindow : Window
                             _ => await CatalogClient.ListProceduresAsync(session, db, schema)
                         };
                         var childKind = kind switch { "tables" => "table", "views" => "view", _ => "procedure" };
-                        return names.Select(n =>
+                        return (names.Items.Select(n =>
                         {
                             var child = new TreeNode(n, childKind, db, schema, n);
                             return childKind == "procedure" ? child : WithPlaceholder(child);
-                        }).ToList();
+                        }).ToList(), names.TruncationNote);
                     });
                     break;
                 }
@@ -1056,13 +1122,13 @@ public partial class MainWindow : Window
                     var table = node.ObjectName;
                     await LoadChildrenAsync(node, tab, binding, async () =>
                     {
-                        var columns = await CatalogClient.ListColumnsAsync(session, db, schema, table);
-                        return columns.Select(c => new TreeNode(
+                        var columns = await CatalogClient.ListColumnsPageAsync(session, db, schema, table);
+                        return (columns.Items.Select(c => new TreeNode(
                             $"{c.Name} : {c.TypeDisplay}{(c.IsNullable ? "" : " · NOT NULL")}{(c.IsIdentity ? " · identity" : "")}",
                             "column", db, schema, table)
                         {
                             Info = $"Column   {c.Name}\nType     {c.TypeDisplay}\nNullable {(c.IsNullable ? "yes" : "no")}\nIdentity {(c.IsIdentity ? "yes" : "no")}"
-                        }).ToList();
+                        }).ToList(), columns.TruncationNote);
                     });
                     break;
                 }

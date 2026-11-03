@@ -34,8 +34,8 @@
       </MenuItem>
       <MenuItem Header="_Object">
         <MenuItem Header="_Expand Selected" Name="MenuExpand" HotKey="Ctrl+E" Click="OnExpandSelected" />
-        <MenuItem Header="Script _SELECT (Table/View)" Name="MenuScriptSelect" HotKey="Ctrl+Shift+E" Click="OnScriptSelect"
-                  AutomationProperties.Name="Insert SELECT for selected table or view" />
+        <MenuItem Header="Script _SELECT in New Tab (Table/View)" Name="MenuScriptSelect" HotKey="Ctrl+Shift+E" Click="OnScriptSelect"
+                  AutomationProperties.Name="Script SELECT into a new tab for selected table or view" />
         <Separator />
         <MenuItem Header="_Design Table…" Name="MenuDesignTable" Click="OnDesignTable" />
         <MenuItem Header="Edit Top _200 Rows…" Name="MenuEditRows" Click="OnEditRows" />

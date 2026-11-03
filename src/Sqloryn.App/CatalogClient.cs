@@ -23,6 +23,13 @@ public sealed record CatalogColumn(
     };
 }
 
+/// <summary>A catalog read plus whether the row cap or byte budget stopped it early.</summary>
+public sealed record CatalogListing<T>(IReadOnlyList<T> Items, bool Truncated, bool ByteBudgetExhausted)
+{
+    /// <summary>Null when complete.</summary>
+    public string? TruncationNote => CatalogTruncation.Describe(Items.Count, Truncated, ByteBudgetExhausted);
+}
+
 /// <summary>
 /// Runs <see cref="MetadataCatalog"/> queries through a session. Schema and object names are bound as parameters.
 /// </summary>
@@ -30,29 +37,42 @@ static class CatalogClient
 {
     const int MaxItems = 5_000;
 
-    public static async Task<IReadOnlyList<string>> ListSchemasAsync(SqlSession session, string database, CancellationToken ct = default)
+    public static async Task<CatalogListing<string>> ListSchemasAsync(SqlSession session, string database, CancellationToken ct = default)
     {
         var rows = await session.QueryRawAsync(MetadataCatalog.ListSchemas(database), null, MaxItems, ct);
-        return rows.Rows.Select(r => Convert.ToString(r[0]) ?? "").ToList();
+        return Listing(rows, rows.Rows.Select(r => Convert.ToString(r[0]) ?? "").ToList());
     }
 
-    public static Task<IReadOnlyList<string>> ListTablesAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
+    static CatalogListing<T> Listing<T>(RawRows rows, IReadOnlyList<T> items)
+        => new(items, rows.Truncated, rows.ByteBudgetExhausted);
+
+    public static Task<CatalogListing<string>> ListTablesAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
         => ListObjectsAsync(session, MetadataCatalog.ListTables(database, schema), schema, ct);
 
-    public static Task<IReadOnlyList<string>> ListViewsAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
+    public static Task<CatalogListing<string>> ListViewsAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
         => ListObjectsAsync(session, MetadataCatalog.ListViews(database, schema), schema, ct);
 
-    public static Task<IReadOnlyList<string>> ListProceduresAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
+    public static Task<CatalogListing<string>> ListProceduresAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
         => ListObjectsAsync(session, MetadataCatalog.ListProcedures(database, schema), schema, ct);
 
-    static async Task<IReadOnlyList<string>> ListObjectsAsync(SqlSession session, string sql, string schema, CancellationToken ct)
+    static async Task<CatalogListing<string>> ListObjectsAsync(SqlSession session, string sql, string schema, CancellationToken ct)
     {
         var rows = await session.QueryRawAsync(
             sql, [new EditParameter(MetadataCatalog.SchemaParameter, schema)], MaxItems, ct);
-        return rows.Rows.Select(r => Convert.ToString(r[1]) ?? "").ToList();
+        return Listing(rows, rows.Rows.Select(r => Convert.ToString(r[1]) ?? "").ToList());
     }
 
+    /// <summary>Strict: throws if the column list was truncated, so design/edit never act on a partial set.</summary>
     public static async Task<IReadOnlyList<CatalogColumn>> ListColumnsAsync(
+        SqlSession session, string database, string schema, string table, CancellationToken ct = default)
+    {
+        var listing = await ListColumnsPageAsync(session, database, schema, table, ct);
+        if (listing.Truncated)
+            throw new InvalidOperationException("Column list was truncated; refusing to continue with a partial set.");
+        return listing.Items;
+    }
+
+    public static async Task<CatalogListing<CatalogColumn>> ListColumnsPageAsync(
         SqlSession session, string database, string schema, string table, CancellationToken ct = default)
     {
         var rows = await session.QueryRawAsync(
@@ -60,7 +80,7 @@ static class CatalogClient
             [new EditParameter(MetadataCatalog.SchemaParameter, schema), new EditParameter(MetadataCatalog.TableParameter, table)],
             4_096,
             ct);
-        return rows.Rows.Select(r => new CatalogColumn(
+        return Listing(rows, rows.Rows.Select(r => new CatalogColumn(
             Convert.ToString(r[0]) ?? "",
             Convert.ToString(r[1]) ?? "",
             r[2] is true,
@@ -68,7 +88,7 @@ static class CatalogClient
             Convert.ToInt32(r[4] ?? 0, System.Globalization.CultureInfo.InvariantCulture),
             Convert.ToInt32(r[5] ?? 0, System.Globalization.CultureInfo.InvariantCulture),
             Convert.ToInt32(r[6] ?? 0, System.Globalization.CultureInfo.InvariantCulture),
-            r.Length > 7 && r[7] is true)).ToList();
+            r.Length > 7 && r[7] is true)).ToList());
     }
 
     public static async Task<IReadOnlyList<string>> ListPrimaryKeyAsync(
@@ -79,6 +99,8 @@ static class CatalogClient
             [new EditParameter(MetadataCatalog.SchemaParameter, schema), new EditParameter(MetadataCatalog.TableParameter, table)],
             256,
             ct);
+        if (rows.Truncated)
+            throw new InvalidOperationException("Primary key column list was truncated; refusing to continue with a partial key.");
         return rows.Rows.Select(r => Convert.ToString(r[0]) ?? "").ToList();
     }
 
