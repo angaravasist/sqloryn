@@ -32,5 +32,27 @@ signed installer. See [WALKTHROUGH.md](WALKTHROUGH.md).
 - App walkthrough: [SPEC-002](specs/002-developer-preview-0.md) — needs an
   approved disposable host; not authorised by documentation alone.
 
+Local disposable instance (Linux x64 Docker socket):
+
+```sh
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
+dotnet build SQLoryn.slnx --configuration Release
+python3 scripts/run_sql_probe.py --accept-sql-server-license
+```
+
+Optional PROBE-11 remote mode (maintainer-approved host only). Requires an
+existing known_hosts file with the verified host key. Optional
+`--ssh-identity-file` selects a dedicated private key for every SSH/SCP/tunnel
+call while keeping `StrictHostKeyChecking=yes` and `IdentitiesOnly=yes`. Omit
+the identity flag to keep OpenSSH’s default isolated identity search. Do not
+commit hostnames, addresses, fingerprints or key paths.
+
+```sh
+python3 scripts/run_sql_probe.py --accept-sql-server-license \
+  --ssh-host 'user@approved-host' \
+  --ssh-known-hosts /path/to/verified_known_hosts \
+  --ssh-identity-file /path/to/dedicated_private_key
+```
+
 Empty `--ssh-host` / `--ssh-known-hosts` fail before Docker/SSH. Incomplete
 remote bootstrap never executes `helper.py`.
