@@ -29,7 +29,11 @@ Each query tab owns a `SqlSession`. Results are applied only to the originating
 tab id. Passwords are session-only unless the user opts into Remember (macOS
 Keychain); encryption is mandatory; optional lab pin is explicit and mutually
 exclusive with TrustServerCertificate. `GO` batch separators are split by
-`GoBatchSplitter`. The App uses Avalonia.Controls.DataGrid 12.1.2 (12.1.4 is not
+`GoBatchSplitter.Parse`, which returns batches with source spans and runs as a
+preflight over the whole selection before batch 1: SQLCMD directives (`:setvar`,
+`:r`, ...), malformed `GO` lines and out-of-bounds repeat counts throw
+`SqlScriptRejectedException` (line/column/offset) and nothing executes.
+`$(var)` substitution is not interpreted or rejected. The App uses Avalonia.Controls.DataGrid 12.1.2 (12.1.4 is not
 published on nuget.org). See [current and historical test evidence](STATE.md) for the distinction between the previously exercised arm64 desktop connection and the unverified live workflows on this branch.
 
 ## Parallel development boundaries

@@ -127,10 +127,16 @@ public sealed class SqlSession : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(sql))
             throw new ArgumentException("SQL text is required.");
 
-        if (!GoBatchSplitter.ContainsSeparator(sql))
+        // Preflight the ENTIRE selection before batch 1 can run. Unsupported SQLCMD directives, malformed GO
+        // lines and out-of-bounds repeat counts throw SqlScriptRejectedException with line/offset; nothing executes.
+        var script = GoBatchSplitter.Parse(sql);
+        if (!script.HasSeparator)
             return await ExecuteBatchAsync(sql, null, cancellationToken).ConfigureAwait(false);
 
-        var batches = GoBatchSplitter.Split(sql);
+        var batches = new List<string>(script.ExpandedBatchCount);
+        foreach (var batch in script.Batches)
+            for (var r = 0; r < batch.RepeatCount; r++)
+                batches.Add(batch.Text);
         if (batches.Count == 0)
             throw new ArgumentException("SQL text is required.");
         if (batches.Count == 1)
@@ -183,7 +189,15 @@ public sealed class SqlSession : IAsyncDisposable
         return null;
     }
 
-    async Task<QueryResult> ExecuteBatchAsync(string sql, int? cancelGenAtStartOverride, CancellationToken cancellationToken)
+    /// <summary>Test seam: replaces provider execution of one batch. Never set in production code.</summary>
+    internal Func<string, int?, CancellationToken, Task<QueryResult>>? BatchExecutorForTests { get; init; }
+
+    Task<QueryResult> ExecuteBatchAsync(string sql, int? cancelGenAtStartOverride, CancellationToken cancellationToken)
+        => BatchExecutorForTests is { } hook
+            ? hook(sql, cancelGenAtStartOverride, cancellationToken)
+            : ExecuteBatchCoreAsync(sql, cancelGenAtStartOverride, cancellationToken);
+
+    async Task<QueryResult> ExecuteBatchCoreAsync(string sql, int? cancelGenAtStartOverride, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         SqlCommand? command = null;

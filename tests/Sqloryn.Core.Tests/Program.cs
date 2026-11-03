@@ -655,6 +655,151 @@ Pass("explorer-ownership");
     }
     catch (InvalidOperationException ex) when (!ex.Message.Contains("not supported", StringComparison.Ordinal)) { }
     Pass("go-multi-batch-requires-connection");
+
+    // F7: structured batches with source spans (LF and CRLF).
+    static void CheckSpans(string script, string label)
+    {
+        var parsed = GoBatchSplitter.Parse(script);
+        foreach (var batch in parsed.Batches)
+        {
+            Check(batch.Length == batch.Text.Length, label + "-length");
+            Check(string.CompareOrdinal(script, batch.Start, batch.Text, 0, batch.Length) == 0, label + "-span-text");
+        }
+    }
+
+    {
+        var lf = "SELECT 1;\nGO\n  SELECT 2;  \nGO 2\nSELECT 3";
+        var p = GoBatchSplitter.Parse(lf);
+        Check(p.HasSeparator && p.Batches.Count == 3 && p.ExpandedBatchCount == 4, "go-parse-shape");
+        Check(p.Batches[0].Start == 0 && p.Batches[0].Length == 9 && p.Batches[0].StartLine == 1, "go-parse-span-first");
+        Check(p.Batches[1].Text == "SELECT 2;" && p.Batches[1].Start == lf.IndexOf("SELECT 2;", StringComparison.Ordinal)
+              && p.Batches[1].StartLine == 3 && p.Batches[1].RepeatCount == 2, "go-parse-span-trimmed-lf");
+        Check(p.Batches[2].Text == "SELECT 3" && p.Batches[2].StartLine == 5 && p.Batches[0].RepeatCount == 1, "go-parse-lines");
+        CheckSpans(lf, "go-span-lf");
+
+        var crlf = "SELECT 1;\r\nGO\r\n\r\n  SELECT 2;\r\nGO 3\r\nSELECT 3\r\n";
+        var c = GoBatchSplitter.Parse(crlf);
+        Check(c.Batches.Count == 3 && c.ExpandedBatchCount == 5, "go-parse-crlf-shape");
+        Check(c.Batches[1].Text == "SELECT 2;" && c.Batches[1].Start == crlf.IndexOf("SELECT 2;", StringComparison.Ordinal)
+              && c.Batches[1].StartLine == 4 && c.Batches[1].RepeatCount == 3, "go-parse-crlf-span");
+        Check(c.Batches[2].Text == "SELECT 3" && c.Batches[2].StartLine == 6, "go-parse-crlf-line");
+        CheckSpans(crlf, "go-span-crlf");
+        CheckSpans("a\rGO\rb", "go-span-cr");
+
+        // Compatibility path still expands repeats.
+        var compat = GoBatchSplitter.Split(crlf);
+        Check(compat.Count == 5 && compat[1] == "SELECT 2;" && compat[3] == "SELECT 2;" && compat[4] == "SELECT 3", "go-split-compat");
+        Pass("go-parse-source-spans");
+    }
+
+    // F7: unsupported SQLCMD / malformed GO rejected with location.
+    {
+        SqlScriptRejectedException? Reject(string sql)
+        {
+            try { GoBatchSplitter.Parse(sql); return null; }
+            catch (SqlScriptRejectedException ex) { return ex; }
+        }
+
+        var setvar = "INSERT t VALUES (1)\nGO\n:setvar Name Value\nSELECT $(Name)";
+        var r = Reject(setvar);
+        Check(r is not null && r.Kind == SqlScriptRejectionKind.SqlcmdDirective, "sqlcmd-setvar-rejected");
+        Check(r!.Line == 3 && r.Column == 1 && r.Offset == setvar.IndexOf(":setvar", StringComparison.Ordinal), "sqlcmd-setvar-location");
+        Check(r.Message.Contains("line 3", StringComparison.OrdinalIgnoreCase) && r.Message.Contains(":setvar", StringComparison.Ordinal), "sqlcmd-setvar-message");
+
+        var inc = "SELECT 1\r\nGO\r\n   :r C:\\scripts\\evil.sql\r\n";
+        var ri = Reject(inc);
+        Check(ri is not null && ri.Line == 3 && ri.Column == 4 && ri.Offset == inc.IndexOf(":r", StringComparison.Ordinal), "sqlcmd-r-location-crlf");
+
+        foreach (var directive in new[] { ":connect srv", ":on error exit", ":out file.txt", ":ed", ":!! ls", ":quit", ":exit(SELECT 1)", ":ServerList", ":XML ON", ":Reset", ":list" })
+            Check(Reject("SELECT 1\n" + directive) is { Kind: SqlScriptRejectionKind.SqlcmdDirective, Line: 2 }, "sqlcmd-rejected " + directive);
+
+        // Directive-looking text inside strings/comments/brackets is not a directive.
+        Check(Reject("SELECT 'a\n:setvar x y\n'") is null, "sqlcmd-in-string-ignored");
+        Check(Reject("/* a\n:r file\n*/ SELECT 1") is null, "sqlcmd-in-block-comment-ignored");
+        Check(Reject("/* a /* n\n:r file\n*/\n:r x\n*/ SELECT 1") is null, "sqlcmd-in-nested-comment-ignored");
+        Check(Reject("SELECT [a\n:r b]") is null, "sqlcmd-in-bracket-ignored");
+        Check(Reject("-- :setvar x\nSELECT 1") is null, "sqlcmd-in-line-comment-ignored");
+        Check(Reject("SELECT 1 AS x -- :r\nSELECT 2") is null, "sqlcmd-trailing-comment-ignored");
+
+        // Malformed GO lines are rejected, not forwarded to the provider.
+        foreach (var bad in new[] { "GO abc", "GO 5 SELECT 1", "GO;", "GO -1", "GO 2 3" })
+        {
+            var rb = Reject("SELECT 1\nGO\nSELECT 2\n" + bad);
+            Check(rb is { Kind: SqlScriptRejectionKind.MalformedGo, Line: 4 }, "go-malformed-rejected " + bad);
+        }
+        Check(Reject("SELECT 1\nGO 0") is { Kind: SqlScriptRejectionKind.RepeatCountOutOfRange, Line: 2 }, "go-zero-located");
+        Check(Reject("SELECT 1\nGO 1001") is { Kind: SqlScriptRejectionKind.RepeatCountOutOfRange }, "go-over-max-located");
+        Check(Reject("SELECT 1\nGO 1000") is null, "go-max-repeat-ok");
+        Check(Reject("SELECT 1\nGO 1000\nSELECT 2\nGO 2") is { Kind: SqlScriptRejectionKind.TooManyBatches, Line: 4 }, "go-total-expansion-bounded");
+        Check(Reject("SELECT 1\nGO 600\nSELECT 2\nGO 400\nSELECT 3") is { Kind: SqlScriptRejectionKind.TooManyBatches }, "go-total-expansion-bounded-2");
+        Check(Reject("SELECT 1\nGO 600\nSELECT 2\nGO 400") is null, "go-total-expansion-exact-ok");
+
+        // Still-valid forms.
+        Check(Reject("SELECT 1\nGO -- trailing\nSELECT 2\ngo 3 -- c\nSELECT 3") is null, "go-comment-forms-ok");
+        Check(Reject("GOTO label") is null && Reject("SELECT 'GO abc'") is null && Reject("SELECT 1 GO abc") is null, "go-words-ok");
+        Check(Reject("SELECT a\nFROM t WHERE a = 1 -- ok\n/* GO abc */") is null, "go-in-comment-ok");
+        Check(Reject("/* x /* y\nGO abc\n*/ z\n*/ SELECT 1") is null, "go-malformed-in-nested-comment-ignored");
+        Check(Reject("SELECT 'x\nGO abc\n'") is null, "go-malformed-in-string-ignored");
+
+        // Rejection is ArgumentException for existing callers.
+        try { GoBatchSplitter.Split("SELECT 1\n:r x"); throw new Exception("FAIL split-rejects-directive"); }
+        catch (ArgumentException) { }
+        try { GoBatchSplitter.ContainsSeparator("SELECT 1\n:setvar a b"); throw new Exception("FAIL contains-rejects-directive"); }
+        catch (SqlScriptRejectedException) { }
+        Pass("sqlcmd-preflight-rejection");
+    }
+
+    // F7: SqlSession.ExecuteAsync preflights the whole selection before executing batch 1.
+    {
+        var executed = new List<string>();
+        await using var session = new SqlSession
+        {
+            BatchExecutorForTests = (text, _, _) =>
+            {
+                executed.Add(text);
+                return Task.FromResult(new QueryResult { ExecutedSql = text, Server = "s", Database = "d", Completion = QueryCompletionKind.Succeeded });
+            }
+        };
+
+        foreach (var script in new[]
+        {
+            "INSERT dbo.t VALUES (1)\nGO\n:setvar X 1\nSELECT 1",
+            "INSERT dbo.t VALUES (1)\nGO\nINSERT dbo.t VALUES (2)\nGO\n:r evil.sql",
+            "DELETE dbo.t\nGO\nGO nonsense\nSELECT 1",
+            "DELETE dbo.t\nGO\nSELECT 1\nGO 0",
+            "DROP TABLE dbo.t\n:connect other",
+        })
+        {
+            try
+            {
+                await session.ExecuteAsync(script);
+                throw new Exception("FAIL preflight-did-not-reject");
+            }
+            catch (SqlScriptRejectedException ex)
+            {
+                Check(ex.Line >= 2 && ex.Offset > 0 && ex.Message.Contains("line", StringComparison.OrdinalIgnoreCase), "preflight-error-location");
+                Check(ex.Message.Contains("Nothing was executed", StringComparison.Ordinal), "preflight-error-nothing-executed");
+            }
+            Check(executed.Count == 0, "preflight-nothing-executed");
+            Check(!session.HasActiveCommand, "preflight-no-inflight");
+        }
+
+        // Control: a valid script does reach the executor (batch 1 first).
+        try { await session.ExecuteAsync("SELECT 1\nGO\nSELECT 2"); } catch (InvalidOperationException) { }
+        Check(executed.Count >= 1 && executed[0] == "SELECT 1", "preflight-valid-script-executes");
+
+        // Single-batch script (no GO) is preflighted too.
+        executed.Clear();
+        try { await session.ExecuteAsync("DELETE dbo.t\n:setvar x y"); throw new Exception("FAIL preflight-single-batch"); }
+        catch (SqlScriptRejectedException) { }
+        Check(executed.Count == 0, "preflight-single-batch-nothing-executed");
+
+        // Without a connection, rejection must still win over "Not connected".
+        await using var offline = new SqlSession();
+        try { await offline.ExecuteAsync("SELECT 1\nGO\n:r x"); throw new Exception("FAIL preflight-offline"); }
+        catch (SqlScriptRejectedException) { }
+        Pass("sqlsession-preflight-before-execute");
+    }
 }
 
 // Connection profiles
