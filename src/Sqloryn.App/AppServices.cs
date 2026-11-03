@@ -25,8 +25,8 @@ static class AppServices
         {
             "Light" => ThemeVariant.Light,
             "Dark" => ThemeVariant.Dark,
-            // "System" keeps the studio default (dark slate) until the user picks otherwise.
-            _ => ThemeVariant.Dark
+            // "System" is ThemeVariant.Default: Avalonia tracks the OS appearance live, including mid-session changes.
+            _ => ThemeVariant.Default
         };
     }
 }

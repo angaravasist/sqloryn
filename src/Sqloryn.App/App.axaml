@@ -1,51 +1,52 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Sqloryn.App"
-             RequestedThemeVariant="Dark">
+             Name="SQLoryn"
+             RequestedThemeVariant="Default">
+  <!-- Name feeds the macOS application menu title (otherwise "Avalonia Application").
+       RequestedThemeVariant=Default follows the live OS appearance; settings may override it. -->
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.ThemeDictionaries>
+        <!-- Neutral surfaces; accent comes from the OS (SystemControlHighlightAccentBrush). -->
         <ResourceDictionary x:Key="Dark">
-          <Color x:Key="Sq.BgColor">#0E141B</Color>
-          <SolidColorBrush x:Key="Sq.Bg" Color="#0E141B" />
-          <SolidColorBrush x:Key="Sq.Panel" Color="#141C25" />
-          <SolidColorBrush x:Key="Sq.Raised" Color="#1B2531" />
-          <SolidColorBrush x:Key="Sq.Hover" Color="#223142" />
-          <SolidColorBrush x:Key="Sq.Border" Color="#2A3A4C" />
-          <SolidColorBrush x:Key="Sq.Text" Color="#D7E1EA" />
-          <SolidColorBrush x:Key="Sq.Muted" Color="#7F93A8" />
-          <SolidColorBrush x:Key="Sq.Accent" Color="#2DD4BF" />
-          <SolidColorBrush x:Key="Sq.AccentDim" Color="#14766C" />
-          <SolidColorBrush x:Key="Sq.OnAccent" Color="#04201C" />
-          <SolidColorBrush x:Key="Sq.Danger" Color="#F87171" />
-          <SolidColorBrush x:Key="Sq.GridAlt" Color="#111A23" />
+          <SolidColorBrush x:Key="Sq.Bg" Color="#1E1E1E" />
+          <SolidColorBrush x:Key="Sq.Panel" Color="#252526" />
+          <SolidColorBrush x:Key="Sq.Raised" Color="#2C2C2E" />
+          <SolidColorBrush x:Key="Sq.Hover" Color="#3A3A3C" />
+          <SolidColorBrush x:Key="Sq.Border" Color="#3F3F42" />
+          <SolidColorBrush x:Key="Sq.Text" Color="#E8E8EA" />
+          <SolidColorBrush x:Key="Sq.Muted" Color="#9A9AA0" />
+          <SolidColorBrush x:Key="Sq.Accent" Color="{DynamicResource SystemAccentColor}" />
+          <SolidColorBrush x:Key="Sq.OnAccent" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="Sq.Danger" Color="#FF6961" />
+          <SolidColorBrush x:Key="Sq.Warning" Color="#FFB340" />
+          <SolidColorBrush x:Key="Sq.GridAlt" Color="#222224" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Light">
-          <Color x:Key="Sq.BgColor">#EEF2F6</Color>
-          <SolidColorBrush x:Key="Sq.Bg" Color="#EEF2F6" />
-          <SolidColorBrush x:Key="Sq.Panel" Color="#F7F9FB" />
-          <SolidColorBrush x:Key="Sq.Raised" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="Sq.Hover" Color="#E1E8EF" />
-          <SolidColorBrush x:Key="Sq.Border" Color="#C5D0DB" />
-          <SolidColorBrush x:Key="Sq.Text" Color="#1E2A36" />
-          <SolidColorBrush x:Key="Sq.Muted" Color="#5F7184" />
-          <SolidColorBrush x:Key="Sq.Accent" Color="#0F766E" />
-          <SolidColorBrush x:Key="Sq.AccentDim" Color="#14B8A6" />
+          <SolidColorBrush x:Key="Sq.Bg" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="Sq.Panel" Color="#F5F5F7" />
+          <SolidColorBrush x:Key="Sq.Raised" Color="#ECECEE" />
+          <SolidColorBrush x:Key="Sq.Hover" Color="#E0E0E3" />
+          <SolidColorBrush x:Key="Sq.Border" Color="#D2D2D7" />
+          <SolidColorBrush x:Key="Sq.Text" Color="#1D1D1F" />
+          <SolidColorBrush x:Key="Sq.Muted" Color="#6E6E73" />
+          <SolidColorBrush x:Key="Sq.Accent" Color="{DynamicResource SystemAccentColor}" />
           <SolidColorBrush x:Key="Sq.OnAccent" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="Sq.Danger" Color="#B42318" />
-          <SolidColorBrush x:Key="Sq.GridAlt" Color="#F3F6F9" />
+          <SolidColorBrush x:Key="Sq.Danger" Color="#C5221F" />
+          <SolidColorBrush x:Key="Sq.Warning" Color="#8F5900" />
+          <SolidColorBrush x:Key="Sq.GridAlt" Color="#F7F7F9" />
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>
   </Application.Resources>
 
   <Application.Styles>
+    <!-- No Accent override: Fluent takes the accent colour from the OS. -->
     <FluentTheme>
       <FluentTheme.Palettes>
-        <ColorPaletteResources x:Key="Dark" Accent="#2DD4BF" RegionColor="#0E141B"
-                               ErrorText="#F87171" />
-        <ColorPaletteResources x:Key="Light" Accent="#0F766E" RegionColor="#EEF2F6"
-                               ErrorText="#B42318" />
+        <ColorPaletteResources x:Key="Dark" RegionColor="#1E1E1E" ErrorText="#FF6961" />
+        <ColorPaletteResources x:Key="Light" RegionColor="#FFFFFF" ErrorText="#C5221F" />
       </FluentTheme.Palettes>
     </FluentTheme>
     <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
@@ -142,17 +143,21 @@
       <Setter Property="Padding" Value="14,6" />
     </Style>
     <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource Sq.AccentDim}" />
+      <Setter Property="Background" Value="{DynamicResource Sq.Accent}" />
       <Setter Property="Foreground" Value="{DynamicResource Sq.OnAccent}" />
+      <Setter Property="Opacity" Value="0.88" />
     </Style>
     <Style Selector="Button.primary:disabled">
       <Setter Property="Opacity" Value="0.45" />
     </Style>
     <Style Selector="Button.danger">
       <Setter Property="Background" Value="{DynamicResource Sq.Danger}" />
-      <Setter Property="Foreground" Value="#FFFFFF" />
+      <Setter Property="Foreground" Value="{DynamicResource Sq.OnAccent}" />
       <Setter Property="CornerRadius" Value="5" />
       <Setter Property="Padding" Value="14,6" />
+    </Style>
+    <Style Selector="TextBlock.warning">
+      <Setter Property="Foreground" Value="{DynamicResource Sq.Warning}" />
     </Style>
 
     <!-- Inputs -->

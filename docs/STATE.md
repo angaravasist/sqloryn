@@ -19,6 +19,7 @@ Builds on merged Developer Preview 0 (PR #6 / `f561597`).
 | Original icon packaged into `.app` Info.plist | Local `build_macos_app.sh` (arm64 host) |
 | Offline UI launch smoke (no crash on open) | Observed briefly; not a full click-through matrix |
 | PR #7 findings 3 & 6 (edit-rows atomic apply; QueryRaw byte budget) | Core component tests PASS with fakes (`edit-rows-batch`, `edit-rows-policy`, `query-raw-budget`); real SqlTransaction path, trigger behaviour, `GetChars` on xml/MAX columns and numeric(38) **unverified against SQL Server** |
+| PR #7 findings 8–12 (shell: native macOS menu + ⌘ shortcuts, welcome panel, system appearance, compact layout, honest settings) | Settings clamp/layout persistence: Core tests PASS (`app-settings`). Menu, welcome, theming, sidebar and results panes: **Release build only**; not click-tested, no VoiceOver or Finder-launch pass, no light/dark mid-session switch observed, macOS menu title/⌘ equivalents not yet inspected on a real session. Line-number preference removed (no gutter exists); row preference capped at 5,000 = `QueryLimits.MaxRowsPerSet` |
 | Live SQL: connect / OE expand / GO / export / design / edit-rows | **Unverified on this branch** (no disposable lab in this session; Windows SSH product path not recreated) |
 | Prior DP0 arm64 connect + `SELECT 1` via disposable lab | Historical on PR #6; lab torn down; do not treat as current tip evidence |
 | Intel Mac desktop SQL | **Unverified** |
