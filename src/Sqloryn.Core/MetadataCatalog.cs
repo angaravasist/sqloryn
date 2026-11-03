@@ -70,7 +70,7 @@ public static class MetadataCatalog
     }
 
     /// <summary>
-    /// Columns: name, type name, is_nullable, is_identity, max length in characters (-1 = MAX), precision, scale.
+    /// Columns: name, type name, is_nullable, is_identity, max length in characters (-1 = MAX), precision, scale, is_computed.
     /// Requires <see cref="SchemaParameter"/> and <see cref="TableParameter"/>.
     /// </summary>
     public static string ListColumns(string database, string schema, string table)
@@ -81,13 +81,32 @@ public static class MetadataCatalog
         return $"""
             SELECT c.name, t.name, c.is_nullable, c.is_identity,
                    CASE WHEN t.name IN (N'nchar', N'nvarchar') AND c.max_length > 0 THEN c.max_length / 2 ELSE c.max_length END,
-                   c.precision, c.scale
+                   c.precision, c.scale, c.is_computed
             FROM {db}.sys.columns AS c
             INNER JOIN {db}.sys.types AS t ON c.user_type_id = t.user_type_id
             INNER JOIN {db}.sys.objects AS o ON c.object_id = o.object_id
             INNER JOIN {db}.sys.schemas AS s ON o.schema_id = s.schema_id
             WHERE s.name = {SchemaParameter} AND o.name = {TableParameter} AND o.type IN ('U', 'V')
             ORDER BY c.column_id;
+            """;
+    }
+
+    /// <summary>
+    /// One int column: number of enabled INSTEAD OF triggers on the table or view. Requires <see cref="SchemaParameter"/>
+    /// and <see cref="TableParameter"/>. Edit-in-grid refuses such objects because affected-row counts are unreliable.
+    /// </summary>
+    public static string CountEnabledInsteadOfTriggers(string database, string schema, string table)
+    {
+        RequireName(schema);
+        RequireName(table);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT CONVERT(int, COUNT(*))
+            FROM {db}.sys.triggers AS tr
+            INNER JOIN {db}.sys.objects AS o ON o.object_id = tr.parent_id
+            INNER JOIN {db}.sys.schemas AS s ON o.schema_id = s.schema_id
+            WHERE tr.is_instead_of_trigger = 1 AND tr.is_disabled = 0
+              AND s.name = {SchemaParameter} AND o.name = {TableParameter};
             """;
     }
 

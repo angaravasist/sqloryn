@@ -799,6 +799,9 @@ Pass("explorer-ownership");
     Check(MetadataCatalog.ListProcedures("d", "s").Contains("sys.procedures", StringComparison.Ordinal), "metadata-procs");
     var cols = MetadataCatalog.ListColumns("d", "s", "t");
     Check(cols.Contains("@table", StringComparison.Ordinal) && cols.Contains("sys.columns", StringComparison.Ordinal), "metadata-columns");
+    Check(cols.Contains("c.is_computed", StringComparison.Ordinal), "metadata-columns-computed");
+    var triggers = MetadataCatalog.CountEnabledInsteadOfTriggers("d", "s", "t");
+    Check(triggers.Contains("is_instead_of_trigger = 1", StringComparison.Ordinal) && triggers.Contains("@table", StringComparison.Ordinal) && !triggers.Contains("'t'", StringComparison.Ordinal), "metadata-instead-of-triggers");
     Check(MetadataCatalog.ListSchemas("d").Contains("[d].sys.schemas", StringComparison.Ordinal) && MetadataCatalog.ListDatabases().Contains("sys.databases", StringComparison.Ordinal), "metadata-dbs-schemas");
     try { MetadataCatalog.ListTables("", "dbo"); throw new Exception("FAIL metadata-bad-db"); }
     catch (ArgumentException) { }
@@ -942,7 +945,7 @@ Pass("explorer-ownership");
         new Dictionary<string, object?> { ["Qty"] = 5, ["Note"] = null },
         new Dictionary<string, object?> { ["Id"] = 7, ["Qty"] = 4, ["Note"] = null, ["Memo"] = "m" });
     Check(update.CommandText.Contains("UPDATE [App].[dbo].[Orders] SET [Qty] = @n0, [Note] = @n1 WHERE [Id] = @k0 AND [Qty] = @o0 AND [Note] IS NULL AND [Memo] = @o1;", StringComparison.Ordinal), "edit-update-optimistic-where");
-    Check(update.CommandText.Contains("SELECT @@ROWCOUNT;", StringComparison.Ordinal), "edit-update-rowcount");
+    Check(update.CommandText.Contains("SELECT @@ROWCOUNT AS [__sqloryn_rowcount];", StringComparison.Ordinal), "edit-update-rowcount");
     Check(update.Parameters.Count == 5 && update.Parameters.Single(p => p.Name == "@k0").Value is 7 && update.Parameters.Single(p => p.Name == "@o0").Value is 4, "edit-update-params");
     Check(!update.CommandText.Contains("Memo = 'm'", StringComparison.Ordinal) && !update.CommandText.Contains("'m'", StringComparison.Ordinal), "edit-update-no-inline-values");
     var skipped = EditRowsSql.BuildUpdate(orders, key, new Dictionary<string, object?> { ["Qty"] = 1 },
@@ -1211,6 +1214,197 @@ Pass("explorer-ownership");
         Check(Id(pin: "/a.crt").Matches(Id(pin: " /a.crt ")) && !Id(pin: "/a.crt").Matches(Id(pin: "/b.crt")), "identity-pin-compare");
         Pass("endpoint-identity");
     }
+// Edit rows: transactional batch (PR #7 finding 3)
+{
+    var tbl = new TableRef("App", "dbo", "Orders");
+    var cmds = new List<EditCommand>
+    {
+        EditRowsSql.BuildUpdate(tbl, new RowKey(["Id"], [1]), new Dictionary<string, object?> { ["Qty"] = 5 }),
+        EditRowsSql.BuildUpdate(tbl, new RowKey(["Id"], [2]), new Dictionary<string, object?> { ["Qty"] = 6 })
+    };
+
+    var ok = new FakeEditTransactionFactory(1, 1);
+    var okResult = await EditRowsBatch.ApplyAsync(ok, cmds);
+    Check(okResult.Outcome == EditBatchOutcome.Committed && okResult.Committed && !okResult.RequiresReload, "batch-commit-outcome");
+    Check(string.Join(",", ok.Log) == "begin,exec,exec,commit,dispose", "batch-commit-order");
+
+    // Second row conflicts: the whole set is rolled back, commit is never reached.
+    var conflict = new FakeEditTransactionFactory(1, 0);
+    var conflictResult = await EditRowsBatch.ApplyAsync(conflict, cmds);
+    Check(conflictResult.Outcome == EditBatchOutcome.RolledBackConflict && conflictResult.FailedIndex == 1 && !conflictResult.Committed, "batch-conflict-outcome");
+    Check(conflictResult.WritesValidated == 1, "batch-conflict-validated-count");
+    Check(string.Join(",", conflict.Log) == "begin,exec,exec,rollback,dispose" && !conflict.Log.Contains("commit"), "batch-conflict-rolls-back-all");
+
+    // Wrong row count (key not unique / trigger skew) also rolls back everything.
+    var many = new FakeEditTransactionFactory(1, 2);
+    var manyResult = await EditRowsBatch.ApplyAsync(many, cmds);
+    Check(manyResult.Outcome == EditBatchOutcome.RolledBackWrongRowCount && manyResult.FailedIndex == 1, "batch-multirow-outcome");
+    Check(many.Log.Contains("rollback") && !many.Log.Contains("commit"), "batch-multirow-rolls-back");
+
+    // First statement conflicts: second never executes.
+    var firstConflict = new FakeEditTransactionFactory(0, 1);
+    var firstConflictResult = await EditRowsBatch.ApplyAsync(firstConflict, cmds);
+    Check(firstConflictResult.FailedIndex == 0 && firstConflict.Log.Count(l => l == "exec") == 1, "batch-stops-at-first-failure");
+
+    // Provider error mid-set.
+    var boom = new FakeEditTransactionFactory(1, new InvalidOperationException("synthetic provider failure"));
+    var boomResult = await EditRowsBatch.ApplyAsync(boom, cmds);
+    Check(boomResult.Outcome == EditBatchOutcome.RolledBackError && boomResult.FailedIndex == 1 && !boom.Log.Contains("commit") && boom.Log.Contains("rollback"), "batch-error-rolls-back");
+
+    // Rollback itself fails: outcome must be unknown and require reload.
+    var rbFail = new FakeEditTransactionFactory(1, 0) { RollbackFails = new InvalidOperationException("connection broken") };
+    var rbFailResult = await EditRowsBatch.ApplyAsync(rbFail, cmds);
+    Check(rbFailResult.Outcome == EditBatchOutcome.OutcomeUnknown && rbFailResult.RequiresReload, "batch-rollback-failure-unknown");
+
+    // Disconnect at commit: unknown outcome, reload required, never reported as rolled back.
+    var commitFail = new FakeEditTransactionFactory(1, 1) { CommitFails = new InvalidOperationException("connection lost") };
+    var commitFailResult = await EditRowsBatch.ApplyAsync(commitFail, cmds);
+    Check(commitFailResult.Outcome == EditBatchOutcome.OutcomeUnknown && commitFailResult.RequiresReload && !commitFailResult.Committed, "batch-commit-failure-unknown");
+
+    // Begin failure: nothing was written.
+    var beginFail = new FakeEditTransactionFactory() { BeginFails = new InvalidOperationException("not connected") };
+    var beginFailResult = await EditRowsBatch.ApplyAsync(beginFail, cmds);
+    Check(beginFailResult.Outcome == EditBatchOutcome.RolledBackError && beginFailResult.WritesValidated == 0, "batch-begin-failure");
+
+    // Cancellation mid-set rolls everything back.
+    using var cts = new CancellationTokenSource();
+    cts.Cancel();
+    var cancelled = new FakeEditTransactionFactory(1, 1);
+    var cancelledResult = await EditRowsBatch.ApplyAsync(cancelled, cmds, cts.Token);
+    Check(cancelledResult.Outcome == EditBatchOutcome.RolledBackError && !cancelled.Log.Contains("commit"), "batch-cancel-rolls-back");
+
+    try { await EditRowsBatch.ApplyAsync(new FakeEditTransactionFactory(), []); throw new Exception("FAIL batch-empty"); }
+    catch (ArgumentException) { }
+
+    // Trigger result sets are drained; only the marked row-count set counts.
+    var trigger = new MultiResultReader(
+        (["message"], [["audit row written"]]),
+        ([EditRowsSql.RowCountColumn], [[1]]),
+        (["message"], [["late trigger output"]]));
+    Check(await EditRowsSql.ReadAffectedCountAsync(trigger) == 1, "rowcount-skips-trigger-sets");
+    var zeroRows = new MultiResultReader((["message"], [["x"]]), ([EditRowsSql.RowCountColumn], [[0]]));
+    Check(await EditRowsSql.ReadAffectedCountAsync(zeroRows) == 0, "rowcount-zero-after-trigger-set");
+    try { await EditRowsSql.ReadAffectedCountAsync(new MultiResultReader((["message"], [["x"]]))); throw new Exception("FAIL rowcount-missing"); }
+    catch (InvalidOperationException) { }
+    try
+    {
+        await EditRowsSql.ReadAffectedCountAsync(new MultiResultReader(
+            ([EditRowsSql.RowCountColumn], [[1]]), ([EditRowsSql.RowCountColumn], [[1]])));
+        throw new Exception("FAIL rowcount-ambiguous");
+    }
+    catch (InvalidOperationException) { }
+    Check(cmds[0].CommandText.Contains($"SET NOCOUNT ON;") &&
+          cmds[0].CommandText.Contains($";\nSELECT @@ROWCOUNT AS [{EditRowsSql.RowCountColumn}];", StringComparison.Ordinal), "rowcount-captured-immediately");
+    Pass("edit-rows-batch");
+}
+
+// Edit rows: support policy (key + dependable concurrency columns)
+{
+    EditColumnInfo C(string n, string t, bool computed = false, bool identity = false) => new(n, t, true, identity, computed);
+
+    var noKey = EditRowsPolicy.Evaluate([], [C("a", "int")], false);
+    Check(!noKey.IsSupported && !string.IsNullOrEmpty(noKey.RefusalReason), "policy-no-key");
+
+    var plain = EditRowsPolicy.Evaluate(["Id"], [C("Id", "int", identity: true), C("Qty", "int"), C("Name", "nvarchar")], false);
+    Check(plain.IsSupported && !plain.UsesRowVersion && plain.ConcurrencyColumns.SequenceEqual(["Qty", "Name"]), "policy-plain-compares-all-non-key");
+
+    var dt2 = EditRowsPolicy.Evaluate(["Id"], [C("Id", "int"), C("At", "datetime2")], false);
+    Check(!dt2.IsSupported && dt2.RefusalReason!.Contains("At", StringComparison.Ordinal), "policy-datetime2-refused-without-rowversion");
+
+    var xml = EditRowsPolicy.Evaluate(["Id"], [C("Id", "int"), C("Doc", "xml")], false);
+    Check(!xml.IsSupported, "policy-xml-refused");
+
+    var rv = EditRowsPolicy.Evaluate(["Id"], [C("Id", "int"), C("At", "datetime2"), C("Ver", "timestamp")], false);
+    Check(rv.IsSupported && rv.UsesRowVersion && rv.ConcurrencyColumns.SequenceEqual(["Ver"]), "policy-rowversion-is-concurrency-token");
+
+    var computed = EditRowsPolicy.Evaluate(["Id"], [C("Id", "int"), C("Qty", "int"), C("Total", "int", computed: true)], false);
+    Check(computed.IsSupported && computed.ConcurrencyColumns.SequenceEqual(["Qty"]), "policy-computed-not-in-predicate");
+
+    var instead = EditRowsPolicy.Evaluate(["Id"], [C("Id", "int"), C("Qty", "int")], hasInsteadOfTrigger: true);
+    Check(!instead.IsSupported && instead.RefusalReason!.Contains("INSTEAD OF", StringComparison.Ordinal), "policy-instead-of-trigger-refused");
+
+    var badKey = EditRowsPolicy.Evaluate(["Missing"], [C("Id", "int")], false);
+    Check(!badKey.IsSupported, "policy-key-missing-from-columns");
+
+    var composite = EditRowsPolicy.Evaluate(["A", "B"], [C("A", "int"), C("B", "uniqueidentifier"), C("Qty", "int")], false);
+    Check(composite.IsSupported && composite.ConcurrencyColumns.SequenceEqual(["Qty"]), "policy-composite-key");
+    Pass("edit-rows-policy");
+}
+
+// QueryRaw byte budget (PR #7 finding 6)
+{
+    var small = new RawReadBudget(MaxCellBytes: 1024, MaxTotalBytes: 100_000);
+    var hugeText = new string('x', 10_000_000);
+    var hugeBytes = new byte[10_000_000];
+
+    var hugeReader = new BudgetFakeReader(
+        ["id", "body", "blob", "note"], ["int", "nvarchar", "varbinary", "nvarchar"],
+        [7, hugeText, hugeBytes, "hello"]);
+    var huge = await RawRowReader.ReadAsync(hugeReader, 10, small);
+    var hugeRow = huge.Rows[0];
+    Check(hugeRow[0] is 7 && hugeRow[3] is "hello", "raw-small-cells-exact");
+    Check(RawCellOmitted.IsOmitted(hugeRow[1]) && RawCellOmitted.IsOmitted(hugeRow[2]), "raw-huge-cells-marked");
+    Check(!RawCellOmitted.IsOmitted(hugeRow[0]) && !RawCellOmitted.IsOmitted(hugeRow[3]), "raw-small-cells-not-marked");
+    Check(huge.HasOmittedCells, "raw-has-omitted-flag");
+    Check(hugeReader.UnboundedLargeReads == 0, "raw-never-getvalue-on-max-types");
+    Check(hugeReader.CharsServed <= 1024 + 2 && hugeReader.BytesServed <= 1024 + 2, "raw-served-data-bounded");
+    Check(hugeRow[1] is not string && hugeRow[2] is not byte[], "raw-omitted-cell-is-not-a-shortened-value");
+
+    // A shortened value can never be written back.
+    var tbl = new TableRef("App", "dbo", "Docs");
+    var omitted = hugeRow[1];
+    foreach (var (name, build) in new (string, Action)[]
+    {
+        ("new-value", () => EditRowsSql.BuildUpdate(tbl, new RowKey(["Id"], [1]), new Dictionary<string, object?> { ["Body"] = omitted })),
+        ("original-value", () => EditRowsSql.BuildUpdate(tbl, new RowKey(["Id"], [1]), new Dictionary<string, object?> { ["Qty"] = 1 },
+            new Dictionary<string, object?> { ["Body"] = omitted })),
+        ("delete-original", () => EditRowsSql.BuildDelete(tbl, new RowKey(["Id"], [1]), new Dictionary<string, object?> { ["Body"] = omitted })),
+        ("key", () => new RowKey(["Id"], [omitted]))
+    })
+    {
+        try { build(); throw new Exception($"FAIL raw-omitted-writeback-{name}"); }
+        catch (ArgumentException) { }
+    }
+    // ...unless the column is excluded from the predicate entirely.
+    EditRowsSql.BuildUpdate(tbl, new RowKey(["Id"], [1]), new Dictionary<string, object?> { ["Qty"] = 1 },
+        new Dictionary<string, object?> { ["Body"] = omitted }, new HashSet<string> { "Body" });
+
+    // Total budget: first row fits, second row's cell does not -> omitted and reading stops.
+    var rowsReader = new BudgetFakeReader(["t"], ["nvarchar"],
+        [new string('a', 300)], [new string('b', 300)], [new string('c', 300)]);
+    var budgeted = await RawRowReader.ReadAsync(rowsReader, 10, new RawReadBudget(MaxCellBytes: 1024, MaxTotalBytes: 800));
+    Check(budgeted.Rows.Count >= 1 && budgeted.Rows[0][0] is string s0 && s0.Length == 300, "raw-total-budget-first-row-exact");
+    Check(budgeted.Truncated && budgeted.ByteBudgetExhausted && rowsReader.RowsRead < 3, "raw-total-budget-stops-and-flags");
+    Check(budgeted.Rows.All(r => r[0] is string or RawCellOmitted), "raw-total-budget-no-shortened-strings");
+    Check(budgeted.Rows.Where(r => r[0] is string).All(r => ((string)r[0]!).Length == 300), "raw-total-budget-strings-complete");
+
+    // Row cap still behaves as before.
+    var capReader = new BudgetFakeReader(["i"], ["int"], [1], [2], [3]);
+    var capped = await RawRowReader.ReadAsync(capReader, 2, RawReadBudget.Default);
+    Check(capped.Rows.Count == 2 && capped.Truncated && !capped.ByteBudgetExhausted, "raw-row-cap-unchanged");
+
+    // NULL and empty string are not omitted and stay distinguishable.
+    var nulls = new BudgetFakeReader(["a", "b", "c"], ["nvarchar", "nvarchar", "varbinary"], [null, "", new byte[] { 1, 2, 3 }]);
+    var nullRows = await RawRowReader.ReadAsync(nulls, 5, small);
+    Check(nullRows.Rows[0][0] is null && nullRows.Rows[0][1] is "" && nullRows.Rows[0][2] is byte[] { Length: 3 }, "raw-null-empty-binary-exact");
+    Check(!nullRows.HasOmittedCells, "raw-no-omitted-flag-for-small");
+
+    // Cell exactly at the cap is kept; one over is omitted.
+    var edge = new BudgetFakeReader(["a", "b"], ["nvarchar", "nvarchar"], [new string('e', 512), new string('f', 513)]);
+    var edgeRows = await RawRowReader.ReadAsync(edge, 5, small);
+    Check(edgeRows.Rows[0][0] is string { Length: 512 } && RawCellOmitted.IsOmitted(edgeRows.Rows[0][1]), "raw-cell-cap-boundary");
+
+    // Spatial/hierarchy types are not read at all.
+    var spatial = new BudgetFakeReader(["g", "i"], ["geography", "int"], [new string('g', 10), 1]);
+    var spatialRows = await RawRowReader.ReadAsync(spatial, 5, small);
+    Check(RawCellOmitted.IsOmitted(spatialRows.Rows[0][0]) && spatialRows.Rows[0][1] is 1 && spatial.UnboundedLargeReads == 0, "raw-spatial-unsupported-not-read");
+
+    // Cancellation propagates.
+    using var cts = new CancellationTokenSource();
+    cts.Cancel();
+    try { await RawRowReader.ReadAsync(new BudgetFakeReader(["i"], ["int"], [1]), 5, small, cts.Token); throw new Exception("FAIL raw-cancel"); }
+    catch (OperationCanceledException) { }
+    Pass("query-raw-budget");
 }
 
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");

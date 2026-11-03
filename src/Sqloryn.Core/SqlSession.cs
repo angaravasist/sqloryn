@@ -596,12 +596,15 @@ public sealed class SqlSession : IAsyncDisposable
     /// Runs one parameterised statement on this session's connection and returns the first result set with raw values.
     /// Used by catalog browsing, design and keyed-edit features. Parameter names must be of the form @name.
     /// Rows beyond <paramref name="maxRows"/> are dropped and <see cref="RawRows.Truncated"/> is set.
+    /// Reads are sequential and bounded by <paramref name="budget"/> (default <see cref="RawReadBudget.Default"/>):
+    /// a string/binary cell over the budget is returned as <see cref="RawCellOmitted"/>, never as a shortened value.
     /// </summary>
     public async Task<RawRows> QueryRawAsync(
         string sql,
         IEnumerable<EditParameter>? parameters = null,
         int maxRows = 5_000,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RawReadBudget? budget = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (string.IsNullOrWhiteSpace(sql))
@@ -615,45 +618,135 @@ public sealed class SqlSession : IAsyncDisposable
             await using var cmd = _connection!.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = _options!.CommandTimeoutSeconds;
-            if (parameters is not null)
-            {
-                foreach (var p in parameters)
-                {
-                    if (string.IsNullOrEmpty(p.Name) || p.Name[0] != '@')
-                        throw new ArgumentException("Parameter names must start with '@'.");
-                    cmd.Parameters.AddWithValue(p.Name, p.Value ?? DBNull.Value);
-                }
-            }
+            AddParameters(cmd, parameters);
 
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            var columns = new List<string>(reader.FieldCount);
-            var types = new List<string>(reader.FieldCount);
-            for (var i = 0; i < reader.FieldCount; i++)
-            {
-                columns.Add(reader.GetName(i));
-                types.Add(reader.GetDataTypeName(i));
-            }
-
-            var rows = new List<object?[]>();
-            var truncated = false;
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            {
-                if (rows.Count >= maxRows)
-                {
-                    truncated = true;
-                    break;
-                }
-                var values = new object?[reader.FieldCount];
-                for (var i = 0; i < values.Length; i++)
-                    values[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
-                rows.Add(values);
-            }
-            return new RawRows(columns, types, rows, truncated);
+            await using var reader = await cmd.ExecuteReaderAsync(
+                System.Data.CommandBehavior.SequentialAccess, cancellationToken).ConfigureAwait(false);
+            return await RawRowReader.ReadAsync(reader, maxRows, budget ?? RawReadBudget.Default, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    static void AddParameters(SqlCommand cmd, IEnumerable<EditParameter>? parameters)
+    {
+        if (parameters is null)
+            return;
+        foreach (var p in parameters)
+        {
+            if (string.IsNullOrEmpty(p.Name) || p.Name[0] != '@')
+                throw new ArgumentException("Parameter names must start with '@'.");
+            if (RawCellOmitted.IsOmitted(p.Value))
+                throw new ArgumentException($"Parameter {p.Name} holds a value that was not fully loaded and cannot be written back.");
+            cmd.Parameters.AddWithValue(p.Name, p.Value ?? DBNull.Value);
+        }
+    }
+
+    /// <summary>
+    /// Applies <paramref name="commands"/> (from <see cref="EditRowsSql.BuildUpdate"/>/<see cref="EditRowsSql.BuildDelete"/>)
+    /// in ONE owned SqlTransaction. Every write's row count is validated before commit; any conflict, wrong count or
+    /// error rolls the whole set back. Refuses to run when the session already has an open transaction.
+    /// If the outcome is <see cref="EditBatchOutcome.OutcomeUnknown"/> the connection is closed so no transaction or lock survives.
+    /// </summary>
+    public async Task<EditBatchResult> ApplyEditsAsync(
+        IReadOnlyList<EditCommand> commands, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(commands);
+        if (commands.Count == 0)
+            throw new ArgumentException("No edits to apply.", nameof(commands));
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? linked = null;
+        try
+        {
+            EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before saving edits.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _activeCts = linked;
+            Interlocked.Increment(ref _inFlight);
+
+            var connection = _connection!;
+            var timeout = _options!.CommandTimeoutSeconds;
+
+            await using (var state = connection.CreateCommand())
+            {
+                state.CommandText = "SELECT CONVERT(int, XACT_STATE());";
+                state.CommandTimeout = timeout;
+                var xact = (int)(await state.ExecuteScalarAsync(linked.Token).ConfigureAwait(false) ?? 0);
+                if (xact != 0)
+                    return new EditBatchResult(EditBatchOutcome.RolledBackError, 0, null,
+                        "A transaction is already open on this session; refusing to save edits inside it. Nothing was written.");
+            }
+
+            var factory = new SqlEditTransactionFactory(this, connection, timeout);
+            var result = await EditRowsBatch.ApplyAsync(factory, commands, linked.Token).ConfigureAwait(false);
+            if (result.Outcome == EditBatchOutcome.OutcomeUnknown)
+            {
+                // Closing the connection ends any transaction the server may still hold for us.
+                _targetUnknown = true;
+                await DisposeConnectionAsync().ConfigureAwait(false);
+                result = result with { Message = result.Message + " The session was disconnected; reconnect and reload." };
+            }
+            return result;
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCts, linked))
+                _activeCts = null;
+            _activeSqlCommand = null;
+            linked?.Dispose();
+            if (linked is not null)
+                Interlocked.Decrement(ref _inFlight);
+            _gate.Release();
+        }
+    }
+
+    sealed class SqlEditTransactionFactory(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds)
+        : IEditTransactionFactory
+    {
+        public async Task<IEditTransaction> BeginAsync(CancellationToken cancellationToken)
+        {
+            var tx = (SqlTransaction)await connection.BeginTransactionAsync(
+                IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+            return new SqlEditTransaction(owner, connection, tx, commandTimeoutSeconds);
+        }
+    }
+
+    sealed class SqlEditTransaction(SqlSession owner, SqlConnection connection, SqlTransaction transaction, int commandTimeoutSeconds)
+        : IEditTransaction
+    {
+        public async Task<int> ExecuteAffectedAsync(EditCommand command, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = command.CommandText;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            AddParameters(cmd, command.Parameters);
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                return await EditRowsSql.ReadAffectedCountAsync(reader, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public Task CommitAsync(CancellationToken cancellationToken) => transaction.CommitAsync(cancellationToken);
+        public Task RollbackAsync(CancellationToken cancellationToken) => transaction.RollbackAsync(cancellationToken);
+        public ValueTask DisposeAsync() => transaction.DisposeAsync();
     }
 
     async Task<IReadOnlyList<string>> ReadNameListAsync(string sql, CancellationToken cancellationToken)
@@ -690,9 +783,17 @@ public sealed class SqlSession : IAsyncDisposable
         => ResultMaterializer.FormatCell(reader, ordinal);
 }
 
-/// <summary>Raw first result set from <see cref="SqlSession.QueryRawAsync"/>. A null value is SQL NULL.</summary>
+/// <summary>
+/// Raw first result set from <see cref="SqlSession.QueryRawAsync"/>. A null value is SQL NULL.
+/// A <see cref="RawCellOmitted"/> value marks a cell that was too large or unsupported to load; it must never be written back.
+/// </summary>
+/// <param name="Truncated">The row cap or the byte budget stopped reading before the result set ended.</param>
+/// <param name="ByteBudgetExhausted">The total byte budget (not just the row cap) ended the read.</param>
+/// <param name="HasOmittedCells">At least one cell is a <see cref="RawCellOmitted"/> placeholder.</param>
 public sealed record RawRows(
     IReadOnlyList<string> Columns,
     IReadOnlyList<string> SqlTypes,
     IReadOnlyList<object?[]> Rows,
-    bool Truncated);
+    bool Truncated,
+    bool ByteBudgetExhausted = false,
+    bool HasOmittedCells = false);
