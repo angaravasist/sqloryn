@@ -62,6 +62,7 @@ public partial class MainWindow : Window
         Editor.KeyUp += (_, _) => CaptureSelection();
         Closing += OnWindowClosing;
         ApplySettings(_settings);
+        InitShell();
         AddTab();
     }
 
@@ -106,7 +107,10 @@ public partial class MainWindow : Window
     void OnWindowClosing(object? sender, WindowClosingEventArgs e)
     {
         if (_closeApproved)
+        {
+            SaveLayout();
             return;
+        }
         e.Cancel = true;
         if (_closePromptInFlight)
             return;
@@ -223,6 +227,7 @@ public partial class MainWindow : Window
         {
             StatusBar.Text = "No tab.";
             ConnectionLabel.Text = "Not connected";
+            UpdateWelcome();
             return;
         }
         UpdateCommandState(_active);
@@ -232,8 +237,8 @@ public partial class MainWindow : Window
             : session.TargetUnknown
                 ? $"{session.ServerDisplay} / (target unknown — revalidate)"
                 : $"{session.ServerDisplay} / {session.Database}";
-        StatusBar.Text =
-            $"{_active.Status} · tab {_active.Id.ToString()[..8]} · GO batches supported · passwords in memory unless saved to Keychain";
+        StatusBar.Text = _active.Status;
+        UpdateWelcome();
     }
 
     void UpdateCommandState(QueryTab tab)
@@ -241,11 +246,17 @@ public partial class MainWindow : Window
         var connected = tab.Session.IsConnected;
         var executing = tab.IsExecuting || tab.Session.HasActiveCommand;
         DisconnectButton.IsEnabled = connected && !executing;
+        DisconnectButton.IsVisible = connected;
         RunButton.IsEnabled = connected && !executing;
         CancelButton.IsEnabled = executing;
+        CancelButton.IsVisible = executing;
+        // Export is only offered once there is something to export.
         var hasSets = tab.LastResult?.ResultSets.Count > 0;
         ExportCsvButton.IsEnabled = hasSets;
         ExportJsonButton.IsEnabled = hasSets;
+        ExportCsvButton.IsVisible = hasSets;
+        ExportJsonButton.IsVisible = hasSets;
+        ExportSeparator.IsVisible = hasSets;
     }
 
     void ReportError(string message)
@@ -444,6 +455,7 @@ public partial class MainWindow : Window
             {
                 _lastError = ex.Message;
                 MessagesBox.Text = SafeUi(ex.Message);
+                SetResultsVisible(true);
                 ShowMessagesTab();
                 UpdateStatus();
                 StatusBar.Text = SafeUi(ex.Message);
@@ -479,7 +491,11 @@ public partial class MainWindow : Window
         UpdateStatus();
     }
 
-    void OnNewTab(object? sender, RoutedEventArgs e) => AddTab();
+    void OnNewTab(object? sender, RoutedEventArgs e)
+    {
+        _welcomeDismissed = true;
+        AddTab();
+    }
 
     async void OnCloseTab(object? sender, RoutedEventArgs e)
     {
@@ -790,6 +806,7 @@ public partial class MainWindow : Window
             return;
         _active.Document.SetText(Editor.Text ?? "");
         RefreshHeader(_active);
+        UpdateWelcome();
     }
 
     void CaptureSelection()
@@ -816,7 +833,8 @@ public partial class MainWindow : Window
         if (!ReferenceEquals(_active, tab))
             return;
         _treeRoots.Clear();
-        PropertiesBox.Text = "Select an object to see its properties.";
+        PropertiesBox.Text = "";
+        SetPropertiesVisible(false);
         if (!tab.Session.IsConnected)
             return;
         try
@@ -878,7 +896,11 @@ public partial class MainWindow : Window
     }
 
     void OnTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)
-        => PropertiesBox.Text = DescribeNode(SelectedNode);
+    {
+        var node = SelectedNode;
+        PropertiesBox.Text = DescribeNode(node);
+        SetPropertiesVisible(node is not null);
+    }
 
     string DescribeNode(TreeNode? node)
     {
@@ -1278,6 +1300,7 @@ public partial class MainWindow : Window
             "SQLoryn — database studio (developer preview)\n\n" +
             "• SQL authentication with mandatory encryption.\n" +
             "• GO batch separators are supported.\n" +
+            $"• Version {typeof(MainWindow).Assembly.GetName().Version}. Build and support details are in Tools > Diagnostics Bundle.\n" +
             "• This preview does not claim parity with SQL Server Management Studio, and no live SQL Server test evidence is implied.\n" +
             "• Passwords are stored only if you choose Remember (macOS Keychain).\n\n" +
             "Not affiliated with Microsoft.");

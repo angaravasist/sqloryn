@@ -1,53 +1,13 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Sqloryn.MainWindow"
-        Title="SQLoryn — Database Studio (preview)"
-        Width="1440" Height="880"
-        MinWidth="1000" MinHeight="640">
+        Title="SQLoryn"
+        Width="1180" Height="740"
+        MinWidth="720" MinHeight="460">
   <DockPanel>
-    <Menu DockPanel.Dock="Top">
-      <MenuItem Header="_File">
-        <MenuItem Header="_New Query" Name="MenuNew" HotKey="Ctrl+N" Click="OnNewTab" />
-        <MenuItem Header="_Open…" Name="MenuOpen" HotKey="Ctrl+O" Click="OnOpen" />
-        <MenuItem Header="_Save" Name="MenuSave" HotKey="Ctrl+S" Click="OnSave" />
-        <MenuItem Header="Save _As…" Name="MenuSaveAs" HotKey="Ctrl+Shift+S" Click="OnSaveAs" />
-        <MenuItem Header="_Close Tab" Name="MenuCloseTab" HotKey="Ctrl+W" Click="OnCloseTab" />
-        <Separator />
-        <MenuItem Header="Export Results as _CSV…" Name="MenuExportCsv" Click="OnExportCsv" />
-        <MenuItem Header="Export Results as CSV (Spreadsheet-_safe)…" Name="MenuExportCsvSafe" Click="OnExportCsvSafe" />
-        <MenuItem Header="Export Results as _JSON…" Name="MenuExportJson" Click="OnExportJson" />
-        <Separator />
-        <MenuItem Header="_Quit" Name="MenuQuit" HotKey="Ctrl+Q" Click="OnQuit" />
-      </MenuItem>
-      <MenuItem Header="_Edit">
-        <MenuItem Header="_Find / Replace…" Name="MenuFind" HotKey="Ctrl+F" Click="OnFindReplace" />
-      </MenuItem>
-      <MenuItem Header="_Connection">
-        <MenuItem Header="_Connect…" Name="MenuConnect" HotKey="Ctrl+Shift+C" Click="OnConnect" />
-        <MenuItem Header="_Disconnect" Name="MenuDisconnect" Click="OnDisconnect" />
-        <Separator />
-        <MenuItem Header="_Revalidate Target" Name="MenuRevalidate" Click="OnRevalidate" />
-      </MenuItem>
-      <MenuItem Header="_Query">
-        <MenuItem Header="_Run" Name="MenuRun" HotKey="F5" Click="OnRun" />
-        <MenuItem Header="_Cancel" Name="MenuCancel" HotKey="Escape" Click="OnCancel" />
-      </MenuItem>
-      <MenuItem Header="_Object">
-        <MenuItem Header="_Expand Selected" Name="MenuExpand" HotKey="Ctrl+E" Click="OnExpandSelected" />
-        <MenuItem Header="Script _SELECT in New Tab (Table/View)" Name="MenuScriptSelect" HotKey="Ctrl+Shift+E" Click="OnScriptSelect"
-                  AutomationProperties.Name="Script SELECT into a new tab for selected table or view" />
-        <Separator />
-        <MenuItem Header="_Design Table…" Name="MenuDesignTable" Click="OnDesignTable" />
-        <MenuItem Header="Edit Top _200 Rows…" Name="MenuEditRows" Click="OnEditRows" />
-      </MenuItem>
-      <MenuItem Header="_Tools">
-        <MenuItem Header="_Settings…" Name="MenuSettings" HotKey="Ctrl+OemComma" Click="OnSettings" />
-        <MenuItem Header="_Diagnostics Bundle…" Name="MenuDiagnostics" Click="OnDiagnostics" />
-      </MenuItem>
-      <MenuItem Header="_Help">
-        <MenuItem Header="_About SQLoryn" Name="MenuAbout" Click="OnAbout" />
-      </MenuItem>
-    </Menu>
+    <!-- In-window menu bar for non-macOS platforms. On macOS the same command table is exported as the
+         native menu bar (see MainWindow.Shell.cs) and this control stays empty and hidden. -->
+    <Menu DockPanel.Dock="Top" Name="WindowMenu" />
 
     <!-- Toolbar -->
     <Border DockPanel.Dock="Top" Classes="toolbar">
@@ -56,40 +16,45 @@
                    Margin="12,0,6,0" Classes="muted" Text="Not connected"
                    AutomationProperties.Name="Connection target" />
         <StackPanel Orientation="Horizontal" Spacing="2">
+          <Button Name="SidebarToggle" Classes="tool" Content="Sidebar"
+                  Click="OnToggleSidebar" AutomationProperties.Name="Toggle object explorer sidebar"
+                  ToolTip.Tip="Show or hide the object explorer" />
+          <Rectangle Classes="vsep" />
           <Button Name="ConnectButton" Classes="tool" Content="Connect" Click="OnConnect"
                   AutomationProperties.Name="Connect" />
           <Button Name="DisconnectButton" Classes="tool" Content="Disconnect" Click="OnDisconnect"
-                  AutomationProperties.Name="Disconnect" />
+                  IsVisible="False" AutomationProperties.Name="Disconnect" />
           <Rectangle Classes="vsep" />
           <Button Name="RunButton" Classes="primary" Content="▶  Run" Click="OnRun"
-                  AutomationProperties.Name="Run query" />
+                  AutomationProperties.Name="Run query"
+                  ToolTip.Tip="Run selection or document (F5; ⌘↵ on Mac, Ctrl+Enter elsewhere)" />
           <Button Name="CancelButton" Classes="tool" Content="Cancel" Click="OnCancel"
-                  AutomationProperties.Name="Cancel query" />
-          <Rectangle Classes="vsep" />
+                  IsVisible="False" AutomationProperties.Name="Cancel query" />
+          <Rectangle Name="ExportSeparator" Classes="vsep" IsVisible="False" />
           <Button Name="ExportCsvButton" Classes="tool" Content="Export CSV" Click="OnExportCsv"
-                  AutomationProperties.Name="Export results as CSV" />
+                  IsVisible="False" AutomationProperties.Name="Export results as CSV" />
           <Button Name="ExportJsonButton" Classes="tool" Content="Export JSON" Click="OnExportJson"
-                  AutomationProperties.Name="Export results as JSON" />
+                  IsVisible="False" AutomationProperties.Name="Export results as JSON" />
         </StackPanel>
       </DockPanel>
     </Border>
 
-    <!-- Status bar -->
+    <!-- Status bar: one line. Build/support detail lives in About and the diagnostics bundle. -->
     <Border DockPanel.Dock="Bottom" Classes="statusbar">
-      <DockPanel>
-        <TextBlock DockPanel.Dock="Right" Classes="muted" FontSize="11" VerticalAlignment="Center"
-                   Margin="16,0,0,0"
-                   Text="GO batches supported · developer preview, no SSMS parity claimed · no live SQL evidence yet"
-                   AutomationProperties.Name="Capability note" />
-        <TextBlock Name="StatusBar" Text="Disconnected — encryption mandatory; passwords stay in memory unless saved to Keychain."
-                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                   AutomationProperties.Name="Status" />
-      </DockPanel>
+      <TextBlock Name="StatusBar" Text="Not connected"
+                 VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                 AutomationProperties.Name="Status" />
     </Border>
 
-    <Grid ColumnDefinitions="340,Auto,*">
+    <Grid Name="BodyGrid">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="240" MinWidth="180" MaxWidth="480" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="*" MinWidth="320" />
+      </Grid.ColumnDefinitions>
+
       <!-- Object Explorer -->
-      <Grid Grid.Column="0" RowDefinitions="Auto,*,Auto,Auto">
+      <Grid Name="Sidebar" Grid.Column="0" RowDefinitions="Auto,*,Auto,Auto">
         <Border Grid.Row="0" Classes="sectionhead">
           <DockPanel>
             <Button DockPanel.Dock="Right" Name="RefreshTreeButton" Classes="tool" Padding="8,2" Content="Refresh"
@@ -112,21 +77,24 @@
             </ContextMenu>
           </TreeView.ContextMenu>
         </TreeView>
-        <Border Grid.Row="2" Classes="sectionhead" BorderThickness="0,1,0,1">
+        <TextBlock Grid.Row="1" Name="ExplorerHint" Classes="muted" TextWrapping="Wrap" Margin="14,12"
+                   VerticalAlignment="Top"
+                   Text="Not connected. Choose Connect to browse databases." />
+        <!-- Properties appear only once an object is selected. -->
+        <Border Grid.Row="2" Name="PropertiesHeader" Classes="sectionhead" BorderThickness="0,1,0,1" IsVisible="False">
           <TextBlock Classes="caption" Text="PROPERTIES" />
         </Border>
         <TextBox Grid.Row="3" Name="PropertiesBox" Classes="mono" IsReadOnly="True" AcceptsReturn="True"
                  TextWrapping="Wrap" Height="150" FontSize="12" BorderThickness="0" CornerRadius="0"
-                 Background="Transparent"
-                 Text="Select an object to see its properties."
+                 Background="Transparent" IsVisible="False"
                  AutomationProperties.Name="Selected object properties" />
       </Grid>
 
-      <GridSplitter Grid.Column="1" Width="4" Background="{DynamicResource Sq.Border}"
+      <GridSplitter Grid.Column="1" Name="SidebarSplitter" Width="4" Background="{DynamicResource Sq.Border}"
                     ResizeDirection="Columns" />
 
       <!-- Workspace -->
-      <Grid Grid.Column="2" RowDefinitions="Auto,*,Auto,*">
+      <Grid Grid.Column="2" Name="Workspace" RowDefinitions="Auto,*,Auto,Auto">
         <Border Grid.Row="0" Background="{DynamicResource Sq.Panel}" BorderBrush="{DynamicResource Sq.Border}"
                 BorderThickness="0,0,0,1">
           <TabControl Name="QueryTabs" SelectionChanged="OnTabChanged"
@@ -140,15 +108,16 @@
                        AutomationProperties.Name="Run mode" />
           </Border>
           <TextBox Name="Editor" Classes="editor mono" AcceptsReturn="True" TextWrapping="NoWrap" FontSize="13"
-                   PlaceholderText="Write T-SQL here. F5 runs the selection when one exists; otherwise the document. GO on its own line splits batches."
+                   PlaceholderText="Write T-SQL here. Run executes the selection when one exists; otherwise the document. GO on its own line splits batches."
                    AutomationProperties.Name="SQL editor"
                    TextChanged="OnEditorTextChanged" />
         </DockPanel>
 
-        <GridSplitter Grid.Row="2" Height="4" Background="{DynamicResource Sq.Border}"
-                      ResizeDirection="Rows" HorizontalAlignment="Stretch" />
+        <GridSplitter Grid.Row="2" Name="ResultsSplitter" Height="4" Background="{DynamicResource Sq.Border}"
+                      ResizeDirection="Rows" HorizontalAlignment="Stretch" IsVisible="False" />
 
-        <DockPanel Grid.Row="3">
+        <!-- Results appear once a run has produced output. -->
+        <DockPanel Grid.Row="3" Name="ResultsPane" IsVisible="False" MinHeight="90">
           <Border DockPanel.Dock="Top" Classes="sectionhead">
             <DockPanel>
               <TextBlock DockPanel.Dock="Right" Name="ResultSummary" Classes="muted" />
@@ -158,6 +127,28 @@
           <TabControl Name="ResultTabs" AutomationProperties.Name="Results and messages"
                       SelectionChanged="OnResultTabChanged" />
         </DockPanel>
+
+        <!-- Welcome: shown on launch until there is something to work on. -->
+        <Border Grid.Row="0" Grid.RowSpan="4" Name="WelcomePanel" Background="{DynamicResource Sq.Bg}">
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="14" MaxWidth="440">
+            <TextBlock Text="SQLoryn" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" />
+            <TextBlock Classes="muted" TextAlignment="Center" TextWrapping="Wrap"
+                       Text="Connect to a SQL Server, start a blank query, or open a SQL file." />
+            <StackPanel Spacing="8" Margin="0,8,0,0">
+              <Button Name="WelcomeConnect" Classes="primary" Content="New Connection…" Click="OnConnect"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                      AutomationProperties.Name="New connection" />
+              <Button Name="WelcomeNewQuery" Content="New Query" Click="OnWelcomeNewQuery"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                      AutomationProperties.Name="New query" />
+              <Button Name="WelcomeOpen" Content="Open SQL File…" Click="OnOpen"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                      AutomationProperties.Name="Open SQL file" />
+            </StackPanel>
+            <TextBlock Classes="muted" FontSize="11" TextAlignment="Center" TextWrapping="Wrap" Margin="0,8,0,0"
+                       Text="Connections require encryption. Passwords stay in memory unless you choose Remember (macOS Keychain)." />
+          </StackPanel>
+        </Border>
       </Grid>
     </Grid>
   </DockPanel>

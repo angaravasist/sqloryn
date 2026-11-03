@@ -834,15 +834,32 @@ Pass("explorer-ownership");
 
         var settingsStore = new AppSettingsStore(root);
         var defaults = settingsStore.Load();
-        Check(defaults.ResultsMaxRows == 10_000 && defaults.ConfirmDestructive && defaults.Theme == "System" && defaults.ShowLineNumbers, "settings-defaults");
+        Check(defaults.ResultsMaxRows == QueryLimits.MaxRowsPerSet && defaults.ConfirmDestructive && defaults.Theme == "System", "settings-defaults");
+        Check(AppSettings.MaxResultsMaxRows == QueryLimits.MaxRowsPerSet, "settings-cap-matches-engine");
         settingsStore.Save(defaults with { EditorFontSize = 16, ResultsMaxRows = 500, Theme = "Dark", ConfirmDestructive = false });
         var savedSettings = new AppSettingsStore(root).Load();
         Check(savedSettings.EditorFontSize == 16 && savedSettings.ResultsMaxRows == 500 && savedSettings.Theme == "Dark" && !savedSettings.ConfirmDestructive, "settings-roundtrip");
         File.WriteAllText(settingsStore.FilePath, "garbage");
-        Check(settingsStore.Load().ResultsMaxRows == 10_000, "settings-corrupt-defaults");
+        Check(settingsStore.Load().ResultsMaxRows == QueryLimits.MaxRowsPerSet, "settings-corrupt-defaults");
         settingsStore.Save(new AppSettings { Theme = "Neon", ResultsMaxRows = -5, EditorFontSize = 1000 });
         var clamped = settingsStore.Load();
         Check(clamped.Theme == "System" && clamped.ResultsMaxRows == 1 && clamped.EditorFontSize == AppSettings.MaxFontSize, "settings-normalized");
+        // A legacy file with the removed line-number preference and an over-cap row limit still loads and is clamped.
+        File.WriteAllText(settingsStore.FilePath, "{\"showLineNumbers\":true,\"resultsMaxRows\":1000000,\"theme\":\"Dark\"}");
+        var legacy = settingsStore.Load();
+        Check(legacy.ResultsMaxRows == QueryLimits.MaxRowsPerSet && legacy.Theme == "Dark", "settings-legacy-clamped");
+        Check(new AppSettings { ResultsMaxRows = 9_999 }.Normalize().ResultsMaxRows == QueryLimits.MaxRowsPerSet, "settings-over-cap-clamped");
+        Check(new AppSettings { ResultsMaxRows = QueryLimits.MaxRowsPerSet }.Normalize().ResultsMaxRows == QueryLimits.MaxRowsPerSet, "settings-at-cap-kept");
+        Check(new AppSettings { ResultsMaxRows = 0 }.Normalize().ResultsMaxRows == 1, "settings-zero-clamped");
+        var layoutDefaults = new AppSettings();
+        Check(layoutDefaults.SidebarWidth == 240 && layoutDefaults.SidebarVisible && layoutDefaults.ResultsHeight == 0, "settings-layout-defaults");
+        var layoutClamped = new AppSettings { SidebarWidth = 9999, ResultsHeight = -3 }.Normalize();
+        Check(layoutClamped.SidebarWidth == AppSettings.MaxSidebarWidth && layoutClamped.ResultsHeight == 0, "settings-layout-clamped");
+        Check(new AppSettings { SidebarWidth = double.NaN }.Normalize().SidebarWidth == AppSettings.DefaultSidebarWidth, "settings-layout-nan");
+        Check(new AppSettings { SidebarWidth = 10 }.Normalize().SidebarWidth == AppSettings.MinSidebarWidth, "settings-layout-min");
+        settingsStore.Save(new AppSettings { SidebarWidth = 300, SidebarVisible = false, ResultsHeight = 260 });
+        var layoutBack = settingsStore.Load();
+        Check(layoutBack.SidebarWidth == 300 && !layoutBack.SidebarVisible && layoutBack.ResultsHeight == 260, "settings-layout-roundtrip");
         Pass("app-settings");
     }
     finally

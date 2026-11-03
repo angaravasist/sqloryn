@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Sqloryn.SettingsWindow"
         Title="Settings — SQLoryn"
-        Width="460" Height="440"
+        Width="460" Height="430"
         CanResize="False"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False">
@@ -16,16 +16,15 @@
       <NumericUpDown Name="FontSizeBox" Grid.Column="1" Minimum="8" Maximum="48" Increment="1"
                      FormatString="0" AutomationProperties.Name="Editor font size" />
     </Grid>
-    <CheckBox Name="LineNumbersBox" Content="Show line numbers (stored; gutter not rendered yet)" />
 
     <TextBlock Classes="caption" Text="RESULTS" Margin="0,6,0,0" />
     <Grid ColumnDefinitions="160,*">
       <TextBlock Text="Max rows displayed" VerticalAlignment="Center" />
-      <NumericUpDown Name="MaxRowsBox" Grid.Column="1" Minimum="1" Maximum="1000000" Increment="500"
+      <NumericUpDown Name="MaxRowsBox" Grid.Column="1" Minimum="1" Maximum="5000" Increment="500"
                      FormatString="0" AutomationProperties.Name="Maximum displayed rows" />
     </Grid>
     <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
-               Text="The engine also retains at most 5,000 rows per result set; display never exceeds that." />
+               Text="Each result set keeps at most 5,000 rows (retained). This setting limits how many retained rows the grid draws. When a set is cut off, its tab says so: the server's total row count is not known, and exports contain only retained rows." />
 
     <TextBlock Classes="caption" Text="SAFETY" Margin="0,6,0,0" />
     <CheckBox Name="ConfirmBox" IsChecked="True" IsEnabled="False"

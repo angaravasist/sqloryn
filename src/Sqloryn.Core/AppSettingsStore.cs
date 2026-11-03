@@ -7,23 +7,36 @@ public sealed record AppSettings
     public const int MinFontSize = 8;
     public const int MaxFontSize = 48;
     public const int MinResultsMaxRows = 1;
-    public const int MaxResultsMaxRows = 1_000_000;
+    /// <summary>The engine never retains more than this per result set, so the display preference cannot exceed it.</summary>
+    public const int MaxResultsMaxRows = QueryLimits.MaxRowsPerSet;
+    public const double DefaultSidebarWidth = 240;
+    public const double MinSidebarWidth = 180;
+    public const double MaxSidebarWidth = 480;
 
     public double EditorFontSize { get; init; } = 13;
-    public bool ShowLineNumbers { get; init; } = true;
-    public int ResultsMaxRows { get; init; } = 10_000;
+    public int ResultsMaxRows { get; init; } = QueryLimits.MaxRowsPerSet;
     public bool ConfirmDestructive { get; init; } = true;
+    /// <summary>"System" follows the live OS appearance; "Light" and "Dark" override it.</summary>
     public string Theme { get; init; } = "System";
+    /// <summary>Object Explorer width in device-independent pixels.</summary>
+    public double SidebarWidth { get; init; } = DefaultSidebarWidth;
+    public bool SidebarVisible { get; init; } = true;
+    /// <summary>Results pane height in device-independent pixels; 0 means "use the default split".</summary>
+    public double ResultsHeight { get; init; }
 
     public AppSettings Normalize()
     {
         var theme = Theme is "Light" or "Dark" or "System" ? Theme : "System";
         var size = double.IsNaN(EditorFontSize) ? 13 : Math.Clamp(EditorFontSize, MinFontSize, MaxFontSize);
+        var sidebar = double.IsFinite(SidebarWidth) ? Math.Clamp(SidebarWidth, MinSidebarWidth, MaxSidebarWidth) : DefaultSidebarWidth;
+        var results = double.IsFinite(ResultsHeight) ? Math.Clamp(ResultsHeight, 0, 4000) : 0;
         return this with
         {
             EditorFontSize = size,
             ResultsMaxRows = Math.Clamp(ResultsMaxRows, MinResultsMaxRows, MaxResultsMaxRows),
-            Theme = theme
+            Theme = theme,
+            SidebarWidth = sidebar,
+            ResultsHeight = results
         };
     }
 }

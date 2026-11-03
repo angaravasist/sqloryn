@@ -38,11 +38,15 @@ public partial class MainWindow
                     var set = result.ResultSets[i];
                     var shown = Math.Min(set.Rows.Count, maxRows);
                     if (shown < set.Rows.Count)
-                        shownNote.Append($"Result {i + 1}: showing first {shown:N0} of {set.Rows.Count:N0} rows. ");
-                    var suffix = set.Truncated || set.BudgetExceeded ? ", truncated" : "";
+                        shownNote.Append($"Result {i + 1}: displaying first {shown:N0} of {set.Rows.Count:N0} retained rows (Settings > Max rows displayed). ");
+                    // "Retained" is what the engine kept (at most QueryLimits.MaxRowsPerSet per set); when it stopped
+                    // early the server's total is unknown, so say so instead of presenting the count as complete.
+                    var kept = set.Truncated || set.BudgetExceeded
+                        ? $"first {set.Rows.Count:N0} rows kept, more exist"
+                        : $"{set.Rows.Count:N0} row{(set.Rows.Count == 1 ? "" : "s")}";
                     ResultTabs.Items.Add(new TabItem
                     {
-                        Header = $"Result {i + 1} ({set.Rows.Count:N0} row{(set.Rows.Count == 1 ? "" : "s")}{suffix})",
+                        Header = $"Result {i + 1} ({kept})",
                         Tag = i,
                         Content = BuildResultGrid(set, shown)
                     });
@@ -70,6 +74,7 @@ public partial class MainWindow
         {
             _renderingResults = false;
         }
+        SetResultsVisible(result is not null);
         if (_active is not null)
             UpdateCommandState(_active);
     }
