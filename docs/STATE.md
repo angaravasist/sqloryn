@@ -26,7 +26,7 @@ Statuses below distinguish **component-tested** from **acceptance-complete**. In
 | # | Disposition | Evidence / gap |
 |---|---|---|
 | 1 | **Partial** — warnings out of `ExecutableSql` | Core hostile-identifier PASS; live disposable apply of hostile names **unverified** |
-| 2 | **Open (reopened)** — autofill Core exists; UI event sequence incomplete | Verifier D8: delayed Keychain vs typed password / changed endpoint must be proven through Connect UI event order |
+| 2 | **Open (reopened)** — generation-safe autofill implemented; native UI run pending | D8: `ProfileAutofillSession.TryApplySecret(generation, secret)` applies only for the current generation while Waiting; `ConnectAutofillController` models SelectProfile/UserTypedPassword/LookupCompleted/UserChangedServer/ResolveForConnect and `ConnectWindow` uses it. Component tests (typed→late Keychain, host change→late Keychain, Keychain→host change→Connect, A secret never reaches B) pass; not yet exercised in the native Avalonia window |
 | 3 | **Open (reopened)** — batch rollback fakes pass; collation / dispose gaps | Verifier D3 (case-insensitive silent overwrite), D4 (dispose hides outcome); live SqlTransaction **unverified** |
 | 4 | **Partial** — export destination + types | Core `export-from-resultset-types` PASS; independent verifier must recheck integrated UI export path (D1) |
 | 5 | **Open (reopened)** — staged save without external-edit gate | Verifier D2: external file edit must survive Save |
