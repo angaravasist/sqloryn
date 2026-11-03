@@ -12,9 +12,26 @@ public static class ObjectExplorerService
         Table,
         View,
         Procedure,
+        Function,
+        Key,
+        Index,
         Column,
         Placeholder
     }
+
+    /// <summary>A static folder under a schema. <see cref="FolderKind"/>/<see cref="ChildKind"/> are the UI tree kinds.</summary>
+    public sealed record SchemaFolder(string Title, string FolderKind, string ChildKind);
+
+    /// <summary>Folders shown under every schema, in display order. Their contents load only when expanded.</summary>
+    public static IReadOnlyList<SchemaFolder> SchemaFolders { get; } =
+    [
+        new("Tables", "tables", "table"),
+        new("Views", "views", "view"),
+        new("Keys", "keys", "key"),
+        new("Indexes", "indexes", "index"),
+        new("Programmability · Procedures", "procedures", "procedure"),
+        new("Programmability · Functions", "functions", "function")
+    ];
 
     public sealed class Node
     {

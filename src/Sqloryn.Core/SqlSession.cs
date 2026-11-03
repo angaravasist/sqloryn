@@ -748,6 +748,128 @@ public sealed class SqlSession : IAsyncDisposable
         }
     }
 
+    /// <summary>Test seam: supplies the plan command runner instead of the live connection. Never set in production code.</summary>
+    internal Func<IPlanCommandRunner>? PlanRunnerForTests { get; init; }
+
+    /// <summary>
+    /// Estimated execution plan for <paramref name="sql"/> via SET SHOWPLAN_XML. The SQL is delivered to the server only after
+    /// SHOWPLAN_XML ON succeeded, so it is compiled but never executed; this method never calls <see cref="ExecuteAsync"/>.
+    /// If SHOWPLAN_XML cannot be switched OFF again the connection is closed so nothing runs in SHOWPLAN mode.
+    /// </summary>
+    public async Task<EstimatedPlanResult> EstimatePlanAsync(string sql, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (string.IsNullOrWhiteSpace(sql))
+            throw new ArgumentException("SQL text is required.");
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? linked = null;
+        var counted = false;
+        try
+        {
+            if (PlanRunnerForTests is null)
+                EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before estimating a plan.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _activeCts = linked;
+            Interlocked.Increment(ref _inFlight);
+            counted = true;
+
+            var runner = PlanRunnerForTests?.Invoke()
+                         ?? new SqlPlanCommandRunner(this, _connection!, _options!.CommandTimeoutSeconds);
+            var result = await EstimatedPlanService.EstimateAsync(runner, sql, linked.Token).ConfigureAwait(false);
+            if (result.SessionTainted && PlanRunnerForTests is null)
+            {
+                _targetUnknown = true;
+                await DisposeConnectionAsync().ConfigureAwait(false);
+            }
+            return result;
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCts, linked))
+                _activeCts = null;
+            _activeSqlCommand = null;
+            linked?.Dispose();
+            if (counted)
+                Interlocked.Decrement(ref _inFlight);
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Real runner. Refuses to submit user SQL unless its own SET SHOWPLAN_XML ON returned successfully, and forgets that
+    /// state as soon as OFF is attempted.
+    /// </summary>
+    sealed class SqlPlanCommandRunner(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds) : IPlanCommandRunner
+    {
+        bool _showplanOn;
+
+        public async Task SetShowplanXmlAsync(bool on, CancellationToken cancellationToken)
+        {
+            if (!on)
+                _showplanOn = false;
+            await using var cmd = connection.CreateCommand();
+            // A control statement must be alone in its batch.
+            cmd.CommandText = on ? "SET SHOWPLAN_XML ON;" : "SET SHOWPLAN_XML OFF;";
+            cmd.CommandTimeout = on ? commandTimeoutSeconds : Math.Min(commandTimeoutSeconds, 15);
+            cmd.CommandType = CommandType.Text;
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                _showplanOn = on;
+            }
+            catch (SqlException ex)
+            {
+                throw new PlanCommandException(ex.Number, SanitizeMessage(ex.Message), ex);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public async Task<IReadOnlyList<string>> RunBatchAsync(string batch, CancellationToken cancellationToken)
+        {
+            if (!_showplanOn)
+                throw new InvalidOperationException("SHOWPLAN_XML is not confirmed ON; refusing to submit SQL.");
+            var plans = new List<string>();
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = batch;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                do
+                {
+                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        if (reader.FieldCount > 0 && !await reader.IsDBNullAsync(0, cancellationToken).ConfigureAwait(false))
+                            plans.Add(Convert.ToString(reader.GetValue(0), System.Globalization.CultureInfo.InvariantCulture) ?? "");
+                    }
+                }
+                while (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false));
+                return plans;
+            }
+            catch (SqlException ex)
+            {
+                throw new PlanCommandException(ex.Number, SanitizeMessage(ex.Message), ex);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+    }
+
     sealed class SqlEditTransactionFactory(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds)
         : IEditTransactionFactory
     {

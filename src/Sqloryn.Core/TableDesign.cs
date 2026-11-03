@@ -20,6 +20,10 @@ public sealed record TableDesignDraft
     public required string Schema { get; init; }
     public required string TableName { get; init; }
     public required IReadOnlyList<ColumnDefinition> Columns { get; init; }
+    /// <summary>Primary key columns in key order. Empty means no primary key.</summary>
+    public IReadOnlyList<string> PrimaryKeyColumns { get; init; } = [];
+    /// <summary>Optional constraint name; defaults to PK_ followed by the table name (truncated to 128 characters).</summary>
+    public string? PrimaryKeyName { get; init; }
 }
 
 /// <summary>
@@ -35,6 +39,8 @@ public sealed record TableDesignPreview(string ExecutableSql, IReadOnlyList<stri
 public static partial class TableDesignSql
 {
     const int MaxColumns = 1024;
+    const int MaxPrimaryKeyColumns = 32;
+    const int MaxIdentifierLength = 128;
 
     static readonly HashSet<string> LengthTypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -72,10 +78,18 @@ public static partial class TableDesignSql
         ValidateDraft(draft);
         var sb = new StringBuilder();
         sb.Append("CREATE TABLE ").Append(SqlIdentity.Qualify3(draft.Database, draft.Schema, draft.TableName)).Append(" (\n");
+        var hasKey = draft.PrimaryKeyColumns.Count > 0;
         for (var i = 0; i < draft.Columns.Count; i++)
         {
             sb.Append("    ").Append(ColumnClause(draft.Columns[i]));
-            sb.Append(i < draft.Columns.Count - 1 ? ",\n" : "\n");
+            sb.Append(i < draft.Columns.Count - 1 || hasKey ? ",\n" : "\n");
+        }
+        if (hasKey)
+        {
+            sb.Append("    CONSTRAINT ").Append(SqlIdentity.QuoteIdentifier(PrimaryKeyConstraintName(draft)))
+                .Append(" PRIMARY KEY CLUSTERED (")
+                .Append(string.Join(", ", draft.PrimaryKeyColumns.Select(SqlIdentity.QuoteIdentifier)))
+                .Append(")\n");
         }
         sb.Append(");\n");
         return new TableDesignPreview(sb.ToString(), []);
@@ -89,6 +103,12 @@ public static partial class TableDesignSql
         ValidateDraft(desired);
         if (!SameTable(existing, desired))
             throw new ArgumentException("Renaming or moving a table is not supported by the design preview.");
+        if (!existing.PrimaryKeyColumns.SequenceEqual(desired.PrimaryKeyColumns, StringComparer.OrdinalIgnoreCase))
+            throw new NotSupportedException(
+                "Changing the primary key of an existing table is not generated. Script it explicitly after reviewing dependent foreign keys.");
+        var desiredNames = desired.Columns.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (existing.PrimaryKeyColumns.Any(c => !desiredNames.Contains(c)))
+            throw new NotSupportedException("A primary key column cannot be dropped while it is part of the key.");
 
         var table = SqlIdentity.Qualify3(desired.Database, desired.Schema, desired.TableName);
         var before = existing.Columns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
@@ -187,6 +207,44 @@ public static partial class TableDesignSql
         }
         if (identityCount > 1)
             throw new ArgumentException("A table can have only one identity column.");
+        ValidatePrimaryKey(draft);
+    }
+
+    static string PrimaryKeyConstraintName(TableDesignDraft draft)
+    {
+        if (draft.PrimaryKeyName is not null)
+            return draft.PrimaryKeyName;
+        var name = "PK_" + draft.TableName;
+        return name.Length <= MaxIdentifierLength ? name : name[..MaxIdentifierLength];
+    }
+
+    static void ValidatePrimaryKey(TableDesignDraft draft)
+    {
+        var key = draft.PrimaryKeyColumns;
+        if (key.Count == 0)
+        {
+            if (draft.PrimaryKeyName is not null)
+                throw new ArgumentException("A primary key name was supplied without any key columns.");
+            return;
+        }
+        if (key.Count > MaxPrimaryKeyColumns)
+            throw new ArgumentException($"A primary key cannot have more than {MaxPrimaryKeyColumns} columns.");
+        SqlIdentity.QuoteIdentifier(PrimaryKeyConstraintName(draft));
+        var columns = draft.Columns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in key)
+        {
+            if (!seen.Add(name))
+                throw new ArgumentException($"Primary key column listed twice: {DisplayName(name)}");
+            if (!columns.TryGetValue(name, out var column))
+                throw new ArgumentException($"Primary key column {DisplayName(name)} is not a column of the table.");
+            if (column.IsNullable)
+                throw new ArgumentException($"Primary key column {DisplayName(name)} must be NOT NULL.");
+            var type = TypeSql(column);
+            var baseName = type.Split('(')[0];
+            if (baseName is "text" or "ntext" or "image" or "xml" or "sql_variant" || type.EndsWith("(MAX)", StringComparison.Ordinal))
+                throw new ArgumentException($"Column {DisplayName(name)} has type {type}, which cannot be part of a primary key.");
+        }
     }
 
     static string ColumnClause(ColumnDefinition column)

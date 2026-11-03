@@ -1873,6 +1873,290 @@ Pass("explorer-ownership");
     Pass("oe-truncation-honesty");
 }
 
+// Object Explorer: keys, indexes, functions under a schema
+{
+    var keys = MetadataCatalog.ListKeys("My]Db", "dbo");
+    Check(keys.Contains("[My]]Db].sys.key_constraints", StringComparison.Ordinal) && keys.Contains("sys.foreign_keys", StringComparison.Ordinal) &&
+          keys.Contains("@schema", StringComparison.Ordinal) && !keys.Contains("'dbo'", StringComparison.Ordinal), "metadata-keys");
+    var indexes = MetadataCatalog.ListIndexes("d", "s");
+    Check(indexes.Contains("[d].sys.indexes", StringComparison.Ordinal) && indexes.Contains("i.index_id > 0", StringComparison.Ordinal) &&
+          indexes.Contains("@schema", StringComparison.Ordinal), "metadata-indexes");
+    var functions = MetadataCatalog.ListFunctions("d", "s");
+    Check(functions.Contains("'FN'", StringComparison.Ordinal) && functions.Contains("'IF'", StringComparison.Ordinal) &&
+          functions.Contains("'TF'", StringComparison.Ordinal) && functions.Contains("@schema", StringComparison.Ordinal), "metadata-functions");
+    foreach (var sql in new[] { keys, indexes, functions })
+        Check(!sql.Contains("sqlorynschema", StringComparison.Ordinal), "metadata-no-literal-schema");
+    try { MetadataCatalog.ListKeys("d", ""); throw new Exception("FAIL metadata-keys-bad-schema"); }
+    catch (ArgumentException) { }
+    try { MetadataCatalog.ListIndexes("", "dbo"); throw new Exception("FAIL metadata-indexes-bad-db"); }
+    catch (ArgumentException) { }
+    Pass("metadata-keys-indexes-functions");
+
+    var folders = ObjectExplorerService.SchemaFolders;
+    foreach (var kind in new[] { "tables", "views", "keys", "indexes", "procedures", "functions" })
+        Check(folders.Any(f => f.FolderKind == kind), "oe-folder-" + kind);
+    Check(folders.Single(f => f.FolderKind == "keys").ChildKind == "key" &&
+          folders.Single(f => f.FolderKind == "indexes").ChildKind == "index" &&
+          folders.Single(f => f.FolderKind == "functions").ChildKind == "function", "oe-folder-child-kinds");
+    Check(ObjectExplorerService.NodeKind.Key != ObjectExplorerService.NodeKind.Index &&
+          ObjectExplorerService.NodeKind.Function != ObjectExplorerService.NodeKind.Procedure, "oe-node-kinds");
+    Pass("oe-schema-folders");
+
+    var raw = new RawRows(
+        ["schema", "name", "parent", "type_desc", "is_unique"],
+        ["nvarchar", "nvarchar", "nvarchar", "nvarchar", "bit"],
+        [
+            ["dbo", "PK_Orders", "Orders", "PRIMARY_KEY_CONSTRAINT", true],
+            ["dbo", "FK_Orders_Cust", "Orders", "FOREIGN_KEY_CONSTRAINT", false],
+            ["dbo", "IX_Orders_Date\nevil", "Orders", "NONCLUSTERED", true],
+            ["dbo", "fnTotal", null, "SQL_SCALAR_FUNCTION", false],
+        ],
+        Truncated: true);
+    var parsed = SchemaObjectCatalog.Parse(raw);
+    Check(parsed.Count == 4 && parsed[0].Parent == "Orders" && parsed[0].IsUnique && !parsed[1].IsUnique && parsed[3].Parent is null, "schema-object-parse");
+    Check(SchemaObjectCatalog.Title("key", parsed[0]) == "Orders.PK_Orders · primary key", "schema-object-title-pk");
+    Check(SchemaObjectCatalog.Title("key", parsed[1]).EndsWith("foreign key", StringComparison.Ordinal), "schema-object-title-fk");
+    var indexTitle = SchemaObjectCatalog.Title("index", parsed[2]);
+    Check(!indexTitle.Contains('\n') && indexTitle.Contains("unique", StringComparison.Ordinal) && indexTitle.Contains("nonclustered", StringComparison.Ordinal), "schema-object-title-index-sanitised");
+    Check(SchemaObjectCatalog.Title("function", parsed[3]) == "fnTotal · scalar", "schema-object-title-function");
+    // Truncation honesty survives the new listings.
+    var note = CatalogTruncation.Describe(parsed.Count, raw.Truncated, raw.ByteBudgetExhausted);
+    Check(note is not null && note.Contains("truncated", StringComparison.OrdinalIgnoreCase), "schema-object-truncation-note");
+    Pass("schema-object-catalog");
+}
+
+// Create table with primary key
+{
+    TableDesignDraft Draft(IReadOnlyList<string> pk, params ColumnDefinition[] cols) => new()
+    {
+        Database = "App", Schema = "dbo", TableName = "Orders", Columns = cols, PrimaryKeyColumns = pk
+    };
+    var id = new ColumnDefinition { Name = "Id", DataType = "int", IsNullable = false, IsIdentity = true };
+    var tenant = new ColumnDefinition { Name = "Tenant", DataType = "int", IsNullable = false };
+    var note = new ColumnDefinition { Name = "Note", DataType = "nvarchar", MaxLength = 50 };
+
+    var single = TableDesignSql.PreviewCreate(Draft(["Id"], id, note)).ExecutableSql;
+    Check(single.Contains("CONSTRAINT [PK_Orders] PRIMARY KEY CLUSTERED ([Id])", StringComparison.Ordinal), "design-pk-single");
+    Check(single.IndexOf("[Note]", StringComparison.Ordinal) < single.IndexOf("CONSTRAINT", StringComparison.Ordinal) &&
+          single.Contains("[Note] nvarchar(50) NULL,\n", StringComparison.Ordinal), "design-pk-after-columns-with-comma");
+    var composite = TableDesignSql.PreviewCreate(Draft(["Tenant", "Id"], id, tenant)).ExecutableSql;
+    Check(composite.Contains("PRIMARY KEY CLUSTERED ([Tenant], [Id])", StringComparison.Ordinal), "design-pk-composite-order");
+    var named = TableDesignSql.PreviewCreate((Draft(["Id"], id)) with { PrimaryKeyName = "PK_Custom]" }).ExecutableSql;
+    Check(named.Contains("CONSTRAINT [PK_Custom]]]", StringComparison.Ordinal), "design-pk-named-quoted");
+    var longName = TableDesignSql.PreviewCreate((Draft(["Id"], id)) with { TableName = new string('t', 128) }).ExecutableSql;
+    Check(longName.Contains("CONSTRAINT [PK_" + new string('t', 125) + "]", StringComparison.Ordinal), "design-pk-default-name-truncated");
+    Check(!TableDesignSql.PreviewCreate(Draft([], id, note)).ExecutableSql.Contains("CONSTRAINT", StringComparison.Ordinal), "design-no-pk-unchanged");
+
+    void ExpectPkInvalid(TableDesignDraft d, string name)
+    {
+        try { TableDesignSql.PreviewCreate(d); throw new Exception("FAIL " + name); }
+        catch (ArgumentException) { }
+    }
+    ExpectPkInvalid(Draft(["Missing"], id), "design-pk-unknown-column");
+    ExpectPkInvalid(Draft(["Id", "id"], id), "design-pk-duplicate-column");
+    ExpectPkInvalid(Draft(["Note"], id, note), "design-pk-nullable-column");
+    ExpectPkInvalid(Draft(["Doc"], new ColumnDefinition { Name = "Doc", DataType = "xml", IsNullable = false }), "design-pk-xml-column");
+    ExpectPkInvalid(Draft(["Doc"], new ColumnDefinition { Name = "Doc", DataType = "nvarchar", MaxLength = -1, IsNullable = false }), "design-pk-max-column");
+    ExpectPkInvalid(Draft(["Doc"], new ColumnDefinition { Name = "Doc", DataType = "text", IsNullable = false }), "design-pk-text-column");
+    ExpectPkInvalid(Draft(Enumerable.Range(0, 33).Select(i => "c" + i).ToList(),
+        Enumerable.Range(0, 33).Select(i => new ColumnDefinition { Name = "c" + i, DataType = "int", IsNullable = false }).ToArray()), "design-pk-too-many-columns");
+    ExpectPkInvalid((Draft(["Id"], id)) with { PrimaryKeyName = "" }, "design-pk-empty-name");
+
+    // Hostile identifiers stay inside quoting.
+    var hostile = TableDesignSql.PreviewCreate(new TableDesignDraft
+    {
+        Database = "A", Schema = "s", TableName = "t]\nDROP TABLE x;--",
+        Columns = [new ColumnDefinition { Name = "i]\nDROP", DataType = "int", IsNullable = false }],
+        PrimaryKeyColumns = ["i]\nDROP"]
+    }).ExecutableSql;
+    Check(hostile.Contains("PRIMARY KEY CLUSTERED ([i]]\nDROP])", StringComparison.Ordinal) &&
+          hostile.Contains("CONSTRAINT [PK_t]]\nDROP TABLE x;--]", StringComparison.Ordinal), "design-pk-hostile-quoted");
+
+    // Alter never silently rewrites a key.
+    var existing = Draft(["Id"], id, note);
+    Check(!TableDesignSql.PreviewAlter(existing, existing with { Columns = [id, note, new ColumnDefinition { Name = "N2", DataType = "int" }] }).ExecutableSql.Contains("PRIMARY", StringComparison.Ordinal), "design-alter-keeps-pk-untouched");
+    try { TableDesignSql.PreviewAlter(existing, existing with { PrimaryKeyColumns = [] }); throw new Exception("FAIL design-alter-pk-change"); }
+    catch (NotSupportedException) { }
+    try { TableDesignSql.PreviewAlter(existing, existing with { Columns = [note] , PrimaryKeyColumns = ["Id"] }); throw new Exception("FAIL design-alter-drop-pk-column"); }
+    catch (Exception ex) when (ex is NotSupportedException or ArgumentException) { }
+    Pass("table-design-primary-key");
+}
+
+// Estimated execution plans
+{
+    const string Insert = "INSERT dbo.Orders (Id) VALUES (1)";
+
+    // Order: SET ON, then batch, then SET OFF; DML never executes.
+    {
+        var runner = new FakePlanRunner();
+        var result = await EstimatedPlanService.EstimateAsync(runner, Insert);
+        Check(result.Status == EstimatedPlanStatus.Succeeded && result.PlanXml.Count == 1, "estimate-plan-succeeds");
+        Check(runner.Log.SequenceEqual(["SET ON", "BATCH " + Insert, "SET OFF"]), "estimate-plan-order-on-batch-off");
+        Check(!runner.ShowplanOn && !result.SessionTainted, "estimate-plan-leaves-showplan-off");
+        Check(runner.DmlExecutions == 0, "estimate-plan-insert-never-executed");
+        Pass("estimate-plan-order-and-no-dml");
+    }
+
+    // SHOWPLAN permission denied: batch never delivered, nothing executed, clear error.
+    {
+        var runner = new FakePlanRunner { OnFailure = new PlanCommandException(262, "SHOWPLAN permission denied in database 'App'.") };
+        var result = await EstimatedPlanService.EstimateAsync(runner, Insert);
+        Check(result.Status == EstimatedPlanStatus.PermissionDenied && result.PlanXml.Count == 0, "estimate-plan-permission-status");
+        Check(result.Error is not null && result.Error.Contains("SHOWPLAN", StringComparison.Ordinal) &&
+              result.Error.Contains("not executed", StringComparison.OrdinalIgnoreCase), "estimate-plan-permission-message");
+        Check(runner.BatchCalls == 0 && runner.DmlExecutions == 0, "estimate-plan-permission-no-batch-no-dml");
+        Check(!runner.ShowplanOn, "estimate-plan-permission-showplan-off");
+        Pass("estimate-plan-permission-denied-no-execution");
+    }
+
+    // Any failure of SET ON (not only permission) means the batch is never sent.
+    {
+        var runner = new FakePlanRunner { OnFailure = new PlanCommandException(null, "connection reset") };
+        var result = await EstimatedPlanService.EstimateAsync(runner, Insert);
+        Check(result.Status == EstimatedPlanStatus.Failed && runner.BatchCalls == 0 && runner.DmlExecutions == 0, "estimate-plan-on-failure-no-batch");
+        Pass("estimate-plan-set-on-failure-no-execution");
+    }
+
+    // Compile error in the batch: SET OFF still sent; session clean.
+    {
+        var runner = new FakePlanRunner { BatchFailure = new PlanCommandException(208, "Invalid object name 'dbo.Nope'.") };
+        var result = await EstimatedPlanService.EstimateAsync(runner, "SELECT * FROM dbo.Nope");
+        Check(result.Status == EstimatedPlanStatus.Failed && result.Error!.Contains("Invalid object name", StringComparison.Ordinal), "estimate-plan-compile-error-status");
+        Check(runner.Log[^1] == "SET OFF" && !runner.ShowplanOn && !result.SessionTainted && runner.DmlExecutions == 0, "estimate-plan-compile-error-turns-off");
+        Pass("estimate-plan-batch-error-turns-off");
+    }
+
+    // SET OFF failing taints the session so the caller can drop the connection.
+    {
+        var runner = new FakePlanRunner { OffFailure = new PlanCommandException(null, "network down") };
+        var result = await EstimatedPlanService.EstimateAsync(runner, Insert);
+        Check(result.SessionTainted && result.Error is not null && result.Error.Contains("SHOWPLAN", StringComparison.Ordinal), "estimate-plan-off-failure-tainted");
+        Check(runner.DmlExecutions == 0, "estimate-plan-off-failure-no-dml");
+        Pass("estimate-plan-off-failure-taints-session");
+    }
+
+    // Cancellation before anything is sent: no server traffic at all.
+    {
+        var runner = new FakePlanRunner();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var result = await EstimatedPlanService.EstimateAsync(runner, Insert, cts.Token);
+        Check(result.Status == EstimatedPlanStatus.Cancelled && runner.Log.Count == 0 && runner.DmlExecutions == 0, "estimate-plan-precancel-sends-nothing");
+    }
+    // Cancellation while the batch is compiling: SET OFF still sent, status Cancelled.
+    {
+        var runner = new FakePlanRunner { BatchFailure = new OperationCanceledException() };
+        var result = await EstimatedPlanService.EstimateAsync(runner, Insert);
+        Check(result.Status == EstimatedPlanStatus.Cancelled && runner.DmlExecutions == 0 && !runner.ShowplanOn, "estimate-plan-cancel");
+        Check(runner.Log[^1] == "SET OFF" && !result.SessionTainted, "estimate-plan-cancel-turns-off");
+        Pass("estimate-plan-cancel");
+    }
+
+    // User SQL cannot switch SHOWPLAN off (or otherwise defeat it): rejected before anything is sent.
+    foreach (var bypass in new[]
+    {
+        "SET SHOWPLAN_XML OFF; " + Insert,
+        "set  showplan_all off\n" + Insert,
+        "SET NOEXEC OFF;\n" + Insert,
+        "SET STATISTICS XML ON; " + Insert,
+        "SET PARSEONLY OFF; " + Insert,
+        "SET FMTONLY OFF; " + Insert,
+        "/* hi */ SET\tSHOWPLAN_TEXT OFF " + Insert,
+    })
+    {
+        var runner = new FakePlanRunner();
+        var result = await EstimatedPlanService.EstimateAsync(runner, bypass);
+        Check(result.Status == EstimatedPlanStatus.Rejected && runner.Log.Count == 0 && runner.DmlExecutions == 0, "estimate-plan-rejects-bypass:" + bypass);
+    }
+    // Look-alikes inside comments, strings and identifiers are fine.
+    foreach (var benign in new[]
+    {
+        "SELECT 'SET SHOWPLAN_XML OFF' AS s",
+        "-- SET SHOWPLAN_XML OFF\nSELECT 1",
+        "/* SET NOEXEC OFF */ SELECT 1",
+        "SELECT [SET SHOWPLAN_XML OFF] FROM t",
+        "SET NOCOUNT ON; SELECT 1",
+    })
+    {
+        var runner = new FakePlanRunner();
+        var result = await EstimatedPlanService.EstimateAsync(runner, benign);
+        Check(result.Status == EstimatedPlanStatus.Succeeded && runner.DmlExecutions == 0, "estimate-plan-allows-lookalike:" + benign);
+    }
+    Pass("estimate-plan-rejects-showplan-bypass");
+
+    // GO scripts: one SET ON ... one SET OFF, each batch estimated once; SQLCMD scripts rejected untouched.
+    {
+        var runner = new FakePlanRunner();
+        var result = await EstimatedPlanService.EstimateAsync(runner, "SELECT 1\nGO 5\nINSERT dbo.t VALUES (1)\nGO\nDELETE dbo.t");
+        Check(result.Status == EstimatedPlanStatus.Succeeded && result.PlanXml.Count == 3 && runner.BatchCalls == 3, "estimate-plan-go-batches-once");
+        Check(runner.Log.Count(l => l == "SET ON") == 1 && runner.Log.Count(l => l == "SET OFF") == 1 && runner.Log[0] == "SET ON" && runner.Log[^1] == "SET OFF", "estimate-plan-go-single-on-off");
+        Check(runner.DmlExecutions == 0, "estimate-plan-go-no-dml");
+
+        var rejected = new FakePlanRunner();
+        var r2 = await EstimatedPlanService.EstimateAsync(rejected, "INSERT dbo.t VALUES (1)\nGO\n:r evil.sql");
+        Check(r2.Status == EstimatedPlanStatus.Rejected && rejected.Log.Count == 0, "estimate-plan-sqlcmd-rejected");
+        var empty = await EstimatedPlanService.EstimateAsync(new FakePlanRunner(), "   ");
+        Check(empty.Status == EstimatedPlanStatus.Rejected, "estimate-plan-empty-rejected");
+        Pass("estimate-plan-go-and-preflight");
+    }
+
+    // A failing later batch stops and still turns SHOWPLAN off.
+    {
+        var runner = new FakePlanRunner();
+        var calls = 0;
+        runner.PlanFor = _ => ++calls == 2 ? throw new PlanCommandException(102, "Incorrect syntax") : ["<p/>"];
+        var result = await EstimatedPlanService.EstimateAsync(runner, "SELECT 1\nGO\nSELEC 2\nGO\nSELECT 3");
+        Check(result.Status == EstimatedPlanStatus.Failed && runner.BatchCalls == 2 && result.PlanXml.Count == 1 && runner.Log[^1] == "SET OFF", "estimate-plan-later-batch-failure");
+        Pass("estimate-plan-later-batch-failure");
+    }
+
+    // Oversized plan text is omitted, not truncated silently.
+    {
+        var runner = new FakePlanRunner { PlanFor = _ => [new string('x', EstimatedPlanService.MaxPlanCharacters + 1)] };
+        var result = await EstimatedPlanService.EstimateAsync(runner, "SELECT 1");
+        Check(result.Status == EstimatedPlanStatus.Failed && result.Error!.Contains("too large", StringComparison.OrdinalIgnoreCase), "estimate-plan-oversize");
+        Pass("estimate-plan-oversize");
+    }
+
+    // Messages formatting is single-purpose text and says nothing ran.
+    {
+        var ok = new EstimatedPlanResult(EstimatedPlanStatus.Succeeded, ["<ShowPlanXML/>"], null, false);
+        var text = EstimatedPlanService.FormatForMessages(ok);
+        Check(text.Contains("<ShowPlanXML/>", StringComparison.Ordinal) && text.Contains("not executed", StringComparison.OrdinalIgnoreCase), "estimate-plan-format-success");
+        var bad = EstimatedPlanService.FormatForMessages(new EstimatedPlanResult(EstimatedPlanStatus.PermissionDenied, [], "no SHOWPLAN\nline2", false));
+        Check(bad.Contains("not executed", StringComparison.OrdinalIgnoreCase) && bad.Contains("no SHOWPLAN", StringComparison.Ordinal), "estimate-plan-format-error");
+        Pass("estimate-plan-format");
+    }
+
+    // SqlSession seam: the estimate path never reaches ExecuteAsync's batch executor.
+    {
+        var executed = 0;
+        var runner = new FakePlanRunner();
+        await using var session = new SqlSession
+        {
+            BatchExecutorForTests = (_, _, _) => { executed++; throw new Exception("FAIL estimate must not execute"); },
+            PlanRunnerForTests = () => runner
+        };
+        var result = await session.EstimatePlanAsync(Insert);
+        Check(result.Status == EstimatedPlanStatus.Succeeded && executed == 0 && runner.DmlExecutions == 0, "sqlsession-estimate-no-execute");
+
+        var denied = new FakePlanRunner { OnFailure = new PlanCommandException(262, "denied") };
+        await using var session2 = new SqlSession
+        {
+            BatchExecutorForTests = (_, _, _) => { executed++; throw new Exception("FAIL estimate must not execute"); },
+            PlanRunnerForTests = () => denied
+        };
+        var r2 = await session2.EstimatePlanAsync(Insert);
+        Check(r2.Status == EstimatedPlanStatus.PermissionDenied && executed == 0 && denied.BatchCalls == 0 && !session2.HasActiveCommand, "sqlsession-estimate-denied-no-execute");
+
+        // Without a connection (and no seam) the call fails closed instead of running anything.
+        await using var offline = new SqlSession();
+        try { await offline.EstimatePlanAsync(Insert); throw new Exception("FAIL estimate-offline"); }
+        catch (InvalidOperationException) { }
+        Pass("sqlsession-estimate-plan");
+    }
+}
+
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
 Console.WriteLine("NOTE: live SqlDataReader decimal(38) against SQL Server remains provider-only / live-host verification.");
 return 0;
