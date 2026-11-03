@@ -66,6 +66,30 @@ public sealed class SqlSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Same server and credentials as this connected session, targeting <paramref name="database"/>.
+    /// In-memory only; used to open a sibling tab session. Null when not connected.
+    /// </summary>
+    public ConnectionOptions? CreateSiblingOptions(string database)
+    {
+        var o = IsConnected ? _options : null;
+        if (o is null)
+            return null;
+        return new ConnectionOptions
+        {
+            Server = o.Server,
+            Port = o.Port,
+            UserId = o.UserId,
+            Password = o.Password,
+            Database = database,
+            Encrypt = o.Encrypt,
+            TrustServerCertificate = o.TrustServerCertificate,
+            ServerCertificatePath = o.ServerCertificatePath,
+            ConnectTimeoutSeconds = o.ConnectTimeoutSeconds,
+            CommandTimeoutSeconds = o.CommandTimeoutSeconds
+        };
+    }
+
     public async Task ChangeDatabaseAsync(string database, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
