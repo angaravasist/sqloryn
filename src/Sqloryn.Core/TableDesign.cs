@@ -22,6 +22,15 @@ public sealed record TableDesignDraft
     public required IReadOnlyList<ColumnDefinition> Columns { get; init; }
 }
 
+/// <summary>
+/// Result of a design preview. <see cref="ExecutableSql"/> contains only DDL statements and is the only text
+/// that may be sent to the server. <see cref="Warnings"/> are display-only and never part of executable SQL.
+/// </summary>
+public sealed record TableDesignPreview(string ExecutableSql, IReadOnlyList<string> Warnings)
+{
+    public bool HasChanges => ExecutableSql.Length > 0;
+}
+
 /// <summary>Generates DDL text for review only. Nothing here executes SQL.</summary>
 public static partial class TableDesignSql
 {
@@ -57,7 +66,7 @@ public static partial class TableDesignSql
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex DataTypePattern();
 
-    public static string PreviewCreate(TableDesignDraft draft)
+    public static TableDesignPreview PreviewCreate(TableDesignDraft draft)
     {
         ArgumentNullException.ThrowIfNull(draft);
         ValidateDraft(draft);
@@ -69,10 +78,10 @@ public static partial class TableDesignSql
             sb.Append(i < draft.Columns.Count - 1 ? ",\n" : "\n");
         }
         sb.Append(");\n");
-        return sb.ToString();
+        return new TableDesignPreview(sb.ToString(), []);
     }
 
-    public static string PreviewAlter(TableDesignDraft existing, TableDesignDraft desired)
+    public static TableDesignPreview PreviewAlter(TableDesignDraft existing, TableDesignDraft desired)
     {
         ArgumentNullException.ThrowIfNull(existing);
         ArgumentNullException.ThrowIfNull(desired);
@@ -85,10 +94,11 @@ public static partial class TableDesignSql
         var before = existing.Columns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
         var after = desired.Columns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
         var sb = new StringBuilder();
+        var warnings = new List<string>();
 
         foreach (var column in existing.Columns.Where(c => !after.ContainsKey(c.Name)))
         {
-            sb.Append("-- DESTRUCTIVE: permanently removes column ").Append(SqlIdentity.QuoteIdentifier(column.Name)).Append(" and its data.\n");
+            warnings.Add($"DESTRUCTIVE: permanently removes column {DisplayName(column.Name)} and its data.");
             sb.Append("ALTER TABLE ").Append(table).Append(" DROP COLUMN ").Append(SqlIdentity.QuoteIdentifier(column.Name)).Append(";\n");
         }
 
@@ -97,7 +107,7 @@ public static partial class TableDesignSql
             if (!before.TryGetValue(column.Name, out var old))
             {
                 if (!column.IsNullable)
-                    sb.Append("-- NOTE: adding a NOT NULL column fails on a non-empty table unless a default is supplied.\n");
+                    warnings.Add($"NOTE: adding NOT NULL column {DisplayName(column.Name)} fails on a non-empty table unless a default is supplied.");
                 sb.Append("ALTER TABLE ").Append(table).Append(" ADD ").Append(ColumnClause(column)).Append(";\n");
                 continue;
             }
@@ -112,13 +122,27 @@ public static partial class TableDesignSql
                 continue;
             if (!string.Equals(old.Name, column.Name, StringComparison.Ordinal))
                 throw new ArgumentException("Column names differ only by case; renames are not supported.");
-            sb.Append("-- NOTE: altering a column type can fail or lose data if existing values do not fit.\n");
+            warnings.Add($"NOTE: altering column {DisplayName(column.Name)} can fail or lose data if existing values do not fit.");
             sb.Append("ALTER TABLE ").Append(table).Append(" ALTER COLUMN ")
                 .Append(SqlIdentity.QuoteIdentifier(column.Name)).Append(' ').Append(newType)
                 .Append(column.IsNullable ? " NULL" : " NOT NULL").Append(";\n");
         }
 
-        return sb.Length == 0 ? "-- No changes.\n" : sb.ToString();
+        return new TableDesignPreview(sb.ToString(), warnings);
+    }
+
+    /// <summary>Single-line, display-only rendering of an untrusted identifier. Never used in executable SQL.</summary>
+    static string DisplayName(string name)
+    {
+        var sb = new StringBuilder("'");
+        foreach (var ch in name)
+        {
+            if (char.IsControl(ch) || ch is '\u2028' or '\u2029')
+                sb.Append("\\u").Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
+            else
+                sb.Append(ch);
+        }
+        return sb.Append('\'').ToString();
     }
 
     public static bool HasDestructiveChanges(TableDesignDraft existing, TableDesignDraft desired)

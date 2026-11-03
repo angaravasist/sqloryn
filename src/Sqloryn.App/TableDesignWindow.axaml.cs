@@ -129,11 +129,19 @@ public partial class TableDesignWindow : Window
         Columns = _rows.Select(ToDefinition).ToList()
     };
 
-    void SetPreview(string? sql, string? message)
+    // Only TableDesignPreview.ExecutableSql is ever stored for Apply. Warnings are display-only
+    // and are rendered in WarningsText, never inside the SQL text.
+    void SetPreview(TableDesignPreview? preview, string? message)
     {
-        _previewedSql = sql;
-        PreviewBox.Text = sql ?? message ?? "";
-        ApplyButton.IsEnabled = sql is not null && !sql.StartsWith("-- No changes.", StringComparison.Ordinal);
+        _previewedSql = preview is { HasChanges: true } ? preview.ExecutableSql : null;
+        PreviewBox.Text = preview is null
+            ? message ?? ""
+            : preview.HasChanges ? preview.ExecutableSql : "-- No changes.";
+        WarningsText.Text = preview is { Warnings.Count: > 0 }
+            ? string.Join("\n", preview.Warnings.Select(w => "• " + w))
+            : "";
+        WarningsText.IsVisible = WarningsText.Text.Length > 0;
+        ApplyButton.IsEnabled = _previewedSql is not null;
     }
 
     void OnPreview(object? sender, RoutedEventArgs e)
@@ -147,8 +155,8 @@ public partial class TableDesignWindow : Window
         {
             ColumnGrid.CommitEdit();
             var desired = BuildDesired();
-            var sql = TableDesignSql.PreviewAlter(_existing, desired);
-            SetPreview(sql, null);
+            var preview = TableDesignSql.PreviewAlter(_existing, desired);
+            SetPreview(preview, null);
             StatusText.Text = TableDesignSql.HasDestructiveChanges(_existing, desired)
                 ? "Preview contains DESTRUCTIVE changes (dropped columns or altered types). Review carefully."
                 : "Preview ready. Nothing has been executed.";
@@ -169,12 +177,12 @@ public partial class TableDesignWindow : Window
         {
             ColumnGrid.CommitEdit();
             // The draft may have been edited after the preview; require a fresh preview in that case.
-            string current;
+            TableDesignPreview currentPreview;
             bool destructive;
             try
             {
                 var desired = BuildDesired();
-                current = TableDesignSql.PreviewAlter(_existing, desired);
+                currentPreview = TableDesignSql.PreviewAlter(_existing, desired);
                 destructive = TableDesignSql.HasDestructiveChanges(_existing, desired);
             }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
@@ -182,9 +190,10 @@ public partial class TableDesignWindow : Window
                 StatusText.Text = "Draft is invalid: " + Safe(ex.Message);
                 return;
             }
-            if (!string.Equals(current, _previewedSql, StringComparison.Ordinal))
+            var current = currentPreview.ExecutableSql;
+            if (!currentPreview.HasChanges || !string.Equals(current, _previewedSql, StringComparison.Ordinal))
             {
-                SetPreview(current, null);
+                SetPreview(currentPreview, null);
                 StatusText.Text = "The draft changed after the previous preview. Review the refreshed DDL, then confirm again.";
                 return;
             }
@@ -192,6 +201,8 @@ public partial class TableDesignWindow : Window
             var summary = destructive
                 ? "This change can permanently remove data or alter column types. The statements run in order without a wrapping transaction; if one fails, earlier ones stay applied."
                 : "These statements run in order without a wrapping transaction; if one fails, earlier ones stay applied.";
+            if (currentPreview.Warnings.Count > 0)
+                summary += "\n\n" + string.Join("\n", currentPreview.Warnings.Select(w => "• " + w));
             var confirmed = await Dialogs.ConfirmAsync(
                 this, "Confirm schema change", summary + "\n\nTarget: " + _table.Qualified, current,
                 "Apply to server", destructive);
