@@ -9,7 +9,8 @@ public partial class ConnectWindow : Window
 {
     ConnectionProfile? _selectedProfile;
     bool _loadingProfile;
-    long _passwordLoadGeneration;
+    bool _settingPassword;
+    readonly ProfileAutofillSession _autofill = new();
 
     public ConnectionOptions? Result { get; private set; }
 
@@ -45,7 +46,11 @@ public partial class ConnectWindow : Window
         }
     }
 
-    void OnCancel(object? sender, RoutedEventArgs e) => Close(false);
+    void OnCancel(object? sender, RoutedEventArgs e)
+    {
+        _autofill.Forget();
+        Close(false);
+    }
 
     void OnSaveProfileChanged(object? sender, RoutedEventArgs e)
     {
@@ -73,7 +78,7 @@ public partial class ConnectWindow : Window
             SaveProfileBox.IsChecked = true;
             ProfileNameBox.Text = profile.Name;
             RememberBox.IsChecked = profile.RememberPassword;
-            PasswordBox.Text = "";
+            SetPasswordProgrammatically("");
             ErrorText.IsVisible = false;
         }
         finally
@@ -81,24 +86,61 @@ public partial class ConnectWindow : Window
             _loadingProfile = false;
         }
 
-        if (!profile.RememberPassword)
-            return;
-        var generation = Interlocked.Increment(ref _passwordLoadGeneration);
+        // The session binds any looked-up secret to this profile's endpoint identity and discards the
+        // result if the user edits the endpoint, types a password or picks another profile first.
+        var outcome = await _autofill.BeginProfileAsync(profile, AppServices.Secrets);
+        switch (outcome.Status)
+        {
+            case AutofillStatus.Applied:
+                SetPasswordProgrammatically(outcome.Secret ?? "");
+                break;
+            case AutofillStatus.NotFound:
+            case AutofillStatus.Failed:
+                ShowError(outcome.Error ?? "Could not read the Keychain.");
+                break;
+        }
+    }
+
+    EndpointIdentity CurrentEndpoint() => new(
+        ServerBox.Text?.Trim() ?? "",
+        int.TryParse(PortBox.Text, out var port) ? port : -1,
+        UserBox.Text?.Trim() ?? "",
+        TrustBox.IsChecked == true,
+        string.IsNullOrWhiteSpace(PinBox.Text) ? null : PinBox.Text.Trim());
+
+    void SetPasswordProgrammatically(string value)
+    {
+        _settingPassword = true;
         try
         {
-            var secret = await AppServices.Secrets.GetAsync(ProfileSecretKeys.ForProfile(profile.Id));
-            if (generation != Volatile.Read(ref _passwordLoadGeneration) || !ReferenceEquals(_selectedProfile, profile))
-                return;
-            if (secret is null)
-                ShowError("No password found in the Keychain for this profile. Enter it to continue.");
-            else
-                PasswordBox.Text = secret;
+            PasswordBox.Text = value;
         }
-        catch (Exception ex)
+        finally
         {
-            if (generation == Volatile.Read(ref _passwordLoadGeneration))
-                ShowError("Could not read the Keychain: " + ex.Message);
+            _settingPassword = false;
         }
+    }
+
+    void OnEndpointTextChanged(object? sender, TextChangedEventArgs e) => OnEndpointEdited();
+
+    void OnEndpointCheckChanged(object? sender, RoutedEventArgs e) => OnEndpointEdited();
+
+    void OnEndpointEdited()
+    {
+        if (_loadingProfile)
+            return;
+        if (_autofill.NotifyEndpointEdited(CurrentEndpoint()))
+        {
+            SetPasswordProgrammatically("");
+            ShowError(ProfileAutofillSession.ChangedEndpointMessage);
+        }
+    }
+
+    void OnPasswordTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (_loadingProfile || _settingPassword)
+            return;
+        _autofill.NotifyPasswordEdited();
     }
 
     void OnConnect(object? sender, RoutedEventArgs e)
@@ -109,13 +151,19 @@ public partial class ConnectWindow : Window
                 return;
             if (!int.TryParse(PortBox.Text, out var port))
                 throw new ArgumentException("Port must be an integer.");
+            var credential = _autofill.ResolvePassword(CurrentEndpoint(), PasswordBox.Text);
+            if (!credential.Allowed)
+            {
+                SetPasswordProgrammatically("");
+                throw new ArgumentException(credential.Reason ?? ProfileAutofillSession.ChangedEndpointMessage);
+            }
             var options = new ConnectionOptions
             {
                 Server = ServerBox.Text?.Trim() ?? "",
                 Port = port,
                 Database = string.IsNullOrWhiteSpace(DatabaseBox.Text) ? "master" : DatabaseBox.Text.Trim(),
                 UserId = UserBox.Text?.Trim() ?? "",
-                Password = PasswordBox.Text ?? "",
+                Password = credential.Password,
                 Encrypt = true,
                 TrustServerCertificate = TrustBox.IsChecked == true,
                 ServerCertificatePath = string.IsNullOrWhiteSpace(PinBox.Text) ? null : PinBox.Text.Trim()
@@ -132,6 +180,7 @@ public partial class ConnectWindow : Window
                 throw new ArgumentException("Profile name must be 128 characters or fewer.");
 
             Result = options;
+            _autofill.Forget();
             Close(true);
         }
         catch (Exception ex)

@@ -1002,6 +1002,216 @@ Pass("explorer-ownership");
     Pass("find-replace");
 }
 
+// PR #7 finding 2: remembered password must stay bound to its original endpoint identity.
+{
+    static EndpointIdentity Id(string server = "hostA", int port = 1433, string user = "app",
+        bool trust = false, string? pin = null) => new(server, port, user, trust, pin);
+
+    static ConnectionProfile Profile(Guid id, string server = "hostA", int port = 1433, string user = "app",
+        bool trust = false, string? pin = null, bool remember = true) => new()
+    {
+        Id = id,
+        Name = "p",
+        Server = server,
+        Port = port,
+        UserId = user,
+        TrustServerCertificate = trust,
+        ServerCertificatePath = pin,
+        RememberPassword = remember
+    };
+
+    var pid = Guid.NewGuid();
+    var pidKey = ProfileSecretKeys.ForProfile(pid);
+
+    // Happy path: lookup applies and Connect may use the remembered secret at the bound endpoint.
+    {
+        var store = new MemorySecretStore();
+        await store.SetAsync(pidKey, "secretA");
+        var session = new ProfileAutofillSession();
+        var outcome = await session.BeginProfileAsync(Profile(pid), store);
+        Check(outcome.Status == AutofillStatus.Applied && outcome.Secret == "secretA", "autofill-applied");
+        var ok = session.ResolvePassword(Id(), "secretA");
+        Check(ok.Allowed && ok.Password == "secretA" && ok.UsesRememberedSecret, "autofill-same-endpoint-allowed");
+        Check(!session.NotifyEndpointEdited(Id("HOSTA", 1433, "app")), "autofill-host-case-insensitive");
+        Check(session.ResolvePassword(Id("HOSTA"), "secretA").Allowed, "autofill-host-case-still-bound");
+        Pass("autofill-session-happy-path");
+    }
+
+    // Delayed lookup A -> B: result for A arrives after the endpoint changed to B.
+    {
+        var store = new DelayedSecretStore();
+        var session = new ProfileAutofillSession();
+        var pending = session.BeginProfileAsync(Profile(pid), store);
+        Check(!pending.IsCompleted, "delayed-pending");
+        Check(!session.NotifyEndpointEdited(Id("hostB")), "delayed-edit-nothing-applied-yet");
+        store.Release(pidKey, "secretA");
+        var outcome = await pending;
+        Check(outcome.Status == AutofillStatus.Stale && outcome.Secret is null, "delayed-a-to-b-discarded");
+        var decision = session.ResolvePassword(Id("hostB"), "");
+        Check(decision.Allowed && decision.Password == "" && !decision.UsesRememberedSecret, "delayed-a-to-b-no-secret-held");
+        Pass("autofill-delayed-a-to-b");
+    }
+
+    // After applied autofill, each identity/trust field change drops the secret and Connect refuses it.
+    {
+        var variants = new (string Name, EndpointIdentity Changed)[]
+        {
+            ("host", Id("hostB")),
+            ("port", Id(port: 1434)),
+            ("user", Id(user: "other")),
+            ("trust", Id(trust: true)),
+            ("pin", Id(pin: "/tmp/lab.crt"))
+        };
+        foreach (var (name, changed) in variants)
+        {
+            var store = new MemorySecretStore();
+            await store.SetAsync(pidKey, "secretA");
+            var session = new ProfileAutofillSession();
+            await session.BeginProfileAsync(Profile(pid), store);
+            Check(session.NotifyEndpointEdited(changed), $"applied-edit-clears-{name}");
+            var refused = session.ResolvePassword(changed, "secretA");
+            Check(!refused.Allowed && refused.Password == "" && refused.Reason is not null, $"applied-edit-refused-{name}");
+            // Switching the endpoint back does not resurrect the secret.
+            Check(!session.ResolvePassword(Id(), "secretA").Allowed, $"applied-edit-not-restored-{name}");
+        }
+        Pass("autofill-identity-and-trust-changes-clear-secret");
+    }
+
+    // Defence in depth: even without an edit notification, Connect refuses a remembered secret at a different endpoint.
+    {
+        var store = new MemorySecretStore();
+        await store.SetAsync(pidKey, "secretA");
+        var session = new ProfileAutofillSession();
+        await session.BeginProfileAsync(Profile(pid), store);
+        var refused = session.ResolvePassword(Id("hostB"), "secretA");
+        Check(!refused.Allowed && refused.Reason!.Contains("re-enter", StringComparison.OrdinalIgnoreCase), "resolve-refuses-without-notify");
+        Check(!refused.Reason!.Contains("secretA", StringComparison.Ordinal), "resolve-reason-no-secret");
+        Pass("autofill-resolve-defence-in-depth");
+    }
+
+    // Typed replacement during a pending lookup: late result must not overwrite it.
+    {
+        var store = new DelayedSecretStore();
+        var session = new ProfileAutofillSession();
+        var pending = session.BeginProfileAsync(Profile(pid), store);
+        session.NotifyPasswordEdited();
+        store.Release(pidKey, "secretA");
+        var outcome = await pending;
+        Check(outcome.Status == AutofillStatus.Stale && outcome.Secret is null, "typed-during-lookup-discarded");
+        var typedPwd = session.ResolvePassword(Id(), "typedPw");
+        Check(typedPwd.Allowed && typedPwd.Password == "typedPw" && !typedPwd.UsesRememberedSecret, "typed-during-lookup-keeps-typed");
+        Pass("autofill-typed-replacement-pending");
+    }
+
+    // Typed replacement after autofill: explicit credentials survive, even at a changed endpoint.
+    {
+        var store = new MemorySecretStore();
+        await store.SetAsync(pidKey, "secretA");
+        var session = new ProfileAutofillSession();
+        await session.BeginProfileAsync(Profile(pid), store);
+        session.NotifyPasswordEdited();
+        Check(!session.NotifyEndpointEdited(Id("hostB")), "typed-after-apply-edit-keeps-box");
+        var typedPwd = session.ResolvePassword(Id("hostB"), "typedForB");
+        Check(typedPwd.Allowed && typedPwd.Password == "typedForB" && !typedPwd.UsesRememberedSecret, "typed-after-apply-explicit-allowed");
+        // The old secret text cannot be smuggled back into the box and treated as remembered.
+        Check(!session.ResolvePassword(Id("hostB"), "secretA").UsesRememberedSecret, "typed-after-apply-old-secret-not-remembered");
+        Pass("autofill-typed-replacement-applied");
+    }
+
+    // Profile switch: lookup for profile 1 arriving after profile 2 was selected is discarded.
+    {
+        var store = new DelayedSecretStore();
+        var session = new ProfileAutofillSession();
+        var pid2 = Guid.NewGuid();
+        var key2 = ProfileSecretKeys.ForProfile(pid2);
+        var first = session.BeginProfileAsync(Profile(pid, "hostA"), store);
+        var second = session.BeginProfileAsync(Profile(pid2, "hostB", user: "bob"), store);
+        store.Release(key2, "secretB");
+        store.Release(pidKey, "secretA");
+        var firstOutcome = await first;
+        var secondOutcome = await second;
+        Check(firstOutcome.Status == AutofillStatus.Stale && firstOutcome.Secret is null, "profile-switch-first-stale");
+        Check(secondOutcome.Status == AutofillStatus.Applied && secondOutcome.Secret == "secretB", "profile-switch-second-applied");
+        Check(!session.ResolvePassword(Id("hostA"), "secretB").Allowed, "profile-switch-secret-not-valid-for-old-endpoint");
+        Check(session.ResolvePassword(Id("hostB", user: "bob"), "secretB").Allowed, "profile-switch-secret-valid-for-new-profile");
+        Pass("autofill-profile-switch");
+    }
+
+    // Selecting a profile that does not remember a password cancels the earlier pending lookup and drops applied secrets.
+    {
+        var store = new DelayedSecretStore();
+        var session = new ProfileAutofillSession();
+        var first = session.BeginProfileAsync(Profile(pid), store);
+        var second = await session.BeginProfileAsync(Profile(Guid.NewGuid(), "hostB", remember: false), store);
+        Check(second.Status == AutofillStatus.NotRequested, "no-remember-not-requested");
+        store.Release(pidKey, "secretA");
+        Check((await first).Status == AutofillStatus.Stale, "no-remember-cancels-pending");
+        Check(!session.ResolvePassword(Id("hostA"), "secretA").UsesRememberedSecret, "no-remember-no-bound-secret");
+        Pass("autofill-profile-without-remember");
+    }
+
+    // Keychain denial / missing item.
+    {
+        var session = new ProfileAutofillSession();
+        var missing = await session.BeginProfileAsync(Profile(pid), new MemorySecretStore());
+        Check(missing.Status == AutofillStatus.NotFound && missing.Secret is null && missing.Error is not null, "keychain-null-secret");
+        var decision = session.ResolvePassword(Id(), "");
+        Check(decision.Allowed && decision.Password == "" && !decision.UsesRememberedSecret, "keychain-null-nothing-bound");
+
+        var denied = await session.BeginProfileAsync(Profile(pid), new DelayedSecretStore { ThrowOnGet = true });
+        Check(denied.Status == AutofillStatus.Failed && denied.Secret is null, "keychain-denied-failed");
+        Check(denied.Error is not null && denied.Error.Contains("Keychain", StringComparison.Ordinal), "keychain-denied-has-message");
+        Check(!session.ResolvePassword(Id(), "anything").UsesRememberedSecret, "keychain-denied-nothing-bound");
+
+        // A denial that arrives after the user already moved on is stale, not an error to show.
+        var slow = new DelayedSecretStore();
+        var pending = session.BeginProfileAsync(Profile(pid), slow);
+        session.NotifyPasswordEdited();
+        slow.Fail(pidKey, new InvalidOperationException("late denial"));
+        Check((await pending).Status == AutofillStatus.Stale, "keychain-denied-late-is-stale");
+        Pass("autofill-keychain-denial");
+    }
+
+    // Forget / delete path: Forget drops the applied secret and cancels pending lookups.
+    {
+        var store = new MemorySecretStore();
+        await store.SetAsync(pidKey, "secretA");
+        var session = new ProfileAutofillSession();
+        await session.BeginProfileAsync(Profile(pid), store);
+        session.Forget();
+        Check(!session.ResolvePassword(Id(), "secretA").Allowed, "forget-drops-applied");
+
+        var lateStore = new DelayedSecretStore();
+        var pending = session.BeginProfileAsync(Profile(pid), lateStore);
+        session.Forget();
+        lateStore.Release(pidKey, "secretA");
+        Check((await pending).Status == AutofillStatus.Stale, "forget-cancels-pending");
+        Check(session.Generation > 0, "forget-advances-generation");
+        Pass("autofill-forget");
+    }
+
+    // Generation is monotonic across begin / edit / typed / forget.
+    {
+        var session = new ProfileAutofillSession();
+        var g0 = session.Generation;
+        await session.BeginProfileAsync(Profile(pid, remember: false), new MemorySecretStore());
+        var g1 = session.Generation;
+        session.NotifyPasswordEdited();
+        var g2 = session.Generation;
+        session.Forget();
+        var g3 = session.Generation;
+        Check(g0 < g1 && g1 < g2 && g2 < g3, "generation-monotonic");
+        Pass("autofill-generation");
+    }
+
+    // Identity normalisation: trimmed, blank pin == no pin, host case-insensitive, user case-sensitive.
+    {
+        Check(Id(" HostA ", pin: "  ").Matches(Id("hosta")), "identity-normalises");
+        Check(!Id(user: "App").Matches(Id(user: "app")), "identity-user-case-sensitive");
+        Check(Id(pin: "/a.crt").Matches(Id(pin: " /a.crt ")) && !Id(pin: "/a.crt").Matches(Id(pin: "/b.crt")), "identity-pin-compare");
+        Pass("endpoint-identity");
+    }
+}
 
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
 Console.WriteLine("NOTE: live SqlDataReader decimal(38) against SQL Server remains provider-only / live-host verification.");

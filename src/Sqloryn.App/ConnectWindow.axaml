@@ -20,20 +20,20 @@
 
       <TextBlock Classes="caption" Text="SERVER" Margin="0,6,0,0" />
       <Grid ColumnDefinitions="*,92" ColumnSpacing="8">
-        <TextBox Name="ServerBox" PlaceholderText="Server host" AutomationProperties.Name="Server" />
-        <TextBox Name="PortBox" Grid.Column="1" PlaceholderText="Port" Text="1433" AutomationProperties.Name="Port" />
+        <TextBox Name="ServerBox" TextChanged="OnEndpointTextChanged" PlaceholderText="Server host" AutomationProperties.Name="Server" />
+        <TextBox Name="PortBox" TextChanged="OnEndpointTextChanged" Grid.Column="1" PlaceholderText="Port" Text="1433" AutomationProperties.Name="Port" />
       </Grid>
       <TextBox Name="DatabaseBox" PlaceholderText="Database" Text="master" AutomationProperties.Name="Database" />
 
       <TextBlock Classes="caption" Text="CREDENTIALS" Margin="0,6,0,0" />
-      <TextBox Name="UserBox" PlaceholderText="Login" AutomationProperties.Name="Login" />
-      <TextBox Name="PasswordBox" PlaceholderText="Password" PasswordChar="•"
+      <TextBox Name="UserBox" TextChanged="OnEndpointTextChanged" PlaceholderText="Login" AutomationProperties.Name="Login" />
+      <TextBox Name="PasswordBox" TextChanged="OnPasswordTextChanged" PlaceholderText="Password" PasswordChar="•"
                AutomationProperties.Name="Password" />
 
       <TextBlock Classes="caption" Text="TLS" Margin="0,6,0,0" />
-      <CheckBox Name="TrustBox" Content="Trust server certificate (lab only — skips CA/name checks)"
+      <CheckBox Name="TrustBox" IsCheckedChanged="OnEndpointCheckChanged" Content="Trust server certificate (lab only — skips CA/name checks)"
                 AutomationProperties.Name="Trust server certificate" />
-      <TextBox Name="PinBox" PlaceholderText="Optional lab certificate pin path (.cer/.crt)"
+      <TextBox Name="PinBox" TextChanged="OnEndpointTextChanged" PlaceholderText="Optional lab certificate pin path (.cer/.crt)"
                AutomationProperties.Name="Certificate pin path" />
 
       <TextBlock Classes="caption" Text="PROFILE" Margin="0,6,0,0" />
