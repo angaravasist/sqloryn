@@ -9,7 +9,7 @@ This is an **initial outline, not a complete SSMS feature inventory**. Every men
 | Query editing | T-SQL IntelliSense, multiple tabs, scripts, GO | Preview: tabs + UTF-8 scripts + find/replace + GO batches; no IntelliSense |
 | Results | Grid, messages, multiple result sets, export | Preview: DataGrid per set + messages; CSV/JSON export; live fidelity evidence pending |
 | Query diagnostics | Plans, profiling, statistics, cancellation | Preview: cancel + outcome mapping; no plans |
-| Data editing | Edit rows, generate scripts, table designer | Preview: Design Table (DDL preview/confirm) + Edit Top 200 (optimistic); live apply evidence pending |
+| Data editing | Edit rows, generate scripts, table designer | Preview: Design Table (DDL preview/confirm) + Edit Top 200 (one transaction, all-or-nothing; refused without key + rowversion/comparable columns or with INSTEAD OF triggers; oversized cells read-only, never written back); component-tested only, live apply evidence pending |
 | Security administration | Logins, roles, permissions | Not implemented |
 | Schema management | Compare, import/export, DACPAC, BACPAC | Not implemented |
 | Operations | Backup/restore, server/database configuration | Not implemented |

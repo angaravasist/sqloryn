@@ -12,22 +12,9 @@ public partial class EditRowsWindow : Window
 {
     const int TopRows = 200;
 
-    static readonly HashSet<string> EditableTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "bit", "tinyint", "smallint", "int", "bigint", "decimal", "numeric", "money", "smallmoney", "float", "real",
-        "char", "varchar", "nchar", "nvarchar", "date", "datetime", "smalldatetime", "uniqueidentifier"
-    };
-
     static readonly HashSet<string> CharTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "char", "varchar", "nchar", "nvarchar"
-    };
-
-    // Types that cannot be compared with '=' or that the provider would round-trip lossily as parameters.
-    static readonly HashSet<string> NotConcurrencyComparable = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "text", "ntext", "image", "xml", "geography", "geometry", "hierarchyid", "sql_variant",
-        "datetime2", "time", "datetimeoffset", "timestamp"
     };
 
     sealed class EditRowItem(object?[] originalValues, string?[] display)
@@ -45,7 +32,10 @@ public partial class EditRowsWindow : Window
     IReadOnlyList<string> _sqlTypes = [];
     IReadOnlyList<string> _keyColumns = [];
     Dictionary<string, bool> _nullable = new(StringComparer.OrdinalIgnoreCase);
+    EditSupport _support = EditSupport.Refuse("Not loaded.");
     bool _busy;
+    // Set when a save outcome is unknown: edits stay disabled until a successful reload.
+    bool _needsReload;
 
     public EditRowsWindow() : this(new SqlSession(), new TableRef("master", "dbo", "table"))
     {
@@ -61,7 +51,7 @@ public partial class EditRowsWindow : Window
         Opened += async (_, _) => await LoadAsync();
     }
 
-    async Task LoadAsync()
+    async Task LoadAsync(string? statusPrefix = null)
     {
         if (_busy)
             return;
@@ -72,6 +62,8 @@ public partial class EditRowsWindow : Window
             StatusText.Text = "Loading…";
             var key = await CatalogClient.ListPrimaryKeyAsync(_session, _table.Database, _table.Schema, _table.Name);
             var columns = await CatalogClient.ListColumnsAsync(_session, _table.Database, _table.Schema, _table.Name);
+            var insteadOf = await CatalogClient.HasInsteadOfTriggerAsync(_session, _table.Database, _table.Schema, _table.Name);
+            // Bounded sequential read: oversized string/binary cells come back as RawCellOmitted placeholders.
             var data = await _session.QueryRawAsync(EditRowsSql.BuildSelectTop(_table, TopRows), null, TopRows);
 
             _keyColumns = key;
@@ -79,6 +71,13 @@ public partial class EditRowsWindow : Window
             var identity = columns.Where(c => c.IsIdentity).Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
             _columnNames = data.Columns;
             _sqlTypes = data.SqlTypes;
+            var computed = columns.Where(c => c.IsComputed).Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var infos = _columnNames
+                .Select((n, i) => new EditColumnInfo(
+                    n, _sqlTypes[i], _nullable.TryGetValue(n, out var nl) && nl, identity.Contains(n), computed.Contains(n)))
+                .ToList();
+            _support = EditRowsPolicy.Evaluate(key, infos, insteadOf);
+            _computed = computed;
 
             BuildColumns(identity);
             _items.Clear();
@@ -90,11 +89,15 @@ public partial class EditRowsWindow : Window
                 _items.Add(new EditRowItem(row, display));
             }
 
-            var editable = key.Count > 0;
-            HintText.Text = editable
-                ? $"Key: {string.Join(", ", key)}. Edit cells, then Save. Each changed row is updated with an optimistic check: if the row changed on the server, the update is refused. Empty text in a non-text column means NULL; use “Set cell to NULL” for text columns."
-                : "This table has no primary key, so rows cannot be identified safely. Editing is disabled (read-only view).";
-            StatusText.Text = $"Loaded {data.Rows.Count} row(s)." + (data.Truncated ? " More rows exist." : "");
+            HintText.Text = _support.IsSupported
+                ? $"Key: {string.Join(", ", key)}. Edit cells, then Save. All changed rows are written in one transaction: if any row changed on the server ({(_support.UsesRowVersion ? "rowversion check" : "every non-key column is compared")}), nothing is saved. Rows with an oversized cell that was not fully loaded cannot be edited. Empty text in a non-text column means NULL; use “Set cell to NULL” for text columns."
+                : "Editing is disabled (read-only view): " + _support.RefusalReason;
+            var omitted = data.Rows.Count(r => r.Any(RawCellOmitted.IsOmitted));
+            StatusText.Text = (statusPrefix is null ? "" : statusPrefix + " ") +
+                              $"Loaded {data.Rows.Count} row(s)." +
+                              (data.Truncated ? (data.ByteBudgetExhausted ? " Stopped early: load size budget reached." : " More rows exist.") : "") +
+                              (omitted > 0 ? $" {omitted} row(s) contain oversized or unsupported cells and are read-only." : "");
+            _needsReload = false;
         }
         catch (Exception ex)
         {
@@ -107,6 +110,8 @@ public partial class EditRowsWindow : Window
         RefreshSaveEnabled();
     }
 
+    HashSet<string> _computed = new(StringComparer.OrdinalIgnoreCase);
+
     void BuildColumns(HashSet<string> identity)
     {
         RowGrid.Columns.Clear();
@@ -115,10 +120,11 @@ public partial class EditRowsWindow : Window
         {
             var name = _columnNames[i];
             var type = i < _sqlTypes.Count ? _sqlTypes[i] : "";
-            var readOnly = _keyColumns.Count == 0
+            var readOnly = !_support.IsSupported
                            || _keyColumns.Contains(name, StringComparer.OrdinalIgnoreCase)
                            || identity.Contains(name)
-                           || !EditableTypes.Contains(type);
+                           || _computed.Contains(name)
+                           || !EditRowsPolicy.IsEditableType(type);
             var column = new DataGridTextColumn
             {
                 Header = name,
@@ -138,11 +144,12 @@ public partial class EditRowsWindow : Window
         return header;
     }
 
-    void RefreshSaveEnabled() => SaveButton.IsEnabled = !_busy && _keyColumns.Count > 0 && _items.Count > 0;
+    void RefreshSaveEnabled() => SaveButton.IsEnabled = !_busy && !_needsReload && _support.IsSupported && _items.Count > 0;
 
     static string? FormatValue(object? value) => value switch
     {
         null => null,
+        RawCellOmitted omitted => omitted.Display,
         byte[] bytes => "0x" + Convert.ToHexString(bytes),
         DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture),
         DateTimeOffset dto => dto.ToString("yyyy-MM-dd HH:mm:ss.fffffff zzz", CultureInfo.InvariantCulture),
@@ -207,14 +214,15 @@ public partial class EditRowsWindow : Window
     {
         var table = _table;
         var pending = new List<PendingUpdate>();
+        if (!_support.IsSupported)
+            throw new InvalidOperationException(_support.RefusalReason ?? "Editing is not supported for this table.");
+        // Only the columns the policy trusts take part in the optimistic predicate (rowversion, or every comparable column).
+        var concurrency = new HashSet<string>(_support.ConcurrencyColumns, StringComparer.OrdinalIgnoreCase);
         var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        for (var i = 0; i < _columnNames.Count; i++)
+        foreach (var name in _columnNames)
         {
-            var type = _sqlTypes[i];
-            var comparable = !NotConcurrencyComparable.Contains(type) &&
-                             (EditableTypes.Contains(type) || type is "binary" or "varbinary");
-            if (!comparable)
-                excluded.Add(_columnNames[i]);
+            if (!concurrency.Contains(name))
+                excluded.Add(name);
         }
 
         for (var r = 0; r < _items.Count; r++)
@@ -228,6 +236,9 @@ public partial class EditRowsWindow : Window
                 var column = RowGrid.Columns.FirstOrDefault(c => _columnIndex.TryGetValue(c, out var idx) && idx == i);
                 if (column is null || column.IsReadOnly)
                     continue;
+                if (RawCellOmitted.IsOmitted(item.OriginalValues[i]))
+                    throw new InvalidOperationException(
+                        $"Row {r + 1}, column '{_columnNames[i]}' was not fully loaded; its value cannot be edited or written back.");
                 changed[i] = Parse(i, item.Cells[i]);
             }
             if (changed.Count == 0)
@@ -272,6 +283,7 @@ public partial class EditRowsWindow : Window
             return;
         _busy = true;
         SaveButton.IsEnabled = false;
+        string? reload = null;
         try
         {
             RowGrid.CommitEdit();
@@ -295,8 +307,8 @@ public partial class EditRowsWindow : Window
             var ok = await Dialogs.ConfirmAsync(
                 this,
                 "Confirm row updates",
-                $"{pending.Count} row(s) in {_table.Qualified} will be updated, one statement per row, without a wrapping transaction. " +
-                "Each statement only succeeds if the row still matches what you loaded.",
+                $"{pending.Count} row(s) in {_table.Qualified} will be updated in ONE transaction: all rows are saved, or none. " +
+                "Every statement must still match the row you loaded and affect exactly one row, otherwise the whole set is rolled back.",
                 detail,
                 "Update rows");
             if (!ok)
@@ -305,42 +317,29 @@ public partial class EditRowsWindow : Window
                 return;
             }
 
-            var saved = 0;
-            foreach (var update in pending)
+            var result = await _session.ApplyEditsAsync(pending.Select(p => p.Command).ToList());
+            switch (result.Outcome)
             {
-                try
-                {
-                    var rows = await _session.QueryRawAsync(
-                        update.Command.CommandText, update.Command.Parameters, 1);
-                    var affected = rows.Rows.Count > 0 && rows.Rows[0].Length > 0
-                        ? Convert.ToInt32(rows.Rows[0][0], CultureInfo.InvariantCulture)
-                        : -1;
-                    if (affected < 0)
-                        throw new InvalidOperationException("The server did not report an affected row count.");
-                    EditRowsSql.EnsureSingleRowAffected(affected);
-                }
-                catch (EditRowsConflictException ex)
-                {
-                    StatusText.Text = $"Conflict after {saved} of {pending.Count} row(s) saved: {ex.Message}";
+                case EditBatchOutcome.Committed:
+                    // Reload: server-side values (rowversion, defaults, triggers) may differ from what was typed.
+                    reload = result.Message;
+                    break;
+                case EditBatchOutcome.RolledBackConflict:
+                    StatusText.Text = "Edit conflict; nothing was saved. " + Safe(result.Message);
                     await Dialogs.ShowMessageAsync(this, "Edit conflict",
-                        ex.Message + $"\n\n{saved} of {pending.Count} row(s) were written before this one. Use Reload to see current data; your remaining edits are still in the grid until you reload.");
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    StatusText.Text = $"Save stopped after {saved} of {pending.Count} row(s): {Safe(ex.Message)}";
-                    return;
-                }
-
-                // Re-baseline this row so a later retry does not re-apply or falsely conflict.
-                var values = (object?[])update.Item.OriginalValues.Clone();
-                foreach (var (index, value) in update.NewValues)
-                    values[index] = value;
-                update.Item.OriginalValues = values;
-                update.Item.OriginalDisplay = update.Item.Cells.ToArray();
-                saved++;
+                        result.Message + "\n\nNo row was written. Use Reload to see current data; your edits stay in the grid until you reload.");
+                    break;
+                case EditBatchOutcome.OutcomeUnknown:
+                    _needsReload = true;
+                    _items.Clear();
+                    StatusText.Text = "Save outcome unknown: " + Safe(result.Message);
+                    await Dialogs.ShowMessageAsync(this, "Save outcome unknown",
+                        result.Message + "\n\nEditing is disabled until the data is reloaded. Reconnect if the session was closed.");
+                    break;
+                default:
+                    StatusText.Text = "Save failed; nothing was saved. " + Safe(result.Message);
+                    break;
             }
-            StatusText.Text = $"Saved {saved} row(s).";
         }
         catch (Exception ex)
         {
@@ -351,6 +350,8 @@ public partial class EditRowsWindow : Window
             _busy = false;
             RefreshSaveEnabled();
         }
+        if (reload is not null)
+            await LoadAsync(reload);
     }
 
     void OnSetNull(object? sender, RoutedEventArgs e)

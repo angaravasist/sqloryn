@@ -9,7 +9,8 @@ public sealed record CatalogColumn(
     bool IsIdentity,
     int MaxLength,
     int Precision,
-    int Scale)
+    int Scale,
+    bool IsComputed = false)
 {
     /// <summary>Compact type display such as nvarchar(50), decimal(18,2), int.</summary>
     public string TypeDisplay => TypeName.ToLowerInvariant() switch
@@ -66,7 +67,8 @@ static class CatalogClient
             r[3] is true,
             Convert.ToInt32(r[4] ?? 0, System.Globalization.CultureInfo.InvariantCulture),
             Convert.ToInt32(r[5] ?? 0, System.Globalization.CultureInfo.InvariantCulture),
-            Convert.ToInt32(r[6] ?? 0, System.Globalization.CultureInfo.InvariantCulture))).ToList();
+            Convert.ToInt32(r[6] ?? 0, System.Globalization.CultureInfo.InvariantCulture),
+            r.Length > 7 && r[7] is true)).ToList();
     }
 
     public static async Task<IReadOnlyList<string>> ListPrimaryKeyAsync(
@@ -78,5 +80,16 @@ static class CatalogClient
             256,
             ct);
         return rows.Rows.Select(r => Convert.ToString(r[0]) ?? "").ToList();
+    }
+
+    public static async Task<bool> HasInsteadOfTriggerAsync(
+        SqlSession session, string database, string schema, string table, CancellationToken ct = default)
+    {
+        var rows = await session.QueryRawAsync(
+            MetadataCatalog.CountEnabledInsteadOfTriggers(database, schema, table),
+            [new EditParameter(MetadataCatalog.SchemaParameter, schema), new EditParameter(MetadataCatalog.TableParameter, table)],
+            1,
+            ct);
+        return rows.Rows.Count > 0 && Convert.ToInt32(rows.Rows[0][0] ?? 0, System.Globalization.CultureInfo.InvariantCulture) > 0;
     }
 }

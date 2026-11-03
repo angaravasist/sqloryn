@@ -17,6 +17,7 @@ Builds on merged Developer Preview 0 (PR #6 / `f561597`).
 | App builds (Release) with studio shell, DataGrid results, connect profiles UI | Local Release build 0 warnings / 0 errors |
 | Original icon packaged into `.app` Info.plist | Local `build_macos_app.sh` (arm64 host) |
 | Offline UI launch smoke (no crash on open) | Observed briefly; not a full click-through matrix |
+| PR #7 findings 3 & 6 (edit-rows atomic apply; QueryRaw byte budget) | Core component tests PASS with fakes (`edit-rows-batch`, `edit-rows-policy`, `query-raw-budget`); real SqlTransaction path, trigger behaviour, `GetChars` on xml/MAX columns and numeric(38) **unverified against SQL Server** |
 | Live SQL: connect / OE expand / GO / export / design / edit-rows | **Unverified on this branch** (no disposable lab in this session; Windows SSH product path not recreated) |
 | Prior DP0 arm64 connect + `SELECT 1` via disposable lab | Historical on PR #6; lab torn down; do not treat as current tip evidence |
 | Intel Mac desktop SQL | **Unverified** |
