@@ -746,6 +746,8 @@ Pass("explorer-ownership");
         catch (ArgumentException) { }
         try { GoBatchSplitter.ContainsSeparator("SELECT 1\n:setvar a b"); throw new Exception("FAIL contains-rejects-directive"); }
         catch (SqlScriptRejectedException) { }
+        // T-SQL scope resolution must not be treated as SQLCMD.
+        Check(Reject("SELECT *\nFROM\n::fn_helpcollations()") is null, "sqlcmd-scope-resolution-allowed");
         Pass("sqlcmd-preflight-rejection");
     }
 
@@ -954,6 +956,37 @@ Pass("explorer-ownership");
         Truncated = false
     });
     Check(fromSet.Rows[0][0].IsNull && !fromSet.Rows[0][1].IsNull && !fromSet.Truncated, "result-view-from-set");
+    // Verifier D1: FromResultSet without explicit sqlTypes must still preserve numeric spreadsheet-safe export.
+    {
+        var withSqlTypes = new ResultSet
+        {
+            Columns = ["id", "delta", "flag"],
+            SqlTypes = ["int", "int", "bit"],
+            Rows =
+            [
+                [
+                    CellValue.Text("1", "number"),
+                    CellValue.Text("-5", "number"),
+                    CellValue.Text("true", "bool")
+                ]
+            ]
+        };
+        var fromTypes = ResultSetView.FromResultSet(withSqlTypes);
+        Check(fromTypes.Columns[1].SqlType == "int" && fromTypes.Columns[2].SqlType == "bit", "from-resultset-preserves-sqltypes");
+        var safeTyped = CsvExporter.ToCsv(fromTypes, new CsvOptions { SpreadsheetSafe = true });
+        Check(safeTyped.Contains("-5", StringComparison.Ordinal) && !safeTyped.Contains("'-5", StringComparison.Ordinal), "safe-csv-typed-negative-intact");
+
+        var kindOnly = new ResultSet
+        {
+            Columns = ["delta"],
+            Rows = [[CellValue.Text("-5", "number")]]
+        };
+        var fromKind = ResultSetView.FromResultSet(kindOnly);
+        Check(fromKind.Columns[0].SqlType == "int", "from-resultset-infers-int-from-kind");
+        var safeKind = CsvExporter.ToCsv(fromKind, new CsvOptions { SpreadsheetSafe = true });
+        Check(safeKind.Contains("-5", StringComparison.Ordinal) && !safeKind.Contains("'-5", StringComparison.Ordinal), "safe-csv-kind-inferred-negative-intact");
+        Pass("export-from-resultset-types");
+    }
     Pass("result-export");
 }
 

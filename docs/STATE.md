@@ -16,10 +16,10 @@ Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
 | 1 | **Fixed (component)** — design warnings separated from `ExecutableSql` | Core `table-design-preview` / hostile-identifier tests PASS |
 | 2 | **Fixed (component)** — Keychain autofill bound to endpoint identity + generation | Core `autofill-*` / `endpoint-identity` PASS; ConnectWindow wired |
 | 3 | **Fixed (component)** — transactional edit batch; conflict rolls back set | Core `edit-rows-batch` / `edit-rows-policy` PASS (fakes); live SqlTransaction **unverified** |
-| 4 | **Fixed (component)** — single-destination export; ordinal JSON; spreadsheet-safe CSV | Core `result-export-writer` / `json-duplicate-columns-preserved` PASS |
-| 5 | **Fixed (component)** — staged atomic script save (`SafeFileWriter`) | Core `safe-file-writer` PASS |
+| 4 | **Fixed (component)** — single-destination export; ordinal JSON; spreadsheet-safe CSV; `ResultSet.SqlTypes` + kind inference so UI export path preserves negatives | Core `result-export-writer` / `json-duplicate-columns-preserved` / `export-from-resultset-types` PASS |
+| 5 | **Fixed (component)** — staged atomic script save (`SafeFileWriter`); external-edit detection still open (verifier D2) | Core `safe-file-writer` PASS |
 | 6 | **Fixed (component)** — bounded `QueryRaw` / omit oversized cells; no writeback | Core `query-raw-budget` PASS; live MAX/xml **unverified** |
-| 7 | **Fixed (component)** — GO/SQLCMD preflight with source spans before any execute | Core `go-parse-source-spans` / `sqlcmd-preflight-rejection` / `sqlsession-preflight-before-execute` PASS |
+| 7 | **Fixed (component)** — GO/SQLCMD preflight with source spans; `::fn_…` allowed (verifier D6) | Core `go-parse-source-spans` / `sqlcmd-preflight-rejection` / `sqlsession-preflight-before-execute` PASS |
 | 8–12 | **Implemented (build)** — native menu/⌘, welcome, system theme, compact layout, honest settings | Core `app-settings` PASS; UI **not** click/VoiceOver verified |
 | 13 | **Fixed (component+wiring)** — Script SELECT opens new tab bound to object DB | Core `script-from-object-plan` PASS; UI **not** click-tested |
 | 14 (partial) | **Partial** — truncation honesty in OE; keys/indexes/functions still incomplete | Core `oe-truncation-honesty` PASS |
@@ -33,7 +33,7 @@ Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
 | Check | Result |
 |---|---|
 | `dotnet build SQLoryn.slnx -c Release` | 0 warnings / 0 errors |
-| Core component executable | **71 PASS**, 0 FAIL |
+| Core component executable | **72 PASS**, 0 FAIL |
 | SqlClientProbe.Tests | **35 PASS** |
 | Python `test_*.py` | **43 OK** |
 | `repo_preflight.py` | PASS |

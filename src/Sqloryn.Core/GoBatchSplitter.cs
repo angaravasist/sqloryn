@@ -99,14 +99,21 @@ public static class GoBatchSplitter
                 var lineLocation = new SqlScriptLocation(pos + indent, lineNo, indent + 1);
                 var trimmedLine = lineSpan.Trim();
 
-                if (trimmedLine.Length > 0 && trimmedLine[0] == ':')
+                // SQLCMD directives are ":name" or ":!!…". T-SQL scope resolution "::fn_…" must not be rejected.
+                if (trimmedLine.Length > 0 && trimmedLine[0] == ':' &&
+                    !(trimmedLine.Length > 1 && trimmedLine[1] == ':'))
                 {
-                    var nameEnd = 1;
-                    while (nameEnd < trimmedLine.Length && !char.IsWhiteSpace(trimmedLine[nameEnd]) && trimmedLine[nameEnd] != '(')
-                        nameEnd++;
-                    var name = trimmedLine[..nameEnd].ToString();
-                    throw new SqlScriptRejectedException(SqlScriptRejectionKind.SqlcmdDirective,
-                        $"SQLCMD directive '{name}' is not supported.", lineLocation);
+                    if (trimmedLine.Length == 1 ||
+                        trimmedLine.StartsWith(":!!", StringComparison.Ordinal) ||
+                        char.IsLetter(trimmedLine[1]))
+                    {
+                        var nameEnd = 1;
+                        while (nameEnd < trimmedLine.Length && !char.IsWhiteSpace(trimmedLine[nameEnd]) && trimmedLine[nameEnd] != '(')
+                            nameEnd++;
+                        var name = trimmedLine[..nameEnd].ToString();
+                        throw new SqlScriptRejectedException(SqlScriptRejectionKind.SqlcmdDirective,
+                            $"SQLCMD directive '{name}' is not supported.", lineLocation);
+                    }
                 }
 
                 var go = ClassifyGoLine(trimmedLine, out var count);

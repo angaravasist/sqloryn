@@ -43,6 +43,8 @@ public sealed record QueryMessage(byte Class, int Number, string Text);
 public sealed class ResultSet
 {
     public required IReadOnlyList<string> Columns { get; init; }
+    /// <summary>Provider type names aligned with <see cref="Columns"/> (may be empty strings when unknown).</summary>
+    public IReadOnlyList<string> SqlTypes { get; init; } = [];
     public required IReadOnlyList<IReadOnlyList<CellValue>> Rows { get; init; }
     public bool Truncated { get; init; }
     public bool BudgetExceeded { get; init; }

@@ -31,13 +31,14 @@ if [[ -z "${DOTNET_BIN}" || ! -x "${DOTNET_BIN}" ]]; then
   fi
 fi
 "$DOTNET_BIN" restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
-PUBLISH_ARGS=(publish src/Sqloryn.App/Sqloryn.csproj -c Release --no-restore -o "$APP/Contents/MacOS" -r "$ARCH")
 if [[ "$SELF_CONTAINED" == "1" ]]; then
-  PUBLISH_ARGS+=(--self-contained true)
+  "$DOTNET_BIN" publish src/Sqloryn.App/Sqloryn.csproj -c Release --no-restore \
+    -o "$APP/Contents/MacOS" -r "$ARCH" --self-contained true
 else
-  PUBLISH_ARGS+=(--self-contained false)
+  # Framework-dependent: do not pass -r (avoids NETSDK1047 without RuntimeIdentifiers).
+  "$DOTNET_BIN" publish src/Sqloryn.App/Sqloryn.csproj -c Release --no-restore \
+    -o "$APP/Contents/MacOS" --self-contained false
 fi
-"$DOTNET_BIN" "${PUBLISH_ARGS[@]}"
 cp "$ICON_SRC" "$APP/Contents/Resources/SQLoryn.icns"
 # Minimal Info.plist lint: required keys must be present after write
 cat > "$APP/Contents/Info.plist" <<'PLIST'

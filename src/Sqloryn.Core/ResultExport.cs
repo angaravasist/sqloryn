@@ -22,8 +22,15 @@ public sealed class ResultSetView
     public static ResultSetView FromResultSet(ResultSet set, IReadOnlyList<string>? sqlTypes = null)
     {
         ArgumentNullException.ThrowIfNull(set);
+        var types = sqlTypes ?? set.SqlTypes;
         var columns = set.Columns
-            .Select((name, i) => new ResultColumn(name, sqlTypes is not null && i < sqlTypes.Count ? sqlTypes[i] : ""))
+            .Select((name, i) =>
+            {
+                var sqlType = types is not null && i < types.Count ? types[i] : "";
+                if (string.IsNullOrEmpty(sqlType))
+                    sqlType = InferSqlTypeFromKind(set, i);
+                return new ResultColumn(name, sqlType);
+            })
             .ToList();
         var anyCellTruncated = false;
         var rows = new List<IReadOnlyList<ResultCell>>(set.Rows.Count);
@@ -38,6 +45,27 @@ public sealed class ResultSetView
             rows.Add(cells);
         }
         return new ResultSetView { Columns = columns, Rows = rows, Truncated = set.Truncated || set.BudgetExceeded || anyCellTruncated };
+    }
+
+    /// <summary>Maps retained cell kinds to export SQL type hints when the provider type list is empty.</summary>
+    static string InferSqlTypeFromKind(ResultSet set, int ordinal)
+    {
+        foreach (var row in set.Rows)
+        {
+            if (ordinal >= row.Count || row[ordinal].IsNull)
+                continue;
+            return row[ordinal].Kind switch
+            {
+                "number" => "int",
+                "bool" => "bit",
+                "datetime" or "datetimeoffset" => row[ordinal].Kind,
+                "empty-string" or "text" => "nvarchar",
+                "binary" => "varbinary",
+                "null" => "",
+                _ => ""
+            };
+        }
+        return "";
     }
 }
 
@@ -103,10 +131,14 @@ public static class CsvExporter
     {
         if (value.Length == 0 || value[0] is not ('=' or '+' or '-' or '@' or '\t' or '\r'))
             return value;
-        if (NumericTypes.Contains(sqlType) &&
-            decimal.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+        // Prefer typed columns; also leave alone values that are plain numbers when type is missing
+        // so UI paths that omit SqlTypes do not corrupt negatives like -5.
+        var typedNumeric = NumericTypes.Contains(sqlType);
+        var looksNumeric = value[0] is '+' or '-' &&
+                           decimal.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
+        if ((typedNumeric || string.IsNullOrEmpty(sqlType)) && looksNumeric)
             return value;
-        if (NumericTypes.Contains(sqlType) &&
+        if (typedNumeric &&
             double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
             return value;
         return "'" + value;

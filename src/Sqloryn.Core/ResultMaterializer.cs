@@ -128,8 +128,13 @@ public static class ResultMaterializer
         CancellationToken cancellationToken)
     {
         var columns = new string[reader.FieldCount];
+        var sqlTypes = new string[reader.FieldCount];
         for (var i = 0; i < reader.FieldCount; i++)
+        {
             columns[i] = string.IsNullOrEmpty(reader.GetName(i)) ? $"Column{i + 1}" : reader.GetName(i);
+            try { sqlTypes[i] = reader.GetDataTypeName(i) ?? ""; }
+            catch (Exception) { sqlTypes[i] = ""; }
+        }
 
         var rows = new List<IReadOnlyList<CellValue>>();
         var truncated = false;
@@ -214,6 +219,7 @@ public static class ResultMaterializer
             Set = new ResultSet
             {
                 Columns = columns,
+                SqlTypes = sqlTypes,
                 Rows = rows,
                 Truncated = truncated || budget.Exceeded || rowFailure is not null,
                 BudgetExceeded = budget.Exceeded
