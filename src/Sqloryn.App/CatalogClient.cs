@@ -55,6 +55,22 @@ static class CatalogClient
     public static Task<CatalogListing<string>> ListProceduresAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
         => ListObjectsAsync(session, MetadataCatalog.ListProcedures(database, schema), schema, ct);
 
+    public static Task<CatalogListing<SchemaObject>> ListKeysAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
+        => ListSchemaObjectsAsync(session, MetadataCatalog.ListKeys(database, schema), schema, ct);
+
+    public static Task<CatalogListing<SchemaObject>> ListIndexesAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
+        => ListSchemaObjectsAsync(session, MetadataCatalog.ListIndexes(database, schema), schema, ct);
+
+    public static Task<CatalogListing<SchemaObject>> ListFunctionsAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
+        => ListSchemaObjectsAsync(session, MetadataCatalog.ListFunctions(database, schema), schema, ct);
+
+    static async Task<CatalogListing<SchemaObject>> ListSchemaObjectsAsync(SqlSession session, string sql, string schema, CancellationToken ct)
+    {
+        var rows = await session.QueryRawAsync(
+            sql, [new EditParameter(MetadataCatalog.SchemaParameter, schema)], MaxItems, ct);
+        return Listing(rows, SchemaObjectCatalog.Parse(rows));
+    }
+
     static async Task<CatalogListing<string>> ListObjectsAsync(SqlSession session, string sql, string schema, CancellationToken ct)
     {
         var rows = await session.QueryRawAsync(

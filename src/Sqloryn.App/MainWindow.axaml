@@ -72,6 +72,7 @@
               <MenuItem Header="Expand" Click="OnExpandSelected" />
               <MenuItem Header="Script SELECT" Click="OnScriptSelect" />
               <Separator />
+              <MenuItem Header="New Table…" Click="OnNewTable" />
               <MenuItem Header="Design Table…" Click="OnDesignTable" />
               <MenuItem Header="Edit Top 200 Rows…" Click="OnEditRows" />
             </ContextMenu>

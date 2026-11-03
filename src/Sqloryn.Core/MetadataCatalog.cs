@@ -70,6 +70,66 @@ public static class MetadataCatalog
     }
 
     /// <summary>
+    /// Columns: schema name, key name, parent table name, type_desc, is_unique (1 for primary/unique keys).
+    /// Primary, unique and foreign keys whose parent table is in the schema. Requires <see cref="SchemaParameter"/>.
+    /// </summary>
+    public static string ListKeys(string database, string schema)
+    {
+        RequireName(schema);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT s.name, k.name, p.name, k.type_desc, CONVERT(bit, 1)
+            FROM {db}.sys.key_constraints AS k
+            INNER JOIN {db}.sys.objects AS p ON k.parent_object_id = p.object_id
+            INNER JOIN {db}.sys.schemas AS s ON p.schema_id = s.schema_id
+            WHERE s.name = {SchemaParameter} AND p.is_ms_shipped = 0
+            UNION ALL
+            SELECT s.name, f.name, p.name, f.type_desc, CONVERT(bit, 0)
+            FROM {db}.sys.foreign_keys AS f
+            INNER JOIN {db}.sys.objects AS p ON f.parent_object_id = p.object_id
+            INNER JOIN {db}.sys.schemas AS s ON p.schema_id = s.schema_id
+            WHERE s.name = {SchemaParameter} AND p.is_ms_shipped = 0
+            ORDER BY 3, 2;
+            """;
+    }
+
+    /// <summary>
+    /// Columns: schema name, index name, parent table or view name, type_desc, is_unique.
+    /// Named, non-hypothetical indexes (heaps excluded). Requires <see cref="SchemaParameter"/>.
+    /// </summary>
+    public static string ListIndexes(string database, string schema)
+    {
+        RequireName(schema);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT s.name, i.name, o.name, i.type_desc, CONVERT(bit, i.is_unique)
+            FROM {db}.sys.indexes AS i
+            INNER JOIN {db}.sys.objects AS o ON i.object_id = o.object_id
+            INNER JOIN {db}.sys.schemas AS s ON o.schema_id = s.schema_id
+            WHERE s.name = {SchemaParameter} AND o.is_ms_shipped = 0 AND o.type IN ('U', 'V')
+              AND i.index_id > 0 AND i.name IS NOT NULL AND i.is_hypothetical = 0
+            ORDER BY o.name, i.name;
+            """;
+    }
+
+    /// <summary>
+    /// Columns: schema name, function name, parent (always NULL), type_desc, is_unique (always 0).
+    /// Scalar, inline and multi-statement table-valued and CLR functions. Requires <see cref="SchemaParameter"/>.
+    /// </summary>
+    public static string ListFunctions(string database, string schema)
+    {
+        RequireName(schema);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT s.name, o.name, CONVERT(nvarchar(128), NULL), o.type_desc, CONVERT(bit, 0)
+            FROM {db}.sys.objects AS o
+            INNER JOIN {db}.sys.schemas AS s ON o.schema_id = s.schema_id
+            WHERE s.name = {SchemaParameter} AND o.is_ms_shipped = 0 AND o.type IN ('FN', 'IF', 'TF', 'FS', 'FT')
+            ORDER BY o.name;
+            """;
+    }
+
+    /// <summary>
     /// Columns: name, type name, is_nullable, is_identity, max length in characters (-1 = MAX), precision, scale, is_computed.
     /// Requires <see cref="SchemaParameter"/> and <see cref="TableParameter"/>.
     /// </summary>

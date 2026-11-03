@@ -21,10 +21,12 @@ public partial class TableDesignWindow : Window
         public string MaxLengthText { get; set; } = "";
         public bool IsNullable { get; set; } = true;
         public bool IsIdentity { get; set; }
+        public bool IsPrimaryKey { get; set; }
     }
 
     readonly SqlSession _session;
-    readonly TableRef _table;
+    TableRef _table;
+    bool _isNew;
     readonly ObservableCollection<DesignRow> _rows = [];
     TableDesignDraft? _existing;
     string? _previewedSql;
@@ -41,7 +43,35 @@ public partial class TableDesignWindow : Window
         InitializeComponent();
         TitleText.Text = "Design " + table.Qualified;
         ColumnGrid.ItemsSource = _rows;
+        ApplyMode();
         Opened += async (_, _) => await LoadAsync();
+    }
+
+    /// <summary>New-table mode: starts from an empty draft in <paramref name="database"/>.<paramref name="schema"/>. Nothing is created until a previewed DDL is confirmed.</summary>
+    public TableDesignWindow(SqlSession session, string database, string schema)
+    {
+        _session = session;
+        _isNew = true;
+        _table = new TableRef(database, schema, "");
+        InitializeComponent();
+        ColumnGrid.ItemsSource = _rows;
+        _rows.Add(new DesignRow { Name = "Id", DataType = "int", IsNullable = false, IsIdentity = true, IsPrimaryKey = true });
+        _existing = null;
+        ApplyMode();
+        SetPreview(null, null);
+        StatusText.Text = "New table. Name it, define columns, tick Primary key for the key columns, then Preview DDL.";
+    }
+
+    void ApplyMode()
+    {
+        TableNamePanel.IsVisible = _isNew;
+        // The key column is the last grid column; the key of an existing table is shown, not edited (no ALTER is generated).
+        ColumnGrid.Columns[^1].IsReadOnly = !_isNew;
+        ReloadButton.IsVisible = !_isNew;
+        ApplyButton.Content = _isNew ? "Confirm Create…" : "Confirm Apply…";
+        TitleText.Text = _isNew
+            ? $"New table in {SqlIdentity.QuoteIdentifier(_table.Database)}.{SqlIdentity.QuoteIdentifier(_table.Schema)}"
+            : "Design " + _table.Qualified;
     }
 
     /// <summary>True when DDL was applied at least once (the caller may want to refresh Object Explorer).</summary>
@@ -56,6 +86,8 @@ public partial class TableDesignWindow : Window
         {
             StatusText.Text = "Loading columns…";
             var columns = await CatalogClient.ListColumnsAsync(_session, _table.Database, _table.Schema, _table.Name);
+            var keyColumns = await CatalogClient.ListPrimaryKeyAsync(_session, _table.Database, _table.Schema, _table.Name);
+            var keySet = new HashSet<string>(keyColumns, StringComparer.OrdinalIgnoreCase);
             _rows.Clear();
             foreach (var c in columns)
             {
@@ -66,7 +98,8 @@ public partial class TableDesignWindow : Window
                     DataType = DataTypeText(c),
                     MaxLengthText = isLength ? c.MaxLength.ToString(CultureInfo.InvariantCulture) : "",
                     IsNullable = c.IsNullable,
-                    IsIdentity = c.IsIdentity
+                    IsIdentity = c.IsIdentity,
+                    IsPrimaryKey = keySet.Contains(c.Name)
                 });
             }
             _existing = new TableDesignDraft
@@ -74,7 +107,8 @@ public partial class TableDesignWindow : Window
                 Database = _table.Database,
                 Schema = _table.Schema,
                 TableName = _table.Name,
-                Columns = _rows.Select(ToDefinition).ToList()
+                Columns = _rows.Select(ToDefinition).ToList(),
+                PrimaryKeyColumns = keyColumns
             };
             SetPreview(null, null);
             StatusText.Text = columns.Count == 0
@@ -121,13 +155,30 @@ public partial class TableDesignWindow : Window
         };
     }
 
-    TableDesignDraft BuildDesired() => new()
+    TableDesignDraft BuildDesired()
     {
-        Database = _table.Database,
-        Schema = _table.Schema,
-        TableName = _table.Name,
-        Columns = _rows.Select(ToDefinition).ToList()
-    };
+        // Key columns are forced NOT NULL; the generated DDL shown in the preview says so explicitly.
+        var definitions = _rows
+            .Select(r => ToDefinition(r) with { IsNullable = r.IsNullable && !r.IsPrimaryKey })
+            .ToList();
+        return new TableDesignDraft
+        {
+            Database = _table.Database,
+            Schema = _table.Schema,
+            TableName = _isNew ? (TableNameBox.Text ?? "").Trim() : _table.Name,
+            Columns = definitions,
+            PrimaryKeyColumns = _rows.Where(r => r.IsPrimaryKey).Select(r => r.Name.Trim()).ToList()
+        };
+    }
+
+    /// <summary>Builds the preview for the current mode. Throws ArgumentException/NotSupportedException for invalid drafts.</summary>
+    (TableDesignPreview Preview, TableDesignDraft Desired, bool Destructive) BuildPreview()
+    {
+        var desired = BuildDesired();
+        if (_isNew)
+            return (TableDesignSql.PreviewCreate(desired), desired, false);
+        return (TableDesignSql.PreviewAlter(_existing!, desired), desired, TableDesignSql.HasDestructiveChanges(_existing!, desired));
+    }
 
     // Only TableDesignPreview.ExecutableSql is ever stored for Apply. Warnings are display-only
     // and are rendered in WarningsText, never inside the SQL text.
@@ -146,7 +197,7 @@ public partial class TableDesignWindow : Window
 
     void OnPreview(object? sender, RoutedEventArgs e)
     {
-        if (_existing is null)
+        if (!_isNew && _existing is null)
         {
             StatusText.Text = "Columns are not loaded yet.";
             return;
@@ -154,10 +205,9 @@ public partial class TableDesignWindow : Window
         try
         {
             ColumnGrid.CommitEdit();
-            var desired = BuildDesired();
-            var preview = TableDesignSql.PreviewAlter(_existing, desired);
+            var (preview, _, destructive) = BuildPreview();
             SetPreview(preview, null);
-            StatusText.Text = TableDesignSql.HasDestructiveChanges(_existing, desired)
+            StatusText.Text = destructive
                 ? "Preview contains DESTRUCTIVE changes (dropped columns or altered types). Review carefully."
                 : "Preview ready. Nothing has been executed.";
         }
@@ -170,7 +220,7 @@ public partial class TableDesignWindow : Window
 
     async void OnApply(object? sender, RoutedEventArgs e)
     {
-        if (_busy || _existing is null || _previewedSql is null)
+        if (_busy || (!_isNew && _existing is null) || _previewedSql is null)
             return;
         _busy = true;
         try
@@ -178,12 +228,11 @@ public partial class TableDesignWindow : Window
             ColumnGrid.CommitEdit();
             // The draft may have been edited after the preview; require a fresh preview in that case.
             TableDesignPreview currentPreview;
+            TableDesignDraft currentDesired;
             bool destructive;
             try
             {
-                var desired = BuildDesired();
-                currentPreview = TableDesignSql.PreviewAlter(_existing, desired);
-                destructive = TableDesignSql.HasDestructiveChanges(_existing, desired);
+                (currentPreview, currentDesired, destructive) = BuildPreview();
             }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
             {
@@ -198,14 +247,19 @@ public partial class TableDesignWindow : Window
                 return;
             }
 
-            var summary = destructive
+            var summary = _isNew
+                ? "This statement creates a new table in one step; if it fails nothing is created."
+                : destructive
                 ? "This change can permanently remove data or alter column types. The statements run in order without a wrapping transaction; if one fails, earlier ones stay applied."
                 : "These statements run in order without a wrapping transaction; if one fails, earlier ones stay applied.";
             if (currentPreview.Warnings.Count > 0)
                 summary += "\n\n" + string.Join("\n", currentPreview.Warnings.Select(w => "• " + w));
+            var target = _isNew
+                ? SqlIdentity.Qualify3(currentDesired.Database, currentDesired.Schema, currentDesired.TableName)
+                : _table.Qualified;
             var confirmed = await Dialogs.ConfirmAsync(
-                this, "Confirm schema change", summary + "\n\nTarget: " + _table.Qualified, current,
-                "Apply to server", destructive);
+                this, _isNew ? "Confirm create table" : "Confirm schema change", summary + "\n\nTarget: " + target, current,
+                _isNew ? "Create on server" : "Apply to server", destructive);
             if (!confirmed)
             {
                 StatusText.Text = "Apply cancelled. Nothing was executed.";
@@ -217,6 +271,13 @@ public partial class TableDesignWindow : Window
             Applied = true;
             if (result.Completion == QueryCompletionKind.Succeeded)
             {
+                if (_isNew)
+                {
+                    // From now on this window edits the table that now exists on the server.
+                    _table = new TableRef(currentDesired.Database, currentDesired.Schema, currentDesired.TableName);
+                    _isNew = false;
+                    ApplyMode();
+                }
                 StatusText.Text = "Applied. Reloading columns from the server…";
                 _busy = false;
                 await LoadAsync();

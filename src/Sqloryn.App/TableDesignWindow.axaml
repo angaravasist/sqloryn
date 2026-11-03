@@ -24,6 +24,12 @@
       </StackPanel>
     </StackPanel>
 
+    <StackPanel DockPanel.Dock="Top" Name="TableNamePanel" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8" IsVisible="False">
+      <TextBlock VerticalAlignment="Center" Text="Table name" />
+      <TextBox Name="TableNameBox" Width="320" PlaceholderText="NewTable"
+               AutomationProperties.Name="New table name" />
+    </StackPanel>
+
     <Grid RowDefinitions="*,Auto,180" RowSpacing="8">
       <DataGrid Name="ColumnGrid" Grid.Row="0" AutoGenerateColumns="False" CanUserSortColumns="False"
                 CanUserReorderColumns="False" SelectionMode="Single"
@@ -34,12 +40,13 @@
           <DataGridTextColumn Header="Length (-1 = MAX)" Binding="{ReflectionBinding MaxLengthText, Mode=TwoWay}" Width="140" />
           <DataGridCheckBoxColumn Header="Nullable" Binding="{ReflectionBinding IsNullable, Mode=TwoWay}" Width="90" />
           <DataGridCheckBoxColumn Header="Identity" Binding="{ReflectionBinding IsIdentity, Mode=TwoWay}" Width="90" />
+          <DataGridCheckBoxColumn Header="Primary key" Binding="{ReflectionBinding IsPrimaryKey, Mode=TwoWay}" Width="100" />
         </DataGrid.Columns>
       </DataGrid>
       <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
         <Button Content="Add column" Click="OnAddColumn" />
         <Button Content="Remove selected" Click="OnRemoveColumn" />
-        <Button Content="Reload from server" Click="OnReload" />
+        <Button Name="ReloadButton" Content="Reload from server" Click="OnReload" />
       </StackPanel>
       <TextBox Name="PreviewBox" Grid.Row="2" Classes="mono" IsReadOnly="True" AcceptsReturn="True"
                TextWrapping="NoWrap" PlaceholderText="DDL preview appears here."
