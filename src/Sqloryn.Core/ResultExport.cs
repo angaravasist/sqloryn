@@ -41,21 +41,37 @@ public sealed class ResultSetView
     }
 }
 
+public sealed record CsvOptions
+{
+    /// <summary>
+    /// Prefix text cells that a spreadsheet would treat as formulas (leading = + - @ tab or CR) with an apostrophe.
+    /// Numeric-typed cells that parse as numbers (e.g. -5) are left alone. Changes cell text, so it is opt-in.
+    /// </summary>
+    public bool SpreadsheetSafe { get; init; }
+}
+
 /// <summary>
 /// RFC 4180 CSV with CRLF line endings. NULL is an unquoted empty field; an empty string is written as "".
 /// </summary>
 public static class CsvExporter
 {
-    public static void Write(TextWriter writer, ResultSetView view)
+    static readonly HashSet<string> NumericTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "tinyint", "smallint", "int", "bigint", "decimal", "numeric", "float", "real", "money", "smallmoney"
+    };
+
+    public static void Write(TextWriter writer, ResultSetView view, CsvOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(view);
+        var safe = options?.SpreadsheetSafe == true;
 
         for (var i = 0; i < view.Columns.Count; i++)
         {
             if (i > 0)
                 writer.Write(',');
-            writer.Write(Quote(view.Columns[i].Name, forceQuoteEmpty: true));
+            var name = view.Columns[i].Name;
+            writer.Write(Quote(safe ? Neutralise(name, "") : name, forceQuoteEmpty: true));
         }
         writer.Write("\r\n");
 
@@ -65,18 +81,35 @@ public static class CsvExporter
             {
                 if (i > 0)
                     writer.Write(',');
-                if (!row[i].IsNull)
-                    writer.Write(Quote(row[i].Display, forceQuoteEmpty: true));
+                if (row[i].IsNull)
+                    continue;
+                var value = row[i].Display;
+                if (safe)
+                    value = Neutralise(value, i < view.Columns.Count ? view.Columns[i].SqlType : "");
+                writer.Write(Quote(value, forceQuoteEmpty: true));
             }
             writer.Write("\r\n");
         }
     }
 
-    public static string ToCsv(ResultSetView view)
+    public static string ToCsv(ResultSetView view, CsvOptions? options = null)
     {
         using var writer = new StringWriter(CultureInfo.InvariantCulture);
-        Write(writer, view);
+        Write(writer, view, options);
         return writer.ToString();
+    }
+
+    static string Neutralise(string value, string sqlType)
+    {
+        if (value.Length == 0 || value[0] is not ('=' or '+' or '-' or '@' or '\t' or '\r'))
+            return value;
+        if (NumericTypes.Contains(sqlType) &&
+            decimal.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            return value;
+        if (NumericTypes.Contains(sqlType) &&
+            double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            return value;
+        return "'" + value;
     }
 
     static string Quote(string value, bool forceQuoteEmpty)
@@ -90,11 +123,16 @@ public static class CsvExporter
 }
 
 /// <summary>
-/// JSON array of objects. NULL is JSON null. Only tinyint/smallint/int and bit map to JSON number/boolean;
-/// bigint, decimal, numeric, money and floating point are emitted as strings to preserve precision.
+/// Loss-aware JSON: <c>{ "format", "resultSets": [ { "ordinal", "columns": [ { "ordinal", "name", "sqlType" } ],
+/// "rows": [ [cell, ...] ], "truncated" } ] }</c>. Columns are addressed by ordinal, so duplicate or blank
+/// labels are preserved (an object keyed by label would drop them). NULL is JSON null. Only
+/// tinyint/smallint/int and bit map to JSON number/boolean; bigint, decimal, numeric, money and floating point
+/// are emitted as strings to preserve precision.
 /// </summary>
 public static class JsonExporter
 {
+    public const string FormatId = "sqloryn.result-sets.v1";
+
     static readonly HashSet<string> SafeIntegerTypes = new(StringComparer.OrdinalIgnoreCase) { "tinyint", "smallint", "int" };
 
     public static void Write(TextWriter writer, ResultSetView view)
@@ -107,21 +145,55 @@ public static class JsonExporter
     public static string ToJson(ResultSetView view)
     {
         ArgumentNullException.ThrowIfNull(view);
+        return ToJson([view]);
+    }
+
+    public static string ToJson(IReadOnlyList<ResultSetView> views)
+    {
+        ArgumentNullException.ThrowIfNull(views);
         using var stream = new MemoryStream();
         using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
         {
+            json.WriteStartObject();
+            json.WriteString("format", FormatId);
+            json.WritePropertyName("resultSets");
             json.WriteStartArray();
-            foreach (var row in view.Rows)
+            for (var s = 0; s < views.Count; s++)
             {
+                var view = views[s];
                 json.WriteStartObject();
-                for (var i = 0; i < view.Columns.Count && i < row.Count; i++)
+                json.WriteNumber("ordinal", s);
+                json.WritePropertyName("columns");
+                json.WriteStartArray();
+                for (var i = 0; i < view.Columns.Count; i++)
                 {
-                    json.WritePropertyName(view.Columns[i].Name);
-                    WriteCell(json, row[i], view.Columns[i].SqlType);
+                    json.WriteStartObject();
+                    json.WriteNumber("ordinal", i);
+                    json.WriteString("name", view.Columns[i].Name);
+                    json.WriteString("sqlType", view.Columns[i].SqlType);
+                    json.WriteEndObject();
                 }
+                json.WriteEndArray();
+                json.WritePropertyName("rows");
+                json.WriteStartArray();
+                foreach (var row in view.Rows)
+                {
+                    json.WriteStartArray();
+                    for (var i = 0; i < view.Columns.Count; i++)
+                    {
+                        if (i < row.Count)
+                            WriteCell(json, row[i], view.Columns[i].SqlType);
+                        else
+                            json.WriteNullValue();
+                    }
+                    json.WriteEndArray();
+                }
+                json.WriteEndArray();
+                json.WriteBoolean("truncated", view.Truncated);
                 json.WriteEndObject();
             }
             json.WriteEndArray();
+            json.WriteEndObject();
         }
         return new UTF8Encoding(false).GetString(stream.ToArray());
     }
@@ -156,5 +228,59 @@ public static class JsonExporter
         }
 
         json.WriteStringValue(cell.Display);
+    }
+}
+
+public enum ResultExportFormat
+{
+    Csv,
+    Json
+}
+
+public sealed record ResultExportOptions
+{
+    /// <summary>CSV only: neutralise formula-like text cells (see <see cref="CsvOptions.SpreadsheetSafe"/>).</summary>
+    public bool SpreadsheetSafeCsv { get; init; }
+}
+
+public sealed record ResultExportOutcome(string Path, int ResultSetCount, bool Incomplete);
+
+/// <summary>
+/// Exports to exactly ONE caller-chosen destination. Never derives sibling file names, so no other file is
+/// touched. CSV carries one result set; JSON carries any number in a single document. Writes are staged and
+/// replaced via <see cref="SafeFileWriter"/>.
+/// </summary>
+public static class ResultExportWriter
+{
+    public static string Render(ResultExportFormat format, IReadOnlyList<ResultSetView> views, ResultExportOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(views);
+        if (views.Count == 0)
+            throw new ArgumentException("Nothing to export.", nameof(views));
+        switch (format)
+        {
+            case ResultExportFormat.Csv:
+                if (views.Count != 1)
+                    throw new ArgumentException("CSV holds one result set per file; choose a single result set.", nameof(views));
+                return CsvExporter.ToCsv(views[0], new CsvOptions { SpreadsheetSafe = options?.SpreadsheetSafeCsv == true });
+            case ResultExportFormat.Json:
+                return JsonExporter.ToJson(views);
+            default:
+                throw new ArgumentOutOfRangeException(nameof(format));
+        }
+    }
+
+    public static async Task<ResultExportOutcome> ExportAsync(
+        string path,
+        ResultExportFormat format,
+        IReadOnlyList<ResultSetView> views,
+        ResultExportOptions? options = null,
+        CancellationToken cancellationToken = default,
+        IStagedFileCommitter? committer = null,
+        Func<CancellationToken, Task>? beforeCommit = null)
+    {
+        var text = Render(format, views, options);
+        await SafeFileWriter.WriteUtf8Async(path, text, cancellationToken, committer, beforeCommit).ConfigureAwait(false);
+        return new ResultExportOutcome(path, views.Count, views.Any(v => v.Truncated));
     }
 }

@@ -13,6 +13,7 @@ Builds on merged Developer Preview 0 (PR #6 / `f561597`).
 | Claim | Status |
 |---|---|
 | Core modules: GO splitter, profiles, Keychain store, settings, export, metadata SQL, table design preview, edit-rows SQL, diagnostics redaction, find/replace | Automated Core suite PASS (this branch) |
+| Export/save safety (PR #7 findings 4–5): single-destination export, loss-aware JSON, spreadsheet-safe CSV option, staged atomic script save; policy in `SafeFileWriter` (symlink write-through, mode preserved, last-writer-wins, no external-edit detection) | Automated Core PASS; native save-sheet/UI path not click-tested |
 | `SqlSession` sequential GO batches + aggregate results | Automated Core PASS |
 | App builds (Release) with studio shell, DataGrid results, connect profiles UI | Local Release build 0 warnings / 0 errors |
 | Original icon packaged into `.app` Info.plist | Local `build_macos_app.sh` (arm64 host) |

@@ -82,7 +82,7 @@ public sealed class ScriptDocument
         try
         {
             if (writer is null)
-                await File.WriteAllTextAsync(target, snapshot, cancellationToken).ConfigureAwait(false);
+                await SafeFileWriter.WriteUtf8Async(target, snapshot, cancellationToken).ConfigureAwait(false);
             else
                 await writer(target, snapshot, cancellationToken).ConfigureAwait(false);
         }
