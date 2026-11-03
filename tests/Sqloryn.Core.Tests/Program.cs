@@ -1873,6 +1873,109 @@ Pass("explorer-ownership");
     Pass("oe-truncation-honesty");
 }
 
+// D2: external file edits must survive Save
+{
+    var dir = Path.Combine(Path.GetTempPath(), "sqloryn-d2-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    try
+    {
+        // 1. Load, external edit, Save -> refused; external bytes intact
+        var fileA = Path.Combine(dir, "a.sql");
+        File.WriteAllText(fileA, "SELECT 'original';");
+        var docA = new ScriptDocument();
+        await docA.LoadFileAsync(fileA);
+        File.WriteAllText(fileA, "SELECT 'external edit, different length';");
+        docA.SetText("SELECT 'mine';");
+        var refused = false;
+        try { await docA.SaveAsync(); }
+        catch (ExternalDocumentChangedException) { refused = true; }
+        Check(refused, "d2-external-edit-save-refused");
+        Check(File.ReadAllText(fileA) == "SELECT 'external edit, different length';", "d2-external-edit-survives-save");
+        // 3. refused save leaves the user's buffer dirty
+        Check(docA.IsDirty && docA.Text == "SELECT 'mine';", "d2-refused-save-keeps-dirty-buffer");
+        Check(Directory.GetFiles(dir, "*.tmp").Length == 0, "d2-refused-save-removes-temp");
+
+        // same length, different bytes (mtime-granularity proof)
+        var fileB = Path.Combine(dir, "b.sql");
+        File.WriteAllText(fileB, "AAAA");
+        var docB = new ScriptDocument();
+        await docB.LoadFileAsync(fileB);
+        var mtime = File.GetLastWriteTimeUtc(fileB);
+        File.WriteAllText(fileB, "BBBB");
+        File.SetLastWriteTimeUtc(fileB, mtime);
+        docB.SetText("MINE");
+        var refusedB = false;
+        try { await docB.SaveAsync(); }
+        catch (ExternalDocumentChangedException) { refusedB = true; }
+        Check(refusedB && File.ReadAllText(fileB) == "BBBB", "d2-same-length-same-mtime-edit-detected");
+
+        // external edit landing between capture and write is also caught
+        var fileC = Path.Combine(dir, "c.sql");
+        File.WriteAllText(fileC, "C0");
+        var docC = new ScriptDocument();
+        await docC.LoadFileAsync(fileC);
+        docC.SetText("C-mine");
+        var refusedC = false;
+        try
+        {
+            await docC.SaveAsync(betweenCaptureAndWrite: () =>
+            {
+                File.WriteAllText(fileC, "C-external");
+                return Task.CompletedTask;
+            });
+        }
+        catch (ExternalDocumentChangedException) { refusedC = true; }
+        Check(refusedC && File.ReadAllText(fileC) == "C-external" && docC.IsDirty, "d2-external-edit-between-capture-and-write");
+
+        // 2. no external change: Save succeeds, dirty cleared, and repeated saves keep working
+        var fileD = Path.Combine(dir, "d.sql");
+        File.WriteAllText(fileD, "D0");
+        var docD = new ScriptDocument();
+        await docD.LoadFileAsync(fileD);
+        docD.SetText("D1");
+        await docD.SaveAsync();
+        Check(File.ReadAllText(fileD) == "D1" && !docD.IsDirty, "d2-unchanged-save-succeeds-and-clears-dirty");
+        docD.SetText("D2");
+        await docD.SaveAsync();
+        Check(File.ReadAllText(fileD) == "D2" && !docD.IsDirty, "d2-second-save-after-own-save-succeeds");
+
+        // save-as new path, then save again without external change
+        var fileE = Path.Combine(dir, "e.sql");
+        var docE = new ScriptDocument();
+        docE.SetText("E0");
+        await docE.SaveAsync(fileE);
+        docE.SetText("E1");
+        await docE.SaveAsync();
+        Check(File.ReadAllText(fileE) == "E1" && !docE.IsDirty, "d2-save-as-then-save");
+
+        // explicit force overwrites after confirmation
+        File.WriteAllText(fileE, "E-external");
+        docE.SetText("E2");
+        var refusedE = false;
+        try { await docE.SaveAsync(); }
+        catch (ExternalDocumentChangedException) { refusedE = true; }
+        Check(refusedE && File.ReadAllText(fileE) == "E-external", "d2-refused-before-force");
+        await docE.SaveAsync(forceSave: true);
+        Check(File.ReadAllText(fileE) == "E2" && !docE.IsDirty, "d2-force-save-overwrites");
+        docE.SetText("E3");
+        await docE.SaveAsync();
+        Check(File.ReadAllText(fileE) == "E3", "d2-save-after-force-resumes-tracking");
+
+        // external delete is also a change
+        File.Delete(fileE);
+        docE.SetText("E4");
+        var refusedDel = false;
+        try { await docE.SaveAsync(); }
+        catch (ExternalDocumentChangedException) { refusedDel = true; }
+        Check(refusedDel && !File.Exists(fileE) && docE.IsDirty, "d2-external-delete-refused");
+    }
+    finally
+    {
+        try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+    }
+    Pass("d2-external-edit-survives-save");
+}
+
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
 Console.WriteLine("NOTE: live SqlDataReader decimal(38) against SQL Server remains provider-only / live-host verification.");
 return 0;
