@@ -218,6 +218,7 @@ public partial class EditRowsWindow : Window
             throw new InvalidOperationException(_support.RefusalReason ?? "Editing is not supported for this table.");
         // Only the columns the policy trusts take part in the optimistic predicate (rowversion, or every comparable column).
         var concurrency = new HashSet<string>(_support.ConcurrencyColumns, StringComparer.OrdinalIgnoreCase);
+        var characterColumns = new HashSet<string>(_support.CharacterConcurrencyColumns ?? [], StringComparer.OrdinalIgnoreCase);
         var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var name in _columnNames)
         {
@@ -255,7 +256,7 @@ public partial class EditRowsWindow : Window
             for (var i = 0; i < _columnNames.Count; i++)
                 originals[_columnNames[i]] = item.OriginalValues[i];
 
-            var command = EditRowsSql.BuildUpdate(table, key, newValues, originals, excluded);
+            var command = EditRowsSql.BuildUpdate(table, key, newValues, originals, excluded, characterColumns);
             var description = new StringBuilder();
             description.Append("-- row ").Append(r + 1).Append(", key ")
                 .Append(string.Join(", ", _keyColumns.Select((k, n) => $"{k}={FormatValue(keyValues[n])}"))).Append('\n');

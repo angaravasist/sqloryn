@@ -63,6 +63,9 @@ public static class EditRowsSql
 {
     public const int MaxTopRows = 1_000_000;
 
+    /// <summary>Binary collation applied to character columns in optimistic-concurrency predicates (see <see cref="EditRowsPolicy"/>).</summary>
+    public const string CharacterConcurrencyCollation = "Latin1_General_BIN2";
+
     /// <summary>Column name that marks the row-count result set so trigger result sets cannot be mistaken for it.</summary>
     public const string RowCountColumn = "__sqloryn_rowcount";
 
@@ -109,13 +112,16 @@ public static class EditRowsSql
     /// is added to the WHERE clause (NULL as IS NULL) so a concurrent change yields zero rows. Pass columns whose type
     /// cannot be compared (text, ntext, image, xml, spatial) in <paramref name="excludeFromConcurrency"/>.
     /// The key must identify exactly one row (for example the primary key).
+    /// Columns named in <paramref name="characterColumns"/> (char/varchar/nchar/nvarchar) are compared under
+    /// <see cref="CharacterConcurrencyCollation"/> so case and trailing-space changes count as conflicts.
     /// </summary>
     public static EditCommand BuildUpdate(
         TableRef table,
         RowKey key,
         IReadOnlyDictionary<string, object?> newValues,
         IReadOnlyDictionary<string, object?>? originalValues = null,
-        IReadOnlySet<string>? excludeFromConcurrency = null)
+        IReadOnlySet<string>? excludeFromConcurrency = null,
+        IReadOnlySet<string>? characterColumns = null)
     {
         ArgumentNullException.ThrowIfNull(table);
         ArgumentNullException.ThrowIfNull(key);
@@ -142,7 +148,7 @@ public static class EditRowsSql
             index++;
         }
 
-        AppendWhere(sb, parameters, key, originalValues, excludeFromConcurrency);
+        AppendWhere(sb, parameters, key, originalValues, excludeFromConcurrency, characterColumns);
         sb.Append(";\nSELECT @@ROWCOUNT AS [").Append(RowCountColumn).Append("];\n");
         return new EditCommand(sb.ToString(), parameters);
     }
@@ -151,7 +157,8 @@ public static class EditRowsSql
         TableRef table,
         RowKey key,
         IReadOnlyDictionary<string, object?>? originalValues = null,
-        IReadOnlySet<string>? excludeFromConcurrency = null)
+        IReadOnlySet<string>? excludeFromConcurrency = null,
+        IReadOnlySet<string>? characterColumns = null)
     {
         ArgumentNullException.ThrowIfNull(table);
         ArgumentNullException.ThrowIfNull(key);
@@ -159,7 +166,7 @@ public static class EditRowsSql
         var sb = new StringBuilder();
         sb.Append("SET NOCOUNT ON;").Append('\n');
         sb.Append("DELETE FROM ").Append(table.Qualified);
-        AppendWhere(sb, parameters, key, originalValues, excludeFromConcurrency);
+        AppendWhere(sb, parameters, key, originalValues, excludeFromConcurrency, characterColumns);
         sb.Append(";\nSELECT @@ROWCOUNT AS [").Append(RowCountColumn).Append("];\n");
         return new EditCommand(sb.ToString(), parameters);
     }
@@ -178,7 +185,8 @@ public static class EditRowsSql
         List<EditParameter> parameters,
         RowKey key,
         IReadOnlyDictionary<string, object?>? originalValues,
-        IReadOnlySet<string>? excludeFromConcurrency)
+        IReadOnlySet<string>? excludeFromConcurrency,
+        IReadOnlySet<string>? characterColumns)
     {
         sb.Append(" WHERE ");
         for (var i = 0; i < key.Columns.Count; i++)
@@ -202,14 +210,27 @@ public static class EditRowsSql
             if (RawCellOmitted.IsOmitted(value))
                 throw new ArgumentException(
                     $"Column {column} was not fully loaded, so it cannot be used for the concurrency check. Exclude the column or refuse the edit.");
-            sb.Append(" AND ").Append(SqlIdentity.QuoteIdentifier(column));
+            sb.Append(" AND ");
+            var quoted = SqlIdentity.QuoteIdentifier(column);
             if (value is null or DBNull)
             {
-                sb.Append(" IS NULL");
+                sb.Append(quoted).Append(" IS NULL");
                 continue;
             }
             var name = "@o" + index.ToString(CultureInfo.InvariantCulture);
-            sb.Append(" = ").Append(name);
+            if (characterColumns is not null && characterColumns.Contains(column))
+            {
+                // '=' under the column's (usually case/accent-insensitive) collation hides 'abc' -> 'ABC', and ANSI
+                // padding rules hide trailing-space changes even under a binary collation. Compare as nvarchar(max)
+                // (lossless for char/varchar) with a sentinel so trailing spaces count, under a BIN2 collation.
+                sb.Append("(CAST(").Append(quoted).Append(" AS nvarchar(max)) + N'|') COLLATE ")
+                    .Append(CharacterConcurrencyCollation)
+                    .Append(" = (CAST(").Append(name).Append(" AS nvarchar(max)) + N'|')");
+            }
+            else
+            {
+                sb.Append(quoted).Append(" = ").Append(name);
+            }
             parameters.Add(new EditParameter(name, value));
             index++;
         }

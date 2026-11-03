@@ -1530,6 +1530,40 @@ Pass("explorer-ownership");
     var composite = EditRowsPolicy.Evaluate(["A", "B"], [C("A", "int"), C("B", "uniqueidentifier"), C("Qty", "int")], false);
     Check(composite.IsSupported && composite.ConcurrencyColumns.SequenceEqual(["Qty"]), "policy-composite-key");
     Pass("edit-rows-policy");
+
+    // D3: character concurrency columns must be compared with a binary collation.
+    var chars = EditRowsPolicy.Evaluate(["Id"],
+        [C("Id", "int"), C("Qty", "int"), C("A", "char"), C("B", "varchar"), C("N", "nchar"), C("V", "nvarchar"), C("Ts", "datetime")], false);
+    Check(chars.IsSupported && chars.CharacterConcurrencyColumns!.SequenceEqual(["A", "B", "N", "V"]), "policy-character-concurrency-columns");
+    Check(rv.CharacterConcurrencyColumns is null or { Count: 0 }, "policy-rowversion-no-character-columns");
+    Check(plain.CharacterConcurrencyColumns!.SequenceEqual(["Name"]), "policy-plain-character-columns");
+    Check(EditRowsPolicy.IsCharacterType("NVarChar") && !EditRowsPolicy.IsCharacterType("int") && !EditRowsPolicy.IsCharacterType("text"), "policy-is-character-type");
+    Check(EditRowsPolicy.CharacterConcurrencyCollation == "Latin1_General_BIN2", "policy-character-collation-name");
+}
+
+// D3: case-insensitive collation must not hide 'abc' -> 'ABC' / trailing-space changes in the optimistic predicate
+{
+    var t = new TableRef("App", "dbo", "T");
+    var k = new RowKey(["Id"], [1]);
+    var orig = new Dictionary<string, object?> { ["Id"] = 1, ["Name"] = "abc", ["Qty"] = 4, ["Note"] = null, ["Code"] = "x" };
+    var chars = new HashSet<string>(["Name", "Note", "Code"], StringComparer.OrdinalIgnoreCase);
+    var u = EditRowsSql.BuildUpdate(t, k, new Dictionary<string, object?> { ["Qty"] = 5 }, orig, null, chars);
+    Check(u.CommandText.Contains("(CAST([Name] AS nvarchar(max)) + N'|') COLLATE Latin1_General_BIN2 = (CAST(@o0 AS nvarchar(max)) + N'|')", StringComparison.Ordinal), "d3-update-nvarchar-bin2");
+    Check(u.CommandText.Contains("AND [Qty] = @o1", StringComparison.Ordinal), "d3-update-nonchar-unchanged");
+    Check(u.CommandText.Contains("AND [Note] IS NULL", StringComparison.Ordinal), "d3-update-null-char-is-null");
+    Check(u.CommandText.Contains("CAST([Code] AS nvarchar(max)) + N'|') COLLATE Latin1_General_BIN2 = (CAST(@o2 AS", StringComparison.Ordinal), "d3-update-second-char-column");
+    Check(u.CommandText.Contains("WHERE [Id] = @k0", StringComparison.Ordinal) && !u.CommandText.Contains("[Id]) COLLATE", StringComparison.Ordinal), "d3-key-unchanged");
+    Check(u.Parameters.Single(p => p.Name == "@o0").Value is "abc", "d3-update-still-parameterised");
+
+    var noChars = EditRowsSql.BuildUpdate(t, k, new Dictionary<string, object?> { ["Qty"] = 5 }, orig, new HashSet<string> { "Name", "Note", "Code" }, chars);
+    Check(!noChars.CommandText.Contains("COLLATE", StringComparison.Ordinal), "d3-excluded-char-column-has-no-collate");
+
+    var legacy = EditRowsSql.BuildUpdate(t, k, new Dictionary<string, object?> { ["Qty"] = 5 }, new Dictionary<string, object?> { ["Qty"] = 4 });
+    Check(!legacy.CommandText.Contains("COLLATE", StringComparison.Ordinal), "d3-no-char-no-collate");
+
+    var d = EditRowsSql.BuildDelete(t, k, orig, null, chars);
+    Check(d.CommandText.Contains("COLLATE Latin1_General_BIN2", StringComparison.Ordinal), "d3-delete-bin2");
+    Pass("edit-rows-binary-collation");
 }
 
 // QueryRaw byte budget (PR #7 finding 6)
