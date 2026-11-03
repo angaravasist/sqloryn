@@ -2404,6 +2404,16 @@ Pass("explorer-ownership");
         Check(result.SessionTainted && result.Error is not null && result.Error.Contains("SHOWPLAN", StringComparison.Ordinal), "estimate-plan-off-failure-tainted");
         Check(runner.DmlExecutions == 0, "estimate-plan-off-failure-no-dml");
         Pass("estimate-plan-off-failure-taints-session");
+
+        // Verifier S-1: unexpected non-PlanCommandException must still attempt OFF and taint the session.
+        {
+            var unexpected = new FakePlanRunner { BatchFailure = new InvalidOperationException("reader exploded") };
+            var r = await EstimatedPlanService.EstimateAsync(unexpected, "INSERT INTO t VALUES (1);");
+            Check(r.Status == EstimatedPlanStatus.Failed && r.SessionTainted, "estimate-unexpected-taints");
+            Check(unexpected.Log.Contains("SET ON") && unexpected.Log.Contains("SET OFF"), "estimate-unexpected-still-turns-off");
+            Check(unexpected.DmlExecutions == 0 && !unexpected.ShowplanOn, "estimate-unexpected-no-dml-showplan-off");
+            Pass("estimate-plan-unexpected-exception-turns-off");
+        }
     }
 
     // Cancellation before anything is sent: no server traffic at all.

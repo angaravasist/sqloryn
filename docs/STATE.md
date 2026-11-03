@@ -32,7 +32,7 @@ Hosted checks for the post-merge tip are pending after push.
 | 8–12 | **Partial** | Shell build-only |
 | 13 | **Partial** | New-tab script SELECT |
 | 14 | **Partial** | Keys/indexes/functions folders + truncation; live expand **unverified** |
-| 15 | **Partial** | PK create preview + estimated plan fakes prove INSERT never executes on deny/success path; live SHOWPLAN **unverified** |
+| 15 | **Partial** | PK create preview + estimated plan fakes prove INSERT never executes on deny/success path; S-1 unexpected exception now always attempts SHOWPLAN OFF + taints session (`estimate-plan-unexpected-exception-turns-off`); live SHOWPLAN **unverified**; S-2 date/money materialisation still open |
 | 16 | **Partial** | FD package + icon required |
 | 17 | **Open** | No VoiceOver / timings / screenshots (capture blocked) |
 | 18 | **Partial** | Inventory present; sql-integration still skipped |
@@ -42,7 +42,7 @@ Hosted checks for the post-merge tip are pending after push.
 | Check | Result |
 |---|---|
 | `dotnet build SQLoryn.slnx -c Release` | 0 warnings / 0 errors |
-| Core component executable | **97 PASS**, 0 FAIL |
+| Core component executable | **98 PASS**, 0 FAIL (includes S-1 fix) |
 | SqlClientProbe.Tests | **35 PASS** |
 | Python tests | **43 OK** |
 | `repo_preflight.py` | PASS |

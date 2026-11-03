@@ -88,63 +88,75 @@ public static class EstimatedPlanService
         var showplanRequested = false;
         EstimatedPlanStatus status = EstimatedPlanStatus.Succeeded;
         string? error = null;
+        var tainted = false;
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            showplanRequested = true;
-            await runner.SetShowplanXmlAsync(true, cancellationToken).ConfigureAwait(false);
-
-            // Only reached when SET SHOWPLAN_XML ON returned normally.
-            foreach (var batch in batches)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var result = await runner.RunBatchAsync(batch, cancellationToken).ConfigureAwait(false);
-                foreach (var plan in result)
-                {
-                    if (plan.Length > MaxPlanCharacters)
-                        throw new PlanCommandException(null,
-                            $"The estimated plan is too large to display ({plan.Length:N0} characters; limit {MaxPlanCharacters:N0}).");
-                    plans.Add(plan);
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            status = EstimatedPlanStatus.Cancelled;
-            error = "Estimating the plan was cancelled. The statement was not executed.";
-        }
-        catch (PlanCommandException ex)
-        {
-            if (ex.Number is { } n && PermissionErrors.Contains(n))
-            {
-                status = EstimatedPlanStatus.PermissionDenied;
-                error = "The SHOWPLAN permission is required to display an estimated plan and the server refused it. " +
-                        "The statement was not executed. Server message: " + OneLine(ex.Message);
-            }
-            else
-            {
-                status = EstimatedPlanStatus.Failed;
-                error = "The estimated plan could not be produced: " + OneLine(ex.Message) + " The statement was not executed.";
-            }
-        }
-
-        var tainted = false;
-        if (showplanRequested)
-        {
-            // Always attempt OFF, even after cancellation or errors, and even when ON itself failed (best effort).
-            using var offCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try
             {
-                await runner.SetShowplanXmlAsync(false, offCts.Token).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                showplanRequested = true;
+                await runner.SetShowplanXmlAsync(true, cancellationToken).ConfigureAwait(false);
+
+                // Only reached when SET SHOWPLAN_XML ON returned normally.
+                foreach (var batch in batches)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var result = await runner.RunBatchAsync(batch, cancellationToken).ConfigureAwait(false);
+                    foreach (var plan in result)
+                    {
+                        if (plan.Length > MaxPlanCharacters)
+                            throw new PlanCommandException(null,
+                                $"The estimated plan is too large to display ({plan.Length:N0} characters; limit {MaxPlanCharacters:N0}).");
+                        plans.Add(plan);
+                    }
+                }
             }
-            catch (Exception ex) when (ex is PlanCommandException or OperationCanceledException)
+            catch (OperationCanceledException)
             {
-                tainted = true;
-                var extra = "SET SHOWPLAN_XML OFF failed, so this connection may still be in SHOWPLAN mode and will be closed. " +
-                            "Statements were not executed.";
-                error = error is null ? extra : error + " " + extra;
-                if (status == EstimatedPlanStatus.Succeeded)
+                status = EstimatedPlanStatus.Cancelled;
+                error = "Estimating the plan was cancelled. The statement was not executed.";
+            }
+            catch (PlanCommandException ex)
+            {
+                if (ex.Number is { } n && PermissionErrors.Contains(n))
+                {
+                    status = EstimatedPlanStatus.PermissionDenied;
+                    error = "The SHOWPLAN permission is required to display an estimated plan and the server refused it. " +
+                            "The statement was not executed. Server message: " + OneLine(ex.Message);
+                }
+                else
+                {
                     status = EstimatedPlanStatus.Failed;
+                    error = "The estimated plan could not be produced: " + OneLine(ex.Message) + " The statement was not executed.";
+                }
+            }
+            catch (Exception ex)
+            {
+                // Non-PlanCommand failures (e.g. InvalidOperationException from the runner) must still turn SHOWPLAN off
+                // and force the session to drop — we cannot prove the connection mode afterwards.
+                status = EstimatedPlanStatus.Failed;
+                error = "The estimated plan could not be produced: " + OneLine(ex.Message) + " The statement was not executed.";
+                tainted = true;
+            }
+        }
+        finally
+        {
+            if (showplanRequested)
+            {
+                using var offCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try
+                {
+                    await runner.SetShowplanXmlAsync(false, offCts.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is PlanCommandException or OperationCanceledException or InvalidOperationException or IOException)
+                {
+                    tainted = true;
+                    var extra = "SET SHOWPLAN_XML OFF failed, so this connection may still be in SHOWPLAN mode and will be closed. " +
+                                "Statements were not executed.";
+                    error = error is null ? extra : error + " " + extra;
+                    if (status == EstimatedPlanStatus.Succeeded)
+                        status = EstimatedPlanStatus.Failed;
+                }
             }
         }
 
