@@ -16,11 +16,31 @@ sealed class QueryTab : IAsyncDisposable
     /// <summary>Index of the result tab last shown for this query tab; -1 means the Messages tab.</summary>
     public int LastResultSetIndex { get; set; }
     public string? Selection { get; set; }
+    /// <summary>0-based offset of <see cref="Selection"/> in the document text when it was captured.</summary>
+    public int SelectionStart { get; set; }
     public CancellationTokenSource? RunCts { get; set; }
     public bool IsExecuting => RunGuard.IsEntered(_runFlag);
     public long Generation => Interlocked.Read(ref _generation);
 
     public string BatchToRun => ScriptDocument.ResolveBatch(Document.Text, Selection);
+
+    /// <summary>
+    /// Where <see cref="BatchToRun"/> starts in the document, so rejections report document lines.
+    /// Null when the whole document runs (or the captured selection no longer matches the text).
+    /// </summary>
+    public ScriptExecutionOrigin? BatchOrigin
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(Selection))
+                return null;
+            var text = Document.Text;
+            if (SelectionStart < 0 || SelectionStart > text.Length ||
+                !text.AsSpan(SelectionStart).StartsWith(Selection, StringComparison.Ordinal))
+                return null;
+            return ScriptExecutionOrigin.FromDocument(text, SelectionStart);
+        }
+    }
 
     public OperationBinding CaptureBinding()
         => new(Id, Session, Document, Session.Database, Generation);

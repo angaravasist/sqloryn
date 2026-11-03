@@ -275,16 +275,97 @@ public enum SqlScriptRejectionKind
 public sealed class SqlScriptRejectedException : ArgumentException
 {
     public SqlScriptRejectionKind Kind { get; }
+    /// <summary>Why the script was rejected, without location.</summary>
+    public string Reason { get; }
+    /// <summary>0-based UTF-16 offset in the document (equals <see cref="SelectionOffset"/> when no origin applies).</summary>
     public int Offset { get; }
+    /// <summary>1-based line in the document (equals <see cref="SelectionLine"/> when no origin applies).</summary>
     public int Line { get; }
+    /// <summary>1-based column in the document line.</summary>
     public int Column { get; }
+    /// <summary>0-based offset relative to the executed text (the selection).</summary>
+    public int SelectionOffset { get; }
+    /// <summary>1-based line relative to the executed text (the selection).</summary>
+    public int SelectionLine { get; }
 
     public SqlScriptRejectedException(SqlScriptRejectionKind kind, string reason, SqlScriptLocation location)
-        : base($"Script rejected at line {location.Line}, column {location.Column} (offset {location.Offset}): {reason} Nothing was executed.")
+        : this(kind, reason, location, location)
+    {
+    }
+
+    SqlScriptRejectedException(SqlScriptRejectionKind kind, string reason, SqlScriptLocation selection, SqlScriptLocation document)
+        : base($"Script rejected at line {document.Line}, column {document.Column} (offset {document.Offset}): {reason} Nothing was executed.")
     {
         Kind = kind;
-        Offset = location.Offset;
-        Line = location.Line;
-        Column = location.Column;
+        Reason = reason;
+        Offset = document.Offset;
+        Line = document.Line;
+        Column = document.Column;
+        SelectionOffset = selection.Offset;
+        SelectionLine = selection.Line;
+        _selectionColumn = selection.Column;
+    }
+
+    readonly int _selectionColumn;
+
+    /// <summary>
+    /// Re-maps this selection-relative rejection to document coordinates:
+    /// line = DocumentLineOffset + selectionLine, offset = DocumentOffset + selectionOffset;
+    /// the column is shifted only on the selection's first line.
+    /// </summary>
+    public SqlScriptRejectedException WithOrigin(ScriptExecutionOrigin origin)
+    {
+        var selection = new SqlScriptLocation(SelectionOffset, SelectionLine, _selectionColumn);
+        var document = new SqlScriptLocation(
+            checked(origin.DocumentOffset + SelectionOffset),
+            checked(origin.DocumentLineOffset + SelectionLine),
+            SelectionLine == 1 ? checked(_selectionColumn + origin.DocumentColumnOffset) : _selectionColumn);
+        return new SqlScriptRejectedException(Kind, Reason, selection, document);
+    }
+}
+
+/// <summary>
+/// Where the executed text (a selection) starts in the full document, so rejections can be reported
+/// against the document. <see cref="DocumentLineOffset"/> is the 0-based line index of the selection start,
+/// <see cref="DocumentOffset"/> its 0-based UTF-16 offset and <see cref="DocumentColumnOffset"/> its 0-based column.
+/// </summary>
+public readonly record struct ScriptExecutionOrigin
+{
+    public int DocumentLineOffset { get; }
+    public int DocumentOffset { get; }
+    public int DocumentColumnOffset { get; }
+
+    public ScriptExecutionOrigin(int documentLineOffset, int documentOffset, int documentColumnOffset = 0)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(documentLineOffset);
+        ArgumentOutOfRangeException.ThrowIfNegative(documentOffset);
+        ArgumentOutOfRangeException.ThrowIfNegative(documentColumnOffset);
+        DocumentLineOffset = documentLineOffset;
+        DocumentOffset = documentOffset;
+        DocumentColumnOffset = documentColumnOffset;
+    }
+
+    public static ScriptExecutionOrigin None => default;
+
+    /// <summary>
+    /// Computes the origin of a selection starting at <paramref name="selectionStart"/> (clamped) in
+    /// <paramref name="document"/>. Line breaks are \n, \r\n and lone \r, matching the script scanner.
+    /// </summary>
+    public static ScriptExecutionOrigin FromDocument(string document, int selectionStart)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var start = Math.Clamp(selectionStart, 0, document.Length);
+        var line = 0;
+        var lineStart = 0;
+        for (var i = 0; i < start; i++)
+        {
+            var ch = document[i];
+            if (ch == '\n' || (ch == '\r' && !(i + 1 < document.Length && document[i + 1] == '\n')))
+            {
+                line++;
+                lineStart = i + 1;
+            }
+        }
+        return new ScriptExecutionOrigin(line, start, start - lineStart);
     }
 }

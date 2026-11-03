@@ -145,7 +145,15 @@ public sealed class SqlSession : IAsyncDisposable
         CancelInFlight_NoThrow();
     }
 
-    public async Task<QueryResult> ExecuteAsync(string sql, CancellationToken cancellationToken = default)
+    public Task<QueryResult> ExecuteAsync(string sql, CancellationToken cancellationToken = default)
+        => ExecuteAsync(sql, null, cancellationToken);
+
+    /// <summary>
+    /// Executes <paramref name="sql"/> (the whole document or a selection of it). When it is a selection, pass
+    /// <paramref name="origin"/> so a <see cref="SqlScriptRejectedException"/> reports document line/offset.
+    /// </summary>
+    public async Task<QueryResult> ExecuteAsync(
+        string sql, ScriptExecutionOrigin? origin, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (string.IsNullOrWhiteSpace(sql))
@@ -153,7 +161,15 @@ public sealed class SqlSession : IAsyncDisposable
 
         // Preflight the ENTIRE selection before batch 1 can run. Unsupported SQLCMD directives, malformed GO
         // lines and out-of-bounds repeat counts throw SqlScriptRejectedException with line/offset; nothing executes.
-        var script = GoBatchSplitter.Parse(sql);
+        SqlScript script;
+        try
+        {
+            script = GoBatchSplitter.Parse(sql);
+        }
+        catch (SqlScriptRejectedException ex) when (origin is { } o)
+        {
+            throw ex.WithOrigin(o);
+        }
         if (!script.HasSeparator)
             return await ExecuteBatchAsync(sql, null, cancellationToken).ConfigureAwait(false);
 
