@@ -75,78 +75,120 @@ public static class EditRowsBatch
                 "Could not start the edit transaction; nothing was written. " + Describe(ex));
         }
 
-        await using (transaction.ConfigureAwait(false))
+        // Compute the result first, then dispose explicitly: a throwing DisposeAsync must never replace or lose it.
+        EditBatchResult result;
+        try
         {
-            var validated = 0;
-            EditBatchResult? failure = null;
-            for (var i = 0; i < commands.Count && failure is null; i++)
+            result = await RunAsync(transaction, commands, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            try { await transaction.DisposeAsync().ConfigureAwait(false); } catch { /* original failure wins */ }
+            throw;
+        }
+
+        try
+        {
+            await transaction.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return WithDisposeFailure(result, ex);
+        }
+
+        return result;
+    }
+
+    static EditBatchResult WithDisposeFailure(EditBatchResult result, Exception disposeError)
+    {
+        var note = $"Transaction cleanup also failed ({Describe(disposeError)}).";
+        if (result.Outcome == EditBatchOutcome.Committed)
+        {
+            // The connection/transaction state after commit cannot be trusted; do not report a clean save.
+            return result with
             {
-                int affected;
-                try
-                {
-                    affected = await transaction.ExecuteAffectedAsync(commands[i], cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    failure = new EditBatchResult(EditBatchOutcome.RolledBackError, validated, i,
-                        $"Cancelled while applying edit {i + 1} of {commands.Count}.");
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    failure = new EditBatchResult(EditBatchOutcome.RolledBackError, validated, i,
-                        $"Edit {i + 1} of {commands.Count} failed: {Describe(ex)}");
-                    break;
-                }
+                Outcome = EditBatchOutcome.OutcomeUnknown,
+                Message = $"{result.Message} {note} The save could not be confirmed; reload before editing again."
+            };
+        }
 
-                if (affected == 0)
-                {
-                    failure = new EditBatchResult(EditBatchOutcome.RolledBackConflict, validated, i,
-                        $"Edit {i + 1} of {commands.Count} conflicted: the row was changed or deleted by someone else, or no longer matches.");
-                }
-                else if (affected != 1)
-                {
-                    failure = new EditBatchResult(EditBatchOutcome.RolledBackWrongRowCount, validated, i,
-                        $"Edit {i + 1} of {commands.Count} reported {affected.ToString(CultureInfo.InvariantCulture)} affected rows; the key did not identify a single row.");
-                }
-                else
-                {
-                    validated++;
-                }
-            }
+        return result with { Message = $"{result.Message} {note}" };
+    }
 
-            if (failure is not null)
-            {
-                // Roll back on a token that cannot itself be cancelled: a cancelled save must still undo its writes.
-                try
-                {
-                    await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    return new EditBatchResult(EditBatchOutcome.OutcomeUnknown, validated, failure.FailedIndex,
-                        $"{failure.Message} Rollback could not be confirmed ({Describe(ex)}); reload before editing again.");
-                }
-                return failure with
-                {
-                    Message = failure.Message + " The whole set was rolled back; no row was written."
-                };
-            }
-
+    static async Task<EditBatchResult> RunAsync(
+        IEditTransaction transaction,
+        IReadOnlyList<EditCommand> commands,
+        CancellationToken cancellationToken)
+    {
+        var validated = 0;
+        EditBatchResult? failure = null;
+        for (var i = 0; i < commands.Count && failure is null; i++)
+        {
+            int affected;
             try
             {
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                affected = await transaction.ExecuteAffectedAsync(commands[i], cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                failure = new EditBatchResult(EditBatchOutcome.RolledBackError, validated, i,
+                    $"Cancelled while applying edit {i + 1} of {commands.Count}.");
+                break;
             }
             catch (Exception ex)
             {
-                // Never claim rollback after a failed commit: the server may have committed before the failure surfaced.
-                return new EditBatchResult(EditBatchOutcome.OutcomeUnknown, validated, null,
-                    $"Commit could not be confirmed ({Describe(ex)}). The edits may or may not have been saved; reload before editing again.");
+                failure = new EditBatchResult(EditBatchOutcome.RolledBackError, validated, i,
+                    $"Edit {i + 1} of {commands.Count} failed: {Describe(ex)}");
+                break;
             }
 
-            return new EditBatchResult(EditBatchOutcome.Committed, validated, null,
-                $"Saved {validated.ToString(CultureInfo.InvariantCulture)} row(s) in one transaction.");
+            if (affected == 0)
+            {
+                failure = new EditBatchResult(EditBatchOutcome.RolledBackConflict, validated, i,
+                    $"Edit {i + 1} of {commands.Count} conflicted: the row was changed or deleted by someone else, or no longer matches.");
+            }
+            else if (affected != 1)
+            {
+                failure = new EditBatchResult(EditBatchOutcome.RolledBackWrongRowCount, validated, i,
+                    $"Edit {i + 1} of {commands.Count} reported {affected.ToString(CultureInfo.InvariantCulture)} affected rows; the key did not identify a single row.");
+            }
+            else
+            {
+                validated++;
+            }
         }
+
+        if (failure is not null)
+        {
+            // Roll back on a token that cannot itself be cancelled: a cancelled save must still undo its writes.
+            try
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                return new EditBatchResult(EditBatchOutcome.OutcomeUnknown, validated, failure.FailedIndex,
+                    $"{failure.Message} Rollback could not be confirmed ({Describe(ex)}); reload before editing again.");
+            }
+            return failure with
+            {
+                Message = failure.Message + " The whole set was rolled back; no row was written."
+            };
+        }
+
+        try
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Never claim rollback after a failed commit: the server may have committed before the failure surfaced.
+            return new EditBatchResult(EditBatchOutcome.OutcomeUnknown, validated, null,
+                $"Commit could not be confirmed ({Describe(ex)}). The edits may or may not have been saved; reload before editing again.");
+        }
+
+        return new EditBatchResult(EditBatchOutcome.Committed, validated, null,
+            $"Saved {validated.ToString(CultureInfo.InvariantCulture)} row(s) in one transaction.");
     }
 
     static string Describe(Exception ex)

@@ -726,7 +726,19 @@ public sealed class SqlSession : IAsyncDisposable
             }
 
             var factory = new SqlEditTransactionFactory(this, connection, timeout);
-            var result = await EditRowsBatch.ApplyAsync(factory, commands, linked.Token).ConfigureAwait(false);
+            EditBatchResult result;
+            try
+            {
+                result = await EditRowsBatch.ApplyAsync(factory, commands, linked.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not ArgumentException)
+            {
+                // Anything escaping the batch after a transaction began leaves its state unknowable: force the reload path.
+                result = new EditBatchResult(EditBatchOutcome.OutcomeUnknown, 0, null,
+                    $"The edit batch ended unexpectedly ({ex.Message.Replace('\r', ' ').Replace('\n', ' ')}). The edits may or may not have been saved.");
+            }
+
+            // OutcomeUnknown always forces the reload path, regardless of how cleanup/dispose behaved.
             if (result.Outcome == EditBatchOutcome.OutcomeUnknown)
             {
                 // Closing the connection ends any transaction the server may still hold for us.

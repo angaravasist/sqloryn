@@ -14,6 +14,7 @@ sealed class FakeEditTransactionFactory : IEditTransactionFactory
     public Exception? BeginFails { get; init; }
     public Exception? CommitFails { get; init; }
     public Exception? RollbackFails { get; init; }
+    public Exception? DisposeFails { get; init; }
     public bool Disposed { get; private set; }
 
     /// <summary>Each item is an int (affected rows) or an Exception thrown by that command.</summary>
@@ -59,6 +60,8 @@ sealed class FakeEditTransactionFactory : IEditTransactionFactory
         {
             owner.Disposed = true;
             owner.Log.Add("dispose");
+            if (owner.DisposeFails is not null)
+                throw owner.DisposeFails;
             return ValueTask.CompletedTask;
         }
     }
