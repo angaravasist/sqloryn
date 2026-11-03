@@ -1,6 +1,6 @@
 # Build and test
 
-Developer Preview 0. Owner: SQLoryn maintainer. Reviewed: 2026-10-31.
+macOS Database Studio preview. Owner: SQLoryn maintainer. Reviewed: 2026-11-03.
 
 ## Component checks
 

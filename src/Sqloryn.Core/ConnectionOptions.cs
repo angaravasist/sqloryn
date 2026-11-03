@@ -60,7 +60,7 @@ public sealed class ConnectionOptions
             Pooling = false,
             ConnectRetryCount = 0,
             ConnectTimeout = ConnectTimeoutSeconds,
-            ApplicationName = "SQLoryn Developer Preview 0"
+            ApplicationName = "SQLoryn"
         };
         if (!string.IsNullOrEmpty(ServerCertificatePath))
             builder.ServerCertificate = Path.GetFullPath(ServerCertificatePath);

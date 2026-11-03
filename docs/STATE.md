@@ -4,43 +4,38 @@ Owner: SQLoryn maintainer. Reviewed: 2026-11-03. Experimental; no release suppor
 
 ## Work under review
 
-Branch `codex/developer-preview-0` — Developer Preview 0
-([ADR-003](decisions/003-desktop-avalonia.md),
-[SPEC-002](specs/002-developer-preview-0.md)). Draft
-[PR #6](https://github.com/angaravasist/sqloryn/pull/6).
+Branch `codex/macos-database-studio` — macOS Database Studio integrated preview
+([SPEC-003](specs/003-macos-database-studio.md), [ADR-004](decisions/004-macos-database-studio.md)).
+Builds on merged Developer Preview 0 (PR #6 / `f561597`).
 
 ## Evidence
 
 | Claim | Status |
 |---|---|
-| Reviewed implementation (prior tip) | `22d3ab81cd7aff37690b544a2e73b4f4880ba16e` |
-| StopCause / unobserved / value-free drain correction | `d720b17966805fe8f3f86d8494f70d3b9bbb7f30` |
-| Timer attribution: independent watchdog vs drain evidence; late Cancel preserves timeout | `ad288f88bbc3ae0ae641249eab503b8dae4159c0` |
-| Record timer cause before signalling operation token (drain + watchdog) | `8852059bc7eaccb5fc6f4138d2259fac6220cba0` (Core component suite PASS) |
-| Cause visible inside operation cancel callback (drain + watchdog) + UI status | Automated Core PASS |
-| Watchdog during drain (deadline still pending) → `WatchdogTimeout` on UI | Automated Core PASS |
-| Provider -2 then late Cancel → stays `TimedOut (provider)` | Automated Core PASS |
-| Distinct `FinalCompletionUnobserved`; shared `QueryOutcomeFormatter` | Automated Core PASS |
-| Drain without discarded GetValue; later SQL error under drain deadline | Automated Core PASS |
-| Target verification never upgrades SQL Completion/StopCause | Automated Core PASS |
-| Open version race + failed read with intervening edit | Automated Core PASS |
-| Ordinary dirty Open/Quit / remaining host-independent walkthrough steps | **Unverified** on this tip (prior dirty Open/Quit only) |
-| Hosted ubuntu + macos-15 + macos-15-intel | [41416613488](https://github.com/angaravasist/sqloryn/actions/runs/41416613488) |
-| Optional `--ssh-identity-file` for PROBE-11 (command/SCP/tunnel/cleanup) | `695061aa8eca91ce9e99eb69d990c2b03af92eb8` (runner unit tests PASS) |
-| Mac **arm64** desktop: connect (SQL auth + pinned cert) → OE system DBs → `SELECT 1 AS test_result` → `1` | **Observed** (Apple Silicon `.app`, disposable loopback tunnel to approved host) |
-| Lab cleanup for that desktop run (owned tunnel stop; remote workdir gone; Docker label absent; local secrets wiped; run-id preserved) | **Verified** (`cleanup_lab.sh` PASS; run-id `sqloryn-probe-9ccabb4ecf0a23ab`) |
-| Full PROBE-11 automated suite / SqlDataReader decimal(38) / cancel-disconnect live matrix | **Unverified** |
-| Intel Mac desktop SQL / Intel walkthrough | **Unverified** |
+| Core modules: GO splitter, profiles, Keychain store, settings, export, metadata SQL, table design preview, edit-rows SQL, diagnostics redaction, find/replace | Automated Core suite PASS (this branch) |
+| `SqlSession` sequential GO batches + aggregate results | Automated Core PASS |
+| App builds (Release) with studio shell, DataGrid results, connect profiles UI | Local Release build 0 warnings / 0 errors |
+| Original icon packaged into `.app` Info.plist | Local `build_macos_app.sh` (arm64 host) |
+| Offline UI launch smoke (no crash on open) | Observed briefly; not a full click-through matrix |
+| Live SQL: connect / OE expand / GO / export / design / edit-rows | **Unverified on this branch** (no disposable lab in this session; Windows SSH product path not recreated) |
+| Prior DP0 arm64 connect + `SELECT 1` via disposable lab | Historical on PR #6; lab torn down; do not treat as current tip evidence |
+| Intel Mac desktop SQL | **Unverified** |
+| Hosted CI on this branch | Pending after draft PR push |
 
 ## Reviewer launch
 
 ```sh
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
+# SDK 10.0.403 per global.json — ~/.dotnet/dotnet if needed
 dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
 dotnet build SQLoryn.slnx --no-restore -c Release
 dotnet run --project tests/Sqloryn.Core.Tests -c Release --no-build
 bash scripts/build_macos_app.sh
-open artifacts/macos/osx-arm64/SQLoryn.app
+open artifacts/macos/osx-arm64/SQLoryn.app   # osx-x64 on Intel
 ```
 
-See [WALKTHROUGH.md](WALKTHROUGH.md) for automated vs manual distinction.
+## Explicit non-claims
+
+- Not SSMS-compatible; not production-ready; not signed/notarised.
+- No Windows SSH connection feature in the product UI.
+- No Entra / Agent / AG / BI surfaces.

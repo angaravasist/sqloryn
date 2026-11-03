@@ -1,0 +1,23 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.DiagnosticsWindow"
+        Title="Diagnostics bundle — SQLoryn"
+        Width="720" Height="560"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,10">
+      <TextBlock Text="Diagnostics bundle" FontSize="18" FontWeight="SemiBold" />
+      <TextBlock Classes="muted" TextWrapping="Wrap"
+                 Text="Passwords, tokens and connection secrets are redacted. SQL text, result data and file paths of your scripts are not included. Review before sharing; nothing is sent anywhere." />
+    </StackPanel>
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,10,0,0">
+      <TextBlock Name="StatusText" Classes="muted" VerticalAlignment="Center" />
+      <Button Content="Copy" Click="OnCopy" />
+      <Button Content="Save bundle…" Classes="primary" Click="OnSave" />
+      <Button Content="Close" Click="OnClose" />
+    </StackPanel>
+    <TextBox Name="BundleBox" Classes="mono" IsReadOnly="True" AcceptsReturn="True"
+             TextWrapping="NoWrap" AutomationProperties.Name="Diagnostics bundle text" />
+  </DockPanel>
+</Window>

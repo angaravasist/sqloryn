@@ -1,15 +1,15 @@
 # SSMS compatibility matrix — starting inventory
 
-This is an **initial outline, not a complete SSMS feature inventory**. Every menu, context action, wizard, keyboard shortcut and administration pathway must eventually be catalogued and verified.
+This is an **initial outline, not a complete SSMS feature inventory**. Every menu, context action, wizard, keyboard shortcut and administration pathway must eventually be catalogued and verified. Status here is product honesty, not marketing.
 
 | Category | Examples | SQLoryn status |
 |---|---|---|
-| Connectivity | SQL auth, Entra ID, TLS, connection profiles | Preview: SQL auth + mandatory TLS (session-only); Entra/profiles not implemented |
-| Object Explorer | Instances, databases, tables, views, procs, functions | Preview: databases/schemas/tables/views/columns (read-only); live evidence pending |
-| Query editing | T-SQL IntelliSense, multiple tabs, scripts | Preview: tabs + UTF-8 scripts; no IntelliSense |
-| Results | Grid, messages, multiple result sets, export | Preview: text results + messages; first set shown; no export |
-| Query diagnostics | Plans, profiling, statistics, cancellation | Preview: cancel request; no plans |
-| Data editing | Edit rows, generate scripts, table designer | Not implemented |
+| Connectivity | SQL auth, Entra ID, TLS, connection profiles | Preview: SQL auth + mandatory TLS; saved profiles (no secrets in JSON); optional Keychain remember-password; Entra not implemented |
+| Object Explorer | Instances, databases, tables, views, procs, functions | Preview: databases → schemas → tables/views/procs → columns; properties read-only; live expand evidence pending |
+| Query editing | T-SQL IntelliSense, multiple tabs, scripts, GO | Preview: tabs + UTF-8 scripts + find/replace + GO batches; no IntelliSense |
+| Results | Grid, messages, multiple result sets, export | Preview: DataGrid per set + messages; CSV/JSON export; live fidelity evidence pending |
+| Query diagnostics | Plans, profiling, statistics, cancellation | Preview: cancel + outcome mapping; no plans |
+| Data editing | Edit rows, generate scripts, table designer | Preview: Design Table (DDL preview/confirm) + Edit Top 200 (optimistic); live apply evidence pending |
 | Security administration | Logins, roles, permissions | Not implemented |
 | Schema management | Compare, import/export, DACPAC, BACPAC | Not implemented |
 | Operations | Backup/restore, server/database configuration | Not implemented |
@@ -19,14 +19,10 @@ This is an **initial outline, not a complete SSMS feature inventory**. Every men
 
 ## Evidence rule
 
-Mark a feature as working only after a reproducible test is performed on the relevant macOS architecture and SQL Server version. Track version-specific limitations and platform restrictions.
+Mark a feature as working only after a reproducible test is performed on the relevant macOS architecture and SQL Server version. Track version-specific limitations and platform restrictions. See [STATE.md](STATE.md).
 
 ## Active work
 
-- [SPEC-001](specs/001-sqlclient-probe.md) probe: Linux E2 historically verified;
-  Mac PROBE-11 automated suite still **unverified** ([ADR-002](decisions/002-macos-ssh-sql-probe.md)).
-- [SPEC-002](specs/002-developer-preview-0.md) Avalonia app ([ADR-003](decisions/003-desktop-avalonia.md)):
-  locally launchable; **arm64** live connect + `SELECT 1` observed once (see
-  STATE.md); remaining live walkthrough cells and **Intel** desktop SQL
-  **unverified**.
-- Authoritative exclusions and commands: [STATE.md](STATE.md).
+- [SPEC-003](specs/003-macos-database-studio.md) / [ADR-004](decisions/004-macos-database-studio.md): integrated studio on `codex/macos-database-studio`.
+- [SPEC-002](specs/002-developer-preview-0.md) remains the DP0 baseline (merged PR #6).
+- Optional Mac SSH lab tooling ([ADR-002](decisions/002-macos-ssh-sql-probe.md)) is **not** a product connection feature and is not recreated in the studio UI.

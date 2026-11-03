@@ -13,11 +13,24 @@ case "$(uname -m)" in
 esac
 OUT="$ROOT/artifacts/macos/$ARCH"
 APP="$OUT/SQLoryn.app"
+ICON_SRC="$ROOT/assets/icon/SQLoryn.icns"
 rm -rf "$OUT"
-mkdir -p "$APP/Contents/MacOS"
-dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
-dotnet publish src/Sqloryn.App/Sqloryn.csproj -c Release --self-contained false \
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+# Prefer repo-local or PATH dotnet that matches global.json
+DOTNET_BIN="${DOTNET_ROOT:+$DOTNET_ROOT/dotnet}"
+if [[ -z "${DOTNET_BIN}" || ! -x "${DOTNET_BIN}" ]]; then
+  if [[ -x "$HOME/.dotnet/dotnet" ]]; then
+    DOTNET_BIN="$HOME/.dotnet/dotnet"
+  else
+    DOTNET_BIN="dotnet"
+  fi
+fi
+"$DOTNET_BIN" restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
+"$DOTNET_BIN" publish src/Sqloryn.App/Sqloryn.csproj -c Release --self-contained false \
   --no-restore -o "$APP/Contents/MacOS"
+if [[ -f "$ICON_SRC" ]]; then
+  cp "$ICON_SRC" "$APP/Contents/Resources/SQLoryn.icns"
+fi
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -25,11 +38,14 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>Sqloryn</string>
   <key>CFBundleIdentifier</key><string>org.sqloryn.app</string>
   <key>CFBundleName</key><string>SQLoryn</string>
+  <key>CFBundleDisplayName</key><string>SQLoryn</string>
+  <key>CFBundleIconFile</key><string>SQLoryn</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.0.0</string>
-  <key>CFBundleVersion</key><string>0</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSHumanReadableCopyright</key><string>Copyright SQLoryn contributors. Independent open-source project; not affiliated with Microsoft.</string>
 </dict></plist>
 PLIST
 echo "Built $APP ($ARCH, framework-dependent)"

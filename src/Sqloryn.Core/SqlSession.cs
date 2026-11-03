@@ -126,9 +126,65 @@ public sealed class SqlSession : IAsyncDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (string.IsNullOrWhiteSpace(sql))
             throw new ArgumentException("SQL text is required.");
-        if (LooksLikeGoBatch(sql))
-            throw new InvalidOperationException("GO batch separators are not supported in Developer Preview 0. Run a single batch.");
 
+        if (!GoBatchSplitter.ContainsSeparator(sql))
+            return await ExecuteBatchAsync(sql, null, cancellationToken).ConfigureAwait(false);
+
+        var batches = GoBatchSplitter.Split(sql);
+        if (batches.Count == 0)
+            throw new ArgumentException("SQL text is required.");
+        if (batches.Count == 1)
+            return await ExecuteBatchAsync(batches[0], null, cancellationToken).ConfigureAwait(false);
+
+        var cancelGenAtStart = Volatile.Read(ref _cancelGeneration);
+        var aggregate = new BatchAggregate();
+        for (var i = 0; i < batches.Count; i++)
+        {
+            if (i > 0)
+            {
+                var stop = PreBatchStop(cancellationToken, cancelGenAtStart);
+                if (stop is not null)
+                {
+                    aggregate.StopBeforeBatch(stop.Value, i + 1, batches.Count, Database);
+                    break;
+                }
+            }
+
+            QueryResult result;
+            try
+            {
+                result = await ExecuteBatchAsync(batches[i], i == 0 ? null : cancelGenAtStart, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (InvalidOperationException ex) when (i > 0)
+            {
+                aggregate.FailBeforeBatch(SanitizeMessage(ex.Message), i + 1, batches.Count, Database);
+                break;
+            }
+
+            aggregate.Add(result, i + 1, batches.Count);
+            if (result.Completion != QueryCompletionKind.Succeeded ||
+                result.TargetConfidence == TargetConfidence.Unknown)
+            {
+                aggregate.NoteSkipped(i + 1, batches.Count);
+                break;
+            }
+        }
+
+        return aggregate.Build(sql, ServerDisplay ?? "", Database ?? "");
+    }
+
+    StopCause? PreBatchStop(CancellationToken cancellationToken, int cancelGenAtStart)
+    {
+        if (_disconnectRequested || !IsConnected)
+            return StopCause.Disconnect;
+        if (cancellationToken.IsCancellationRequested || Volatile.Read(ref _cancelGeneration) != cancelGenAtStart)
+            return StopCause.UserCancel;
+        return null;
+    }
+
+    async Task<QueryResult> ExecuteBatchAsync(string sql, int? cancelGenAtStartOverride, CancellationToken cancellationToken)
+    {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         SqlCommand? command = null;
         CancellationTokenSource? linked = null;
@@ -179,7 +235,7 @@ public sealed class SqlSession : IAsyncDisposable
 
             var budget = new ResultBudget();
             int? transactionState = null;
-            var cancelGenAtStart = Volatile.Read(ref _cancelGeneration);
+            var cancelGenAtStart = cancelGenAtStartOverride ?? Volatile.Read(ref _cancelGeneration);
             var obs = new BatchObserver.Observation();
             var sqlPhaseComplete = false;
             var drainDeadline = TimeSpan.FromSeconds(Math.Clamp(_options.CommandTimeoutSeconds, 5, 60));
@@ -536,6 +592,70 @@ public sealed class SqlSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Runs one parameterised statement on this session's connection and returns the first result set with raw values.
+    /// Used by catalog browsing, design and keyed-edit features. Parameter names must be of the form @name.
+    /// Rows beyond <paramref name="maxRows"/> are dropped and <see cref="RawRows.Truncated"/> is set.
+    /// </summary>
+    public async Task<RawRows> QueryRawAsync(
+        string sql,
+        IEnumerable<EditParameter>? parameters = null,
+        int maxRows = 5_000,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (string.IsNullOrWhiteSpace(sql))
+            throw new ArgumentException("SQL text is required.");
+        if (maxRows < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxRows));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureConnected();
+            await using var cmd = _connection!.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = _options!.CommandTimeoutSeconds;
+            if (parameters is not null)
+            {
+                foreach (var p in parameters)
+                {
+                    if (string.IsNullOrEmpty(p.Name) || p.Name[0] != '@')
+                        throw new ArgumentException("Parameter names must start with '@'.");
+                    cmd.Parameters.AddWithValue(p.Name, p.Value ?? DBNull.Value);
+                }
+            }
+
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            var columns = new List<string>(reader.FieldCount);
+            var types = new List<string>(reader.FieldCount);
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                columns.Add(reader.GetName(i));
+                types.Add(reader.GetDataTypeName(i));
+            }
+
+            var rows = new List<object?[]>();
+            var truncated = false;
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (rows.Count >= maxRows)
+                {
+                    truncated = true;
+                    break;
+                }
+                var values = new object?[reader.FieldCount];
+                for (var i = 0; i < values.Length; i++)
+                    values[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                rows.Add(values);
+            }
+            return new RawRows(columns, types, rows, truncated);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     async Task<IReadOnlyList<string>> ReadNameListAsync(string sql, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -563,23 +683,16 @@ public sealed class SqlSession : IAsyncDisposable
         return trimmed.Length <= 400 ? trimmed : trimmed[..400] + "…";
     }
 
-    /// <summary>Conservative detection only — preview does not implement GO batching.</summary>
-    internal static bool LooksLikeGoBatch(string sql)
-    {
-        using var reader = new StringReader(sql);
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            var trimmed = line.Trim();
-            if (trimmed.Equals("GO", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("GO ", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("GO\t", StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
-    }
+    internal static bool LooksLikeGoBatch(string sql) => GoBatchSplitter.ContainsSeparator(sql);
 
     // Compatibility shim for existing tests that called SqlSession.FormatCell.
     internal static CellValue FormatCell(System.Data.Common.DbDataReader reader, int ordinal)
         => ResultMaterializer.FormatCell(reader, ordinal);
 }
+
+/// <summary>Raw first result set from <see cref="SqlSession.QueryRawAsync"/>. A null value is SQL NULL.</summary>
+public sealed record RawRows(
+    IReadOnlyList<string> Columns,
+    IReadOnlyList<string> SqlTypes,
+    IReadOnlyList<object?[]> Rows,
+    bool Truncated);

@@ -625,6 +625,329 @@ var expandOk = await ObjectExplorerService.ExpandAsync(
 Check(!expandOk && !nodeA.Loaded, "stale-metadata-rejected");
 Pass("explorer-ownership");
 
+// GO batch splitter
+{
+    var b = GoBatchSplitter.Split("SELECT 1;\nGO\nSELECT 2;\r\ngo\r\n\r\nGO\n  Go  \nSELECT 3");
+    Check(b.Count == 3 && b[0] == "SELECT 1;" && b[1] == "SELECT 2;" && b[2] == "SELECT 3", "go-split-basic");
+    var repeat = GoBatchSplitter.Split("INSERT t DEFAULT VALUES\nGO 3\nSELECT 1");
+    Check(repeat.Count == 4 && repeat[0] == repeat[2] && repeat[3] == "SELECT 1", "go-split-count");
+    Check(GoBatchSplitter.Split("SELECT 'a\nGO\nb';").Count == 1, "go-in-string");
+    Check(GoBatchSplitter.Split("/* c\nGO\n*/ SELECT 1").Count == 1, "go-in-block-comment");
+    Check(GoBatchSplitter.Split("/* a /* nested\nGO\n*/\nGO\n*/ SELECT 1").Count == 1, "go-in-nested-comment");
+    Check(GoBatchSplitter.Split("SELECT [x\nGO\ny]").Count == 1, "go-in-bracket-identifier");
+    Check(GoBatchSplitter.Split("-- note\nSELECT 1\nGO -- done\nSELECT 2").Count == 2, "go-trailing-comment");
+    Check(GoBatchSplitter.Split("SELECT 1 GO\nSELECT 2").Count == 1, "go-not-alone");
+    Check(GoBatchSplitter.Split("GOTO label").Count == 1 && !GoBatchSplitter.ContainsSeparator("GOTO x"), "go-prefix-word");
+    Check(GoBatchSplitter.Split("GO\n  \nGO").Count == 0, "go-empty-skipped");
+    Check(GoBatchSplitter.Split("   ").Count == 0, "go-blank-script");
+    Check(GoBatchSplitter.ContainsSeparator("SELECT 1\nGO") && !GoBatchSplitter.ContainsSeparator("SELECT 'x'"), "go-contains");
+    try { GoBatchSplitter.Split("SELECT 1\nGO 0"); throw new Exception("FAIL go-zero-count"); }
+    catch (ArgumentException) { }
+    try { GoBatchSplitter.Split("SELECT 1\nGO 100000"); throw new Exception("FAIL go-huge-count"); }
+    catch (ArgumentException) { }
+    Pass("go-batch-splitter");
+
+    await using var goSession = new SqlSession();
+    try
+    {
+        await goSession.ExecuteAsync("SELECT 1\nGO\nSELECT 2");
+        throw new Exception("FAIL go-execute-without-connect");
+    }
+    catch (InvalidOperationException ex) when (!ex.Message.Contains("not supported", StringComparison.Ordinal)) { }
+    Pass("go-multi-batch-requires-connection");
+}
+
+// Connection profiles
+{
+    var root = Path.Combine(Path.GetTempPath(), "sqloryn-tests-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var store = new ConnectionProfileStore(root);
+        Check(store.Load().Count == 0, "profiles-empty");
+        var a = new ConnectionProfile { Name = "Alpha", Server = "a.example", UserId = "u", RememberPassword = true, LastUsedUtc = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero) };
+        var b = new ConnectionProfile { Name = "Beta", Server = "b.example", Port = 14330, UserId = "u2", LastUsedUtc = new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero) };
+        var c = new ConnectionProfile { Name = "Aardvark", Server = "c.example", UserId = "u3" };
+        store.Upsert(a);
+        store.Upsert(b);
+        store.Upsert(c);
+        Check(store.Load().Count == 3, "profiles-upsert-add");
+        store.Upsert(a with { Name = "Alpha2" });
+        Check(store.Load().Count == 3 && store.Load().Any(p => p.Name == "Alpha2"), "profiles-upsert-update");
+        var ordered = store.ListOrderedByRecent();
+        Check(ordered[0].Name == "Beta" && ordered[1].Name == "Alpha2" && ordered[2].Name == "Aardvark", "profiles-recent-order");
+        var reloaded = new ConnectionProfileStore(root).Load().Single(p => p.Id == b.Id);
+        Check(reloaded.Port == 14330 && reloaded.Encrypt && !reloaded.TrustServerCertificate, "profiles-roundtrip");
+        var json = File.ReadAllText(store.FilePath);
+        Check(!json.Contains("\"password\"", StringComparison.OrdinalIgnoreCase) && !json.Contains("\"pwd\"", StringComparison.OrdinalIgnoreCase) &&
+              !json.Contains("secret", StringComparison.OrdinalIgnoreCase) && json.Contains("\"rememberPassword\"", StringComparison.Ordinal), "profiles-no-password-in-json");
+        Check(Directory.GetFiles(root, "*.tmp").Length == 0 && Directory.GetFiles(root, ".*.tmp").Length == 0, "profiles-no-temp-left");
+        Check(store.Remove(c.Id) && !store.Remove(c.Id) && store.Load().Count == 2, "profiles-remove");
+        File.WriteAllText(store.FilePath, "{ not json");
+        try { store.Load(); throw new Exception("FAIL profiles-corrupt"); }
+        catch (InvalidDataException) { }
+        Pass("connection-profiles");
+
+        var settingsStore = new AppSettingsStore(root);
+        var defaults = settingsStore.Load();
+        Check(defaults.ResultsMaxRows == 10_000 && defaults.ConfirmDestructive && defaults.Theme == "System" && defaults.ShowLineNumbers, "settings-defaults");
+        settingsStore.Save(defaults with { EditorFontSize = 16, ResultsMaxRows = 500, Theme = "Dark", ConfirmDestructive = false });
+        var savedSettings = new AppSettingsStore(root).Load();
+        Check(savedSettings.EditorFontSize == 16 && savedSettings.ResultsMaxRows == 500 && savedSettings.Theme == "Dark" && !savedSettings.ConfirmDestructive, "settings-roundtrip");
+        File.WriteAllText(settingsStore.FilePath, "garbage");
+        Check(settingsStore.Load().ResultsMaxRows == 10_000, "settings-corrupt-defaults");
+        settingsStore.Save(new AppSettings { Theme = "Neon", ResultsMaxRows = -5, EditorFontSize = 1000 });
+        var clamped = settingsStore.Load();
+        Check(clamped.Theme == "System" && clamped.ResultsMaxRows == 1 && clamped.EditorFontSize == AppSettings.MaxFontSize, "settings-normalized");
+        Pass("app-settings");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+            Directory.Delete(root, recursive: true);
+    }
+}
+
+// Secrets
+{
+    ISecretStore secrets = new MemorySecretStore();
+    var key = ProfileSecretKeys.ForProfile(Guid.Parse("11111111-1111-1111-1111-111111111111"));
+    Check(key == "profile:11111111-1111-1111-1111-111111111111", "secret-key-format");
+    Check(await secrets.GetAsync(key) is null, "secret-missing");
+    await secrets.SetAsync(key, "p1");
+    await secrets.SetAsync(key, "p2");
+    Check(await secrets.GetAsync(key) == "p2", "secret-overwrite");
+    await secrets.DeleteAsync(key);
+    await secrets.DeleteAsync(key);
+    Check(await secrets.GetAsync(key) is null, "secret-delete");
+    try { await secrets.SetAsync("", "x"); throw new Exception("FAIL secret-empty-key"); }
+    catch (ArgumentException) { }
+    if (!MacKeychainSecretStore.IsSupported)
+    {
+        try { await new MacKeychainSecretStore().GetAsync(key); throw new Exception("FAIL keychain-unsupported"); }
+        catch (PlatformNotSupportedException) { }
+    }
+    Pass("secret-store-memory");
+
+    if (MacKeychainSecretStore.IsSupported && Environment.GetEnvironmentVariable("SQLORYN_KEYCHAIN_SMOKE") == "1")
+    {
+        var keychain = new MacKeychainSecretStore();
+        var smokeKey = ProfileSecretKeys.ForProfile(Guid.NewGuid());
+        try
+        {
+            Check(await keychain.GetAsync(smokeKey) is null, "keychain-missing");
+            await keychain.SetAsync(smokeKey, "synthetic-one");
+            await keychain.SetAsync(smokeKey, "synthetic-two");
+            Check(await keychain.GetAsync(smokeKey) == "synthetic-two", "keychain-roundtrip");
+        }
+        finally
+        {
+            await keychain.DeleteAsync(smokeKey);
+        }
+        Check(await keychain.GetAsync(smokeKey) is null, "keychain-delete");
+        Pass("secret-store-keychain-smoke");
+    }
+}
+
+// Export NULL vs empty
+{
+    var view = new ResultSetView
+    {
+        Columns = [new ResultColumn("id", "int"), new ResultColumn("note", "nvarchar"), new ResultColumn("amt", "decimal"), new ResultColumn("big", "bigint"), new ResultColumn("flag", "bit")],
+        Rows =
+        [
+            [ResultCell.Of("1"), ResultCell.Null, ResultCell.Of("12345678901234567890.123456789"), ResultCell.Of("9007199254740993"), ResultCell.Of("true")],
+            [ResultCell.Of("2"), ResultCell.Of(""), ResultCell.Null, ResultCell.Null, ResultCell.Of("false")],
+            [ResultCell.Of("3"), ResultCell.Of("a,\"b\"\nc"), ResultCell.Of("0.5"), ResultCell.Of("1"), ResultCell.Null]
+        ]
+    };
+    var csv = CsvExporter.ToCsv(view);
+    var lines = csv.Split("\r\n");
+    Check(lines[0] == "id,note,amt,big,flag", "csv-header");
+    Check(lines[1] == "1,,12345678901234567890.123456789,9007199254740993,true", "csv-null-unquoted-empty");
+    Check(lines[2] == "2,\"\",,,false", "csv-empty-string-quoted");
+    Check(csv.Contains("3,\"a,\"\"b\"\"\nc\",0.5,1,", StringComparison.Ordinal) && csv.EndsWith("\r\n", StringComparison.Ordinal), "csv-quoting-crlf");
+
+    var jsonOut = System.Text.Json.JsonDocument.Parse(JsonExporter.ToJson(view)).RootElement;
+    Check(jsonOut.GetArrayLength() == 3, "json-array");
+    var r0 = jsonOut[0];
+    var r1 = jsonOut[1];
+    Check(r0.GetProperty("id").ValueKind == System.Text.Json.JsonValueKind.Number, "json-int-number");
+    Check(r0.GetProperty("note").ValueKind == System.Text.Json.JsonValueKind.Null, "json-null");
+    Check(r1.GetProperty("note").ValueKind == System.Text.Json.JsonValueKind.String && r1.GetProperty("note").GetString() == "", "json-empty-string");
+    Check(r0.GetProperty("amt").GetString() == "12345678901234567890.123456789", "json-decimal-string");
+    Check(r0.GetProperty("big").GetString() == "9007199254740993", "json-bigint-string");
+    Check(r0.GetProperty("flag").ValueKind == System.Text.Json.JsonValueKind.True && r1.GetProperty("flag").ValueKind == System.Text.Json.JsonValueKind.False, "json-bit-bool");
+    using var sw = new StringWriter();
+    JsonExporter.Write(sw, view);
+    Check(sw.ToString() == JsonExporter.ToJson(view), "json-writer");
+
+    var fromSet = ResultSetView.FromResultSet(new ResultSet
+    {
+        Columns = ["a", "b"],
+        Rows = [[CellValue.Null, CellValue.Text("", "empty-string")]],
+        Truncated = false
+    });
+    Check(fromSet.Rows[0][0].IsNull && !fromSet.Rows[0][1].IsNull && !fromSet.Truncated, "result-view-from-set");
+    Pass("result-export");
+}
+
+// Metadata catalog
+{
+    var tables = MetadataCatalog.ListTables("My]Db", "dbo");
+    Check(tables.Contains("[My]]Db].sys.tables", StringComparison.Ordinal) && tables.Contains("@schema", StringComparison.Ordinal) && !tables.Contains("'dbo'", StringComparison.Ordinal), "metadata-tables");
+    Check(MetadataCatalog.ListViews("d", "s").Contains("sys.views", StringComparison.Ordinal), "metadata-views");
+    Check(MetadataCatalog.ListProcedures("d", "s").Contains("sys.procedures", StringComparison.Ordinal), "metadata-procs");
+    var cols = MetadataCatalog.ListColumns("d", "s", "t");
+    Check(cols.Contains("@table", StringComparison.Ordinal) && cols.Contains("sys.columns", StringComparison.Ordinal), "metadata-columns");
+    Check(MetadataCatalog.ListSchemas("d").Contains("[d].sys.schemas", StringComparison.Ordinal) && MetadataCatalog.ListDatabases().Contains("sys.databases", StringComparison.Ordinal), "metadata-dbs-schemas");
+    try { MetadataCatalog.ListTables("", "dbo"); throw new Exception("FAIL metadata-bad-db"); }
+    catch (ArgumentException) { }
+    Check(ObjectExplorerService.NodeKind.Procedure != ObjectExplorerService.NodeKind.View, "node-kind-procedure");
+    Pass("metadata-catalog");
+}
+
+// Table design preview
+{
+    var draft = new TableDesignDraft
+    {
+        Database = "App",
+        Schema = "dbo",
+        TableName = "Cust]omer",
+        Columns =
+        [
+            new ColumnDefinition { Name = "Id", DataType = "int", IsNullable = false, IsIdentity = true },
+            new ColumnDefinition { Name = "Name", DataType = "nvarchar", MaxLength = 100, IsNullable = false },
+            new ColumnDefinition { Name = "Bio", DataType = "nvarchar", MaxLength = -1 },
+            new ColumnDefinition { Name = "Balance", DataType = "decimal(18,2)" }
+        ]
+    };
+    var create = TableDesignSql.PreviewCreate(draft);
+    Check(create.StartsWith("CREATE TABLE [App].[dbo].[Cust]]omer] (", StringComparison.Ordinal), "design-create-header");
+    Check(create.Contains("[Id] int IDENTITY(1,1) NOT NULL", StringComparison.Ordinal) &&
+          create.Contains("[Name] nvarchar(100) NOT NULL", StringComparison.Ordinal) &&
+          create.Contains("[Bio] nvarchar(MAX) NULL", StringComparison.Ordinal) &&
+          create.Contains("[Balance] decimal(18,2) NULL", StringComparison.Ordinal), "design-create-columns");
+
+    var desired = draft with
+    {
+        Columns =
+        [
+            draft.Columns[0],
+            draft.Columns[1] with { MaxLength = 200 },
+            new ColumnDefinition { Name = "Email", DataType = "varchar", MaxLength = 255 }
+        ]
+    };
+    var alter = TableDesignSql.PreviewAlter(draft, desired);
+    Check(alter.Contains("DROP COLUMN [Bio]", StringComparison.Ordinal) && alter.Contains("DESTRUCTIVE", StringComparison.Ordinal), "design-alter-drop");
+    Check(alter.Contains("DROP COLUMN [Balance]", StringComparison.Ordinal), "design-alter-drop2");
+    Check(alter.Contains("ALTER COLUMN [Name] nvarchar(200) NOT NULL", StringComparison.Ordinal), "design-alter-type");
+    Check(alter.Contains("ADD [Email] varchar(255) NULL", StringComparison.Ordinal), "design-alter-add");
+    Check(TableDesignSql.HasDestructiveChanges(draft, desired) && !TableDesignSql.HasDestructiveChanges(draft, draft), "design-destructive-flag");
+    Check(TableDesignSql.PreviewAlter(draft, draft).StartsWith("-- No changes", StringComparison.Ordinal), "design-alter-noop");
+
+    void ExpectInvalid(ColumnDefinition column, string name)
+    {
+        try
+        {
+            TableDesignSql.PreviewCreate(draft with { Columns = [column] });
+            throw new Exception("FAIL " + name);
+        }
+        catch (ArgumentException) { }
+    }
+    ExpectInvalid(new ColumnDefinition { Name = "x", DataType = "int); DROP TABLE t;--" }, "design-injection-type");
+    ExpectInvalid(new ColumnDefinition { Name = "x", DataType = "nvarchar" }, "design-length-required");
+    ExpectInvalid(new ColumnDefinition { Name = "x", DataType = "nvarchar", MaxLength = 5000 }, "design-length-limit");
+    ExpectInvalid(new ColumnDefinition { Name = "x", DataType = "nvarchar", MaxLength = 5, IsIdentity = true, IsNullable = false }, "design-identity-type");
+    ExpectInvalid(new ColumnDefinition { Name = "x", DataType = "int", IsIdentity = true }, "design-identity-nullable");
+    ExpectInvalid(new ColumnDefinition { Name = "x", DataType = "geography" }, "design-unknown-type");
+    try
+    {
+        TableDesignSql.PreviewAlter(draft, draft with { TableName = "Other" });
+        throw new Exception("FAIL design-rename-table");
+    }
+    catch (ArgumentException) { }
+    try
+    {
+        TableDesignSql.PreviewAlter(draft, draft with { Columns = [draft.Columns[0] with { IsIdentity = false }, .. draft.Columns.Skip(1)] });
+        throw new Exception("FAIL design-identity-change");
+    }
+    catch (NotSupportedException) { }
+    Pass("table-design-preview");
+}
+
+// Edit rows
+{
+    var orders = new TableRef("App", "dbo", "Orders");
+    Check(EditRowsSql.BuildSelectTop(orders, 200).StartsWith("SELECT TOP (200) * FROM [App].[dbo].[Orders];", StringComparison.Ordinal), "edit-select-top");
+    try { EditRowsSql.BuildSelectTop(orders, 0); throw new Exception("FAIL edit-select-zero"); }
+    catch (ArgumentOutOfRangeException) { }
+    var key = new RowKey(["Id"], [7]);
+    var update = EditRowsSql.BuildUpdate(
+        orders, key,
+        new Dictionary<string, object?> { ["Qty"] = 5, ["Note"] = null },
+        new Dictionary<string, object?> { ["Id"] = 7, ["Qty"] = 4, ["Note"] = null, ["Memo"] = "m" });
+    Check(update.CommandText.Contains("UPDATE [App].[dbo].[Orders] SET [Qty] = @n0, [Note] = @n1 WHERE [Id] = @k0 AND [Qty] = @o0 AND [Note] IS NULL AND [Memo] = @o1;", StringComparison.Ordinal), "edit-update-optimistic-where");
+    Check(update.CommandText.Contains("SELECT @@ROWCOUNT;", StringComparison.Ordinal), "edit-update-rowcount");
+    Check(update.Parameters.Count == 5 && update.Parameters.Single(p => p.Name == "@k0").Value is 7 && update.Parameters.Single(p => p.Name == "@o0").Value is 4, "edit-update-params");
+    Check(!update.CommandText.Contains("Memo = 'm'", StringComparison.Ordinal) && !update.CommandText.Contains("'m'", StringComparison.Ordinal), "edit-update-no-inline-values");
+    var skipped = EditRowsSql.BuildUpdate(orders, key, new Dictionary<string, object?> { ["Qty"] = 1 },
+        new Dictionary<string, object?> { ["Qty"] = 4, ["Blob"] = "x" }, new HashSet<string> { "Blob" });
+    Check(!skipped.CommandText.Contains("[Blob]", StringComparison.Ordinal), "edit-exclude-column");
+    var delete = EditRowsSql.BuildDelete(orders, new RowKey(["A", "B"], [1, "x"]), new Dictionary<string, object?> { ["Qty"] = 4 });
+    Check(delete.CommandText.Contains("DELETE FROM [App].[dbo].[Orders] WHERE [A] = @k0 AND [B] = @k1 AND [Qty] = @o0;", StringComparison.Ordinal), "edit-delete-where");
+    try { EditRowsSql.BuildUpdate(orders, key, new Dictionary<string, object?> { ["Id"] = 8 }); throw new Exception("FAIL edit-update-key"); }
+    catch (ArgumentException) { }
+    try { new RowKey(["Id"], [null]); throw new Exception("FAIL edit-null-key"); }
+    catch (ArgumentException) { }
+    try { EditRowsSql.EnsureSingleRowAffected(0); throw new Exception("FAIL edit-conflict"); }
+    catch (EditRowsConflictException) { }
+    try { EditRowsSql.EnsureSingleRowAffected(2); throw new Exception("FAIL edit-multirow"); }
+    catch (InvalidOperationException) { }
+    EditRowsSql.EnsureSingleRowAffected(1);
+    Pass("edit-rows-sql");
+}
+
+// Diagnostics redaction
+{
+    var cs = "Server=tcp:db,1433;User Id=sa;Password=Sup3r;Secret;Encrypt=True;PWD='a;b';Database=x";
+    var red = DiagnosticsRedactor.Redact(cs);
+    Check(!red.Contains("Sup3r", StringComparison.Ordinal) && !red.Contains("a;b", StringComparison.Ordinal), "redact-conn-string");
+    Check(red.Contains("Server=tcp:db,1433", StringComparison.Ordinal) && red.Contains("User Id=sa", StringComparison.Ordinal), "redact-keeps-context");
+    var withNewline = DiagnosticsRedactor.Redact("failed: pwd=hunter2\nnext line ok");
+    Check(!withNewline.Contains("hunter2", StringComparison.Ordinal) && withNewline.Contains("next line ok", StringComparison.Ordinal), "redact-line-bounded");
+    Check(!DiagnosticsRedactor.Redact("CREATE LOGIN a WITH PASSWORD = N'p''w;d';").Contains("p''w", StringComparison.Ordinal), "redact-sql-password");
+    var bearer = DiagnosticsRedactor.Redact("Authorization: Bearer abc123.def456-xyz\nGET with Bearer tokenvalue12345==");
+    Check(!bearer.Contains("abc123", StringComparison.Ordinal) && !bearer.Contains("tokenvalue", StringComparison.Ordinal), "redact-bearer");
+    var jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.sig_nature";
+    Check(!DiagnosticsRedactor.Redact("token seen " + jwt).Contains("eyJhbGci", StringComparison.Ordinal), "redact-jwt");
+    Check(!DiagnosticsRedactor.Redact("api_key=AKIA123456&x=1").Contains("AKIA123456", StringComparison.Ordinal), "redact-api-key");
+    Check(DiagnosticsRedactor.Redact("plain text without secrets") == "plain text without secrets" && DiagnosticsRedactor.Redact(null) == "", "redact-noop");
+    var bundle = DiagnosticsRedactor.BuildSupportBundle([("Log", "connect Password=abc123\n"), ("Env", "ok")]);
+    Check(!bundle.Contains("abc123", StringComparison.Ordinal) && bundle.Contains("=== Log ===", StringComparison.Ordinal) && bundle.Contains("=== Env ===", StringComparison.Ordinal), "redact-bundle");
+    Pass("diagnostics-redactor");
+}
+
+// Find / replace
+{
+    var text = "Select a, A from t -- a";
+    Check(FindReplaceEngine.FindNext(text, "a", 0, caseSensitive: true) == 7, "find-case-sensitive");
+    Check(FindReplaceEngine.FindNext(text, "a", 0, caseSensitive: false) == 7, "find-first");
+    Check(FindReplaceEngine.FindNext(text, "a", 8, caseSensitive: false) == 10, "find-next-case-insensitive");
+    Check(FindReplaceEngine.FindNext(text, "a", 8, caseSensitive: true) == 22, "find-next-case-sensitive-skips");
+    Check(FindReplaceEngine.FindNext(text, "select", 5, caseSensitive: false) == 0, "find-wraps");
+    Check(FindReplaceEngine.FindNext(text, "select", 5, caseSensitive: false, wrap: false) == -1, "find-no-wrap");
+    Check(FindReplaceEngine.FindNext(text, "select", 0, caseSensitive: true) == -1, "find-case-miss");
+    Check(FindReplaceEngine.FindNext(text, "", 0, true) == -1 && FindReplaceEngine.FindNext(text, "zzz", 99, true) == -1, "find-empty-and-clamp");
+    var replaced = FindReplaceEngine.ReplaceAll("aAaa", "a", "b", caseSensitive: false);
+    Check(replaced.Text == "bbbb" && replaced.Count == 4, "replace-all-insensitive");
+    var sens = FindReplaceEngine.ReplaceAll("aAaa", "a", "ba", caseSensitive: true);
+    Check(sens.Text == "baAbaba" && sens.Count == 3, "replace-all-no-rescan");
+    var none = FindReplaceEngine.ReplaceAll("abc", "x", "y", true);
+    Check(none.Text == "abc" && none.Count == 0 && FindReplaceEngine.ReplaceAll("abc", "", "y", true).Count == 0, "replace-none");
+    Pass("find-replace");
+}
+
+
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
 Console.WriteLine("NOTE: live SqlDataReader decimal(38) against SQL Server remains provider-only / live-host verification.");
 return 0;

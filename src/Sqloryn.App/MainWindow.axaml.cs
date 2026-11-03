@@ -14,7 +14,20 @@ public partial class MainWindow : Window
 {
     readonly ObservableCollection<QueryTab> _tabs = [];
     readonly ObservableCollection<TreeNode> _treeRoots = [];
+    readonly TextBox MessagesBox = new()
+    {
+        IsReadOnly = true,
+        AcceptsReturn = true,
+        TextWrapping = TextWrapping.Wrap,
+        BorderThickness = new Avalonia.Thickness(0),
+        CornerRadius = new Avalonia.CornerRadius(0),
+        FontFamily = new FontFamily("Menlo, Monaco, Consolas, monospace"),
+        FontSize = 12
+    };
     QueryTab? _active;
+    AppSettings _settings = new();
+    FindReplaceWindow? _findWindow;
+    string _lastError = "";
     bool _closeApproved;
     bool _closePromptInFlight;
     long _treeLoadGeneration;
@@ -22,10 +35,13 @@ public partial class MainWindow : Window
     sealed class TreeNode(string title, string kind, string? database = null, string? schema = null, string? objectName = null)
     {
         public string Title { get; } = title;
+        /// <summary>database, schema, tables, views, procedures (folders), table, view, procedure, column, placeholder.</summary>
         public string Kind { get; } = kind;
         public string? Database { get; } = database;
         public string? Schema { get; } = schema;
         public string? ObjectName { get; } = objectName;
+        /// <summary>Extra read-only text shown in the properties panel.</summary>
+        public string? Info { get; init; }
         public ObservableCollection<TreeNode> Children { get; } = [];
         public bool Loaded { get; set; }
         public bool Loading { get; set; }
@@ -34,16 +50,57 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _settings = LoadSettings();
         ObjectTree.ItemsSource = _treeRoots;
         ObjectTree.ItemTemplate = new FuncTreeDataTemplate<TreeNode>(
             _ => true,
-            (node, _) => new TextBlock { Text = node.Title },
+            (node, _) => BuildNodeView(node),
             node => node.Children);
+        ObjectTree.AddHandler(TreeViewItem.ExpandedEvent, OnTreeItemExpanded);
         Editor.LostFocus += (_, _) => CaptureSelection();
         Editor.PointerReleased += (_, _) => CaptureSelection();
         Editor.KeyUp += (_, _) => CaptureSelection();
         Closing += OnWindowClosing;
+        ApplySettings(_settings);
         AddTab();
+    }
+
+    static AppSettings LoadSettings()
+    {
+        try
+        {
+            return AppServices.Settings.Load();
+        }
+        catch (Exception)
+        {
+            return new AppSettings();
+        }
+    }
+
+    void ApplySettings(AppSettings settings)
+    {
+        _settings = settings;
+        Editor.FontSize = settings.EditorFontSize;
+        AppServices.ApplyTheme(settings);
+    }
+
+    static Control BuildNodeView(TreeNode node)
+    {
+        var text = new TextBlock { Text = node.Title, VerticalAlignment = VerticalAlignment.Center };
+        switch (node.Kind)
+        {
+            case "database":
+                text.FontWeight = FontWeight.SemiBold;
+                break;
+            case "tables" or "views" or "procedures":
+                text.Classes.Add("muted");
+                break;
+            case "column" or "placeholder":
+                text.Classes.Add("muted");
+                text.FontSize = 12;
+                break;
+        }
+        return text;
     }
 
     void OnWindowClosing(object? sender, WindowClosingEventArgs e)
@@ -167,6 +224,7 @@ public partial class MainWindow : Window
             ConnectionLabel.Text = "Not connected";
             return;
         }
+        UpdateCommandState(_active);
         var session = _active.Session;
         ConnectionLabel.Text = !session.IsConnected
             ? "Not connected"
@@ -174,7 +232,25 @@ public partial class MainWindow : Window
                 ? $"{session.ServerDisplay} / (target unknown — revalidate)"
                 : $"{session.ServerDisplay} / {session.Database}";
         StatusBar.Text =
-            $"{_active.Status} · tab {_active.Id.ToString()[..8]} · preview: single batch, no GO, session-only credentials";
+            $"{_active.Status} · tab {_active.Id.ToString()[..8]} · GO batches supported · passwords in memory unless saved to Keychain";
+    }
+
+    void UpdateCommandState(QueryTab tab)
+    {
+        var connected = tab.Session.IsConnected;
+        var executing = tab.IsExecuting || tab.Session.HasActiveCommand;
+        DisconnectButton.IsEnabled = connected && !executing;
+        RunButton.IsEnabled = connected && !executing;
+        CancelButton.IsEnabled = executing;
+        var hasSets = tab.LastResult?.ResultSets.Count > 0;
+        ExportCsvButton.IsEnabled = hasSets;
+        ExportJsonButton.IsEnabled = hasSets;
+    }
+
+    void ReportError(string message)
+    {
+        _lastError = message;
+        StatusBar.Text = SafeUi(message);
     }
 
     void UpdateRunMode()
@@ -205,12 +281,15 @@ public partial class MainWindow : Window
             if (ReferenceEquals(_active, tab))
                 UpdateStatus();
             await tab.Session.ConnectAsync(dialog.Result);
+            var profileNote = await PersistProfileAsync(dialog);
             if (!OwnerStillCurrent(tab, binding))
                 return;
             tab.Status = $"Connected · SQL Server {tab.Session.ServerVersion}";
             if (ReferenceEquals(_active, tab))
             {
                 UpdateStatus();
+                if (profileNote is not null)
+                    StatusBar.Text = profileNote;
                 await LoadDatabasesAsync(tab);
             }
         }
@@ -221,9 +300,71 @@ public partial class MainWindow : Window
             tab.Status = "Connect failed";
             if (ReferenceEquals(_active, tab))
             {
-                StatusBar.Text = SafeUi(ex.Message);
                 UpdateStatus();
+                ReportError(ex.Message);
             }
+            else
+            {
+                _lastError = ex.Message;
+            }
+        }
+    }
+
+    /// <summary>Upserts the non-secret profile and, when asked, stores the password in the Keychain. Returns a warning on failure.</summary>
+    async Task<string?> PersistProfileAsync(ConnectWindow dialog)
+    {
+        var options = dialog.Result;
+        if (options is null || !dialog.SaveProfile)
+            return null;
+        try
+        {
+            AppServices.Profiles.Upsert(new ConnectionProfile
+            {
+                Id = dialog.ProfileId,
+                Name = dialog.ProfileName,
+                Server = options.Server,
+                Port = options.Port,
+                Database = options.Database,
+                UserId = options.UserId,
+                Encrypt = true,
+                TrustServerCertificate = options.TrustServerCertificate,
+                ServerCertificatePath = options.ServerCertificatePath,
+                RememberPassword = dialog.RememberPassword,
+                LastUsedUtc = DateTimeOffset.UtcNow
+            });
+            var key = ProfileSecretKeys.ForProfile(dialog.ProfileId);
+            if (dialog.RememberPassword)
+                await AppServices.Secrets.SetAsync(key, options.Password);
+            else
+                await AppServices.Secrets.DeleteAsync(key);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _lastError = ex.Message;
+            return SafeUi("Connected, but the profile or password was not saved: " + ex.Message);
+        }
+    }
+
+    async void OnRevalidate(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        var binding = tab.CaptureBinding();
+        try
+        {
+            await tab.Session.RevalidateTargetAsync();
+            if (!OwnerStillCurrent(tab, binding))
+                return;
+            tab.Status = "Target revalidated";
+            if (ReferenceEquals(_active, tab))
+                UpdateStatus();
+        }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(_active, tab))
+                ReportError(ex.Message);
         }
     }
 
@@ -300,9 +441,15 @@ public partial class MainWindow : Window
             tab.Status = "Run failed";
             if (ReferenceEquals(_active, tab))
             {
+                _lastError = ex.Message;
                 MessagesBox.Text = SafeUi(ex.Message);
-                StatusBar.Text = SafeUi(ex.Message);
+                ShowMessagesTab();
                 UpdateStatus();
+                StatusBar.Text = SafeUi(ex.Message);
+            }
+            else
+            {
+                _lastError = ex.Message;
             }
         }
         finally
@@ -668,6 +815,7 @@ public partial class MainWindow : Window
         if (!ReferenceEquals(_active, tab))
             return;
         _treeRoots.Clear();
+        PropertiesBox.Text = "Select an object to see its properties.";
         if (!tab.Session.IsConnected)
             return;
         try
@@ -688,43 +836,104 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             if (ReferenceEquals(_active, tab))
-                StatusBar.Text = SafeUi(ex.Message);
+                ReportError(ex.Message);
         }
     }
 
+    TreeNode? SelectedNode => ObjectTree.SelectedItem as TreeNode;
+
     async void OnExpandSelected(object? sender, RoutedEventArgs e)
     {
-        if (ObjectTree.SelectedItem is TreeNode node)
-            await ExpandNodeAsync(node, insertSql: false);
+        if (SelectedNode is { } node)
+            await ExpandNodeAsync(node);
+    }
+
+    async void OnTreeItemExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (e.Source is TreeViewItem { DataContext: TreeNode node })
+            await ExpandNodeAsync(node);
     }
 
     async void OnObjectKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key is not (Key.Right or Key.Enter or Key.Space))
             return;
-        if (ObjectTree.SelectedItem is not TreeNode node)
+        if (SelectedNode is not { } node)
             return;
         e.Handled = true;
-        await ExpandNodeAsync(node, insertSql: false);
+        await ExpandNodeAsync(node);
     }
 
     async void OnObjectDoubleTapped(object? sender, TappedEventArgs e)
     {
-        if (ObjectTree.SelectedItem is not TreeNode node)
+        if (SelectedNode is not { } node)
             return;
-        // Double-tap expands/loads only — does not insert SQL.
-        await ExpandNodeAsync(node, insertSql: false);
+        if (node.Kind is "table" or "view")
+        {
+            InsertSelectScript(node);
+            return;
+        }
+        await ExpandNodeAsync(node);
     }
 
-    async void OnScriptSelect(object? sender, RoutedEventArgs e)
+    void OnTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)
+        => PropertiesBox.Text = DescribeNode(SelectedNode);
+
+    string DescribeNode(TreeNode? node)
     {
-        if (ObjectTree.SelectedItem is not TreeNode node || _active is null)
+        if (node is null)
+            return "Select an object to see its properties.";
+        var sb = new System.Text.StringBuilder();
+        void Line(string label, string? value)
+        {
+            if (!string.IsNullOrEmpty(value))
+                sb.Append(label.PadRight(10)).Append(value).Append('\n');
+        }
+        var kind = node.Kind switch
+        {
+            "database" => "Database",
+            "schema" => "Schema",
+            "tables" => "Tables folder",
+            "views" => "Views folder",
+            "procedures" => "Procedures folder",
+            "table" => "Table",
+            "view" => "View",
+            "procedure" => "Stored procedure",
+            "column" => "Column",
+            _ => "Item"
+        };
+        Line("Kind", kind);
+        Line("Server", _active?.Session.ServerDisplay);
+        Line("Database", node.Database);
+        Line("Schema", node.Schema);
+        Line(node.Kind == "column" ? "Table" : "Name", node.Kind == "column" || node.Kind is "table" or "view" or "procedure" ? node.ObjectName : null);
+        if (node.Kind is "table" or "view" && node.Database is not null && node.Schema is not null && node.ObjectName is not null)
+            Line("Qualified", SqlIdentity.Qualify3(node.Database, node.Schema, node.ObjectName));
+        if (node.Kind is "table" or "view" && node.Loaded)
+            Line("Columns", node.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (node.Kind is "tables" or "views" or "procedures" && node.Loaded)
+            Line("Items", node.Children.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (!string.IsNullOrEmpty(node.Info))
+            sb.Append('\n').Append(node.Info).Append('\n');
+        return sb.ToString().TrimEnd();
+    }
+
+    void OnScriptSelect(object? sender, RoutedEventArgs e)
+    {
+        if (SelectedNode is not { } node || _active is null)
             return;
         if (node.Kind is not ("table" or "view") || node.Database is null || node.Schema is null || node.ObjectName is null)
         {
             StatusBar.Text = "Select a table or view to insert a quoted SELECT.";
             return;
         }
+        InsertSelectScript(node);
+    }
+
+    void InsertSelectScript(TreeNode node)
+    {
+        if (_active is null || node.Database is null || node.Schema is null || node.ObjectName is null)
+            return;
         var tab = _active;
         var sql = SqlIdentity.ScriptSelectTop(node.Database, node.Schema, node.ObjectName);
         Editor.Text = (Editor.Text ?? "") + sql;
@@ -733,132 +942,279 @@ public partial class MainWindow : Window
         StatusBar.Text = "Inserted " + SqlIdentity.Qualify3(node.Database, node.Schema, node.ObjectName);
     }
 
-    async Task ExpandNodeAsync(TreeNode node, bool insertSql)
+    /// <summary>
+    /// Fetches children off the UI-thread-bound tree, then rejects the result if the tab, session,
+    /// database or generation changed while the query was in flight.
+    /// </summary>
+    async Task LoadChildrenAsync(TreeNode node, QueryTab tab, OperationBinding binding, Func<Task<List<TreeNode>>> fetch)
     {
-        if (_active is null)
+        if (node.Loading)
             return;
-        var tab = _active;
-        var binding = tab.CaptureBinding();
-        var database = node.Database;
+        node.Loading = true;
+        node.Children.Clear();
+        node.Children.Add(new TreeNode("Loading…", "placeholder", node.Database, node.Schema, node.ObjectName));
+        List<TreeNode> children;
         try
         {
-            if (node.Kind == "database" && !node.Loaded)
+            children = await fetch();
+        }
+        catch
+        {
+            ResetNode(node);
+            throw;
+        }
+        finally
+        {
+            node.Loading = false;
+        }
+
+        if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
+        {
+            ResetNode(node);
+            StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
+            return;
+        }
+        node.Children.Clear();
+        foreach (var child in children)
+            node.Children.Add(child);
+        node.Loaded = true;
+        if (ReferenceEquals(SelectedNode, node))
+            PropertiesBox.Text = DescribeNode(node);
+    }
+
+    static void ResetNode(TreeNode node)
+    {
+        node.Children.Clear();
+        node.Children.Add(new TreeNode("…", "placeholder", node.Database, node.Schema, node.ObjectName));
+        node.Loaded = false;
+    }
+
+    static TreeNode WithPlaceholder(TreeNode node)
+    {
+        node.Children.Add(new TreeNode("…", "placeholder", node.Database, node.Schema, node.ObjectName));
+        return node;
+    }
+
+    async Task ExpandNodeAsync(TreeNode node)
+    {
+        if (_active is null || node.Loaded || node.Loading || node.Kind is "placeholder" or "column" or "procedure")
+            return;
+        var tab = _active;
+        var session = tab.Session;
+        var binding = tab.CaptureBinding();
+        var db = node.Database;
+        try
+        {
+            switch (node.Kind)
             {
-                if (node.Loading)
-                    return;
-                node.Loading = true;
-                node.Children.Clear();
-                node.Children.Add(new TreeNode("Loading…", "placeholder", database));
-                IReadOnlyList<string> schemas;
-                try
-                {
-                    schemas = await tab.Session.ListSchemasAsync(node.Database!);
-                }
-                finally
-                {
-                    node.Loading = false;
-                }
-                if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
-                {
-                    StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
-                    return;
-                }
-                node.Children.Clear();
-                foreach (var schema in schemas)
-                {
-                    var sn = new TreeNode(schema, "schema", node.Database, schema);
-                    sn.Children.Add(new TreeNode("…", "placeholder", node.Database, schema));
-                    node.Children.Add(sn);
-                }
-                node.Loaded = true;
-            }
-            else if (node.Kind == "schema" && !node.Loaded)
-            {
-                if (node.Loading)
-                    return;
-                node.Loading = true;
-                node.Children.Clear();
-                node.Children.Add(new TreeNode("Loading…", "placeholder", node.Database, node.Schema));
-                IReadOnlyList<(string Schema, string Name, string Type)> objects;
-                try
-                {
-                    objects = await tab.Session.ListTablesAndViewsAsync(node.Database!, node.Schema!);
-                }
-                finally
-                {
-                    node.Loading = false;
-                }
-                if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
-                {
-                    StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
-                    return;
-                }
-                node.Children.Clear();
-                foreach (var (schema, name, type) in objects)
-                {
-                    var kind = type == "V" ? "view" : "table";
-                    // Show database context so identical names across DBs stay distinguishable.
-                    var tn = new TreeNode($"{node.Database}.{schema}.{name} ({kind})", kind, node.Database, schema, name);
-                    tn.Children.Add(new TreeNode("…", "placeholder", node.Database, schema, name));
-                    node.Children.Add(tn);
-                }
-                node.Loaded = true;
-            }
-            else if (node.Kind is "table" or "view")
-            {
-                if (!node.Loaded)
-                {
-                    if (node.Loading)
-                        return;
-                    node.Loading = true;
-                    node.Children.Clear();
-                    node.Children.Add(new TreeNode("Loading…", "placeholder", node.Database, node.Schema, node.ObjectName));
-                    IReadOnlyList<(string Name, string TypeName, bool IsNullable)> columns;
-                    try
+                case "database" when db is not null:
+                    await LoadChildrenAsync(node, tab, binding, async () =>
                     {
-                        columns = await tab.Session.ListColumnsAsync(node.Database!, node.Schema!, node.ObjectName!);
-                    }
-                    finally
-                    {
-                        node.Loading = false;
-                    }
-                    if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
-                    {
-                        StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
-                        return;
-                    }
-                    node.Children.Clear();
-                    foreach (var (name, type, nullable) in columns)
-                        node.Children.Add(new TreeNode($"{name} : {type}{(nullable ? "?" : "")}", "column", node.Database, node.Schema, name));
-                    node.Loaded = true;
-                }
-                if (insertSql && node.Database is not null && node.Schema is not null && node.ObjectName is not null)
+                        var schemas = await CatalogClient.ListSchemasAsync(session, db);
+                        return schemas.Select(s => WithPlaceholder(new TreeNode(s, "schema", db, s))).ToList();
+                    });
+                    break;
+
+                case "schema" when db is not null && node.Schema is not null:
                 {
-                    var sql = SqlIdentity.ScriptSelectTop(node.Database, node.Schema, node.ObjectName);
-                    Editor.Text = (Editor.Text ?? "") + sql;
-                    tab.Document.SetText(Editor.Text);
-                    RefreshHeader(tab);
+                    // Folders are static; the catalog query runs when a folder expands.
+                    var schema = node.Schema;
+                    await LoadChildrenAsync(node, tab, binding, () => Task.FromResult(new List<TreeNode>
+                    {
+                        WithPlaceholder(new TreeNode("Tables", "tables", db, schema)),
+                        WithPlaceholder(new TreeNode("Views", "views", db, schema)),
+                        WithPlaceholder(new TreeNode("Programmability · Procedures", "procedures", db, schema))
+                    }));
+                    break;
+                }
+
+                case "tables" or "views" or "procedures" when db is not null && node.Schema is not null:
+                {
+                    var schema = node.Schema;
+                    var kind = node.Kind;
+                    await LoadChildrenAsync(node, tab, binding, async () =>
+                    {
+                        var names = kind switch
+                        {
+                            "tables" => await CatalogClient.ListTablesAsync(session, db, schema),
+                            "views" => await CatalogClient.ListViewsAsync(session, db, schema),
+                            _ => await CatalogClient.ListProceduresAsync(session, db, schema)
+                        };
+                        var childKind = kind switch { "tables" => "table", "views" => "view", _ => "procedure" };
+                        return names.Select(n =>
+                        {
+                            var child = new TreeNode(n, childKind, db, schema, n);
+                            return childKind == "procedure" ? child : WithPlaceholder(child);
+                        }).ToList();
+                    });
+                    break;
+                }
+
+                case "table" or "view" when db is not null && node.Schema is not null && node.ObjectName is not null:
+                {
+                    var schema = node.Schema;
+                    var table = node.ObjectName;
+                    await LoadChildrenAsync(node, tab, binding, async () =>
+                    {
+                        var columns = await CatalogClient.ListColumnsAsync(session, db, schema, table);
+                        return columns.Select(c => new TreeNode(
+                            $"{c.Name} : {c.TypeDisplay}{(c.IsNullable ? "" : " · NOT NULL")}{(c.IsIdentity ? " · identity" : "")}",
+                            "column", db, schema, table)
+                        {
+                            Info = $"Column   {c.Name}\nType     {c.TypeDisplay}\nNullable {(c.IsNullable ? "yes" : "no")}\nIdentity {(c.IsIdentity ? "yes" : "no")}"
+                        }).ToList();
+                    });
+                    break;
                 }
             }
         }
         catch (Exception ex)
         {
             if (ReferenceEquals(_active, tab))
-                StatusBar.Text = SafeUi(ex.Message);
+                ReportError(ex.Message);
         }
     }
 
-    void RenderResult(QueryResult? result)
+    /// <summary>Resolves the selected table node for design/edit actions, or reports why it cannot.</summary>
+    (QueryTab Tab, TableRef Table)? RequireSelectedTable(bool tablesOnly)
     {
-        if (result is null)
+        if (_active is null)
+            return null;
+        var tab = _active;
+        if (SelectedNode is not { } node || node.Database is null || node.Schema is null || node.ObjectName is null ||
+            node.Kind != "table" && (tablesOnly || node.Kind != "view"))
         {
-            ResultsBox.Text = "";
-            MessagesBox.Text = "";
+            StatusBar.Text = tablesOnly ? "Select a table in Object Explorer first." : "Select a table or view in Object Explorer first.";
+            return null;
+        }
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect first.";
+            return null;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return null;
+        }
+        return (tab, new TableRef(node.Database, node.Schema, node.ObjectName));
+    }
+
+    async void OnDesignTable(object? sender, RoutedEventArgs e)
+    {
+        if (RequireSelectedTable(tablesOnly: true) is not { } selected)
+            return;
+        var (tab, table) = selected;
+        var node = SelectedNode;
+        var window = new TableDesignWindow(tab.Session, table);
+        await window.ShowDialog(this);
+        if (window.Applied && node is not null && node.Loaded && ReferenceEquals(_active, tab))
+        {
+            ResetNode(node);
+            StatusBar.Text = "Table changed; collapse and expand it to reload columns.";
+        }
+    }
+
+    async void OnEditRows(object? sender, RoutedEventArgs e)
+    {
+        if (RequireSelectedTable(tablesOnly: true) is not { } selected)
+            return;
+        var (tab, table) = selected;
+        await new EditRowsWindow(tab.Session, table).ShowDialog(this);
+    }
+
+    // ---- Find / Replace -------------------------------------------------------------------
+
+    void OnFindReplace(object? sender, RoutedEventArgs e)
+    {
+        if (_findWindow is not null)
+        {
+            _findWindow.Activate();
             return;
         }
-        ResultsBox.Text = QueryOutcomeFormatter.FormatResults(result);
-        MessagesBox.Text = QueryOutcomeFormatter.FormatMessages(result);
+        var window = new FindReplaceWindow(Editor);
+        window.TextReplaced += _ =>
+        {
+            if (_active is null)
+                return;
+            _active.Document.SetText(Editor.Text ?? "");
+            RefreshHeader(_active);
+        };
+        window.Closed += (_, _) => _findWindow = null;
+        _findWindow = window;
+        window.Show(this);
     }
+
+    // ---- Tools / Help ---------------------------------------------------------------------
+
+    async void OnSettings(object? sender, RoutedEventArgs e)
+    {
+        var dialog = new SettingsWindow();
+        await dialog.ShowDialog<bool>(this);
+        if (dialog.Saved is { } saved)
+        {
+            ApplySettings(saved);
+            if (_active is not null)
+                RenderResult(_active.LastResult);
+            StatusBar.Text = "Settings saved.";
+        }
+    }
+
+    async void OnDiagnostics(object? sender, RoutedEventArgs e)
+    {
+        var bundle = BuildDiagnosticsBundle();
+        await new DiagnosticsWindow(bundle).ShowDialog(this);
+    }
+
+    string BuildDiagnosticsBundle()
+    {
+        var parts = new List<(string Title, string Text)>
+        {
+            ("Application", string.Join('\n',
+                "SQLoryn developer preview (not a release build)",
+                $"Version: {typeof(MainWindow).Assembly.GetName().Version}",
+                $"OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}",
+                $"Architecture: {System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}",
+                $".NET: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}",
+                $"Keychain available: {AppServices.SecretsArePersistent}",
+                $"Generated (UTC): {DateTime.UtcNow:O}")),
+            ("Capabilities", "GO batch separators supported. No SSMS parity claimed. No live SQL Server evidence is implied by this bundle.")
+        };
+
+        var sessions = new List<string>();
+        for (var i = 0; i < _tabs.Count; i++)
+        {
+            var tab = _tabs[i];
+            var s = tab.Session;
+            sessions.Add(string.Join(" | ",
+                $"tab {i + 1}",
+                $"status: {tab.Status}",
+                $"connected: {s.IsConnected}",
+                $"server: {s.ServerDisplay ?? "-"}",
+                $"database: {s.Database ?? "-"}",
+                $"version: {s.ServerVersion ?? "-"}",
+                $"target unknown: {s.TargetUnknown}",
+                $"executing: {tab.IsExecuting}"));
+        }
+        parts.Add(("Sessions", string.Join('\n', sessions)));
+        parts.Add(("Status line", StatusBar.Text ?? ""));
+        parts.Add(("Last error (redacted)", string.IsNullOrEmpty(_lastError) ? "(none recorded this run)" : _lastError));
+        if (_active?.LastResult is { } last)
+        {
+            parts.Add(("Last run outcome (redacted)", QueryOutcomeFormatter.FormatMessages(last)));
+        }
+        parts.Add(("Excluded", "SQL text, result rows, passwords, connection strings and script paths are never included."));
+        return DiagnosticsRedactor.BuildSupportBundle(parts);
+    }
+
+    async void OnAbout(object? sender, RoutedEventArgs e)
+        => await Dialogs.ShowMessageAsync(this, "About SQLoryn",
+            "SQLoryn — database studio (developer preview)\n\n" +
+            "• SQL authentication with mandatory encryption.\n" +
+            "• GO batch separators are supported.\n" +
+            "• This preview does not claim parity with SQL Server Management Studio, and no live SQL Server test evidence is implied.\n" +
+            "• Passwords are stored only if you choose Remember (macOS Keychain).\n\n" +
+            "Not affiliated with Microsoft.");
 
     static string SafeUi(string message)
     {

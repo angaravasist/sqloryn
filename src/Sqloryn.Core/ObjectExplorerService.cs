@@ -11,6 +11,7 @@ public static class ObjectExplorerService
         Schema,
         Table,
         View,
+        Procedure,
         Column,
         Placeholder
     }

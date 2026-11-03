@@ -1,6 +1,6 @@
 # Maintainer context map
 
-Current experimental source. Owner: SQLoryn maintainer. Reviewed: 2026-10-31.
+Current experimental source. Owner: SQLoryn maintainer. Reviewed: 2026-11-03.
 
 Start with [repository rules](../AGENTS.md) and [current state](STATE.md).
 This repository, not previous chats or the original reference ZIP, is the working
@@ -11,8 +11,8 @@ source of truth. Update relevant documents in the same PR as behaviour.
 | Product, users, boundaries | [Product](PRODUCT.md), [candidate catalogue](FEATURE_CATALOG.csv) |
 | What actually works? | [Feature matrix](FEATURE_MATRIX.md), [evidence/current state](STATE.md) |
 | Code map, data flow | [Architecture](ARCHITECTURE.md) |
-| Why these choices? | [ADR-001](decisions/001-sqlclient-probe.md), [ADR-002](decisions/002-macos-ssh-sql-probe.md), [ADR-003](decisions/003-desktop-avalonia.md) |
-| What must this experiment prove? | [SPEC-001](specs/001-sqlclient-probe.md), [SPEC-002](specs/002-developer-preview-0.md) |
+| Why these choices? | [ADR-001](decisions/001-sqlclient-probe.md), [ADR-002](decisions/002-macos-ssh-sql-probe.md), [ADR-003](decisions/003-desktop-avalonia.md), [ADR-004](decisions/004-macos-database-studio.md) |
+| What must this experiment prove? | [SPEC-001](specs/001-sqlclient-probe.md), [SPEC-002](specs/002-developer-preview-0.md), [SPEC-003](specs/003-macos-database-studio.md) |
 | How to build/test safely | [Testing](TESTING.md), [Walkthrough](WALKTHROUGH.md) |
 | Dependencies and redistribution | [Dependency assessment](DEPENDENCIES.md) |
 | Credentials, network, storage and unresolved risk | [Threat model](THREAT_MODEL.md) |

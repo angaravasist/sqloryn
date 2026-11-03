@@ -13,6 +13,8 @@ sealed class QueryTab : IAsyncDisposable
     public string Header => Document.IsDirty ? Document.Title + " *" : Document.Title;
     public string Status { get; set; } = "Disconnected";
     public QueryResult? LastResult { get; set; }
+    /// <summary>Index of the result tab last shown for this query tab; -1 means the Messages tab.</summary>
+    public int LastResultSetIndex { get; set; }
     public string? Selection { get; set; }
     public CancellationTokenSource? RunCts { get; set; }
     public bool IsExecuting => RunGuard.IsEntered(_runFlag);

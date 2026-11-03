@@ -56,3 +56,6 @@ artifacts/
 # Python test caches
 __pycache__/
 *.pyc
+
+# Icon build intermediates (keep .icns/.svg/.png sources)
+assets/icon/SQLoryn.iconset/

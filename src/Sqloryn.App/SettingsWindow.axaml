@@ -1,0 +1,43 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.SettingsWindow"
+        Title="Settings — SQLoryn"
+        Width="460" Height="440"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <StackPanel Margin="20" Spacing="10">
+    <TextBlock Text="Settings" FontSize="18" FontWeight="SemiBold" />
+    <TextBlock Name="PathText" Classes="muted" FontSize="11" TextWrapping="Wrap" />
+
+    <TextBlock Classes="caption" Text="EDITOR" Margin="0,6,0,0" />
+    <Grid ColumnDefinitions="160,*">
+      <TextBlock Text="Font size" VerticalAlignment="Center" />
+      <NumericUpDown Name="FontSizeBox" Grid.Column="1" Minimum="8" Maximum="48" Increment="1"
+                     FormatString="0" AutomationProperties.Name="Editor font size" />
+    </Grid>
+    <CheckBox Name="LineNumbersBox" Content="Show line numbers (stored; gutter not rendered yet)" />
+
+    <TextBlock Classes="caption" Text="RESULTS" Margin="0,6,0,0" />
+    <Grid ColumnDefinitions="160,*">
+      <TextBlock Text="Max rows displayed" VerticalAlignment="Center" />
+      <NumericUpDown Name="MaxRowsBox" Grid.Column="1" Minimum="1" Maximum="1000000" Increment="500"
+                     FormatString="0" AutomationProperties.Name="Maximum displayed rows" />
+    </Grid>
+    <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+               Text="The engine also retains at most 5,000 rows per result set; display never exceeds that." />
+
+    <TextBlock Classes="caption" Text="SAFETY" Margin="0,6,0,0" />
+    <CheckBox Name="ConfirmBox" IsChecked="True" IsEnabled="False"
+              Content="Confirm destructive operations (always on in this preview)" />
+
+    <TextBlock Classes="caption" Text="APPEARANCE" Margin="0,6,0,0" />
+    <ComboBox Name="ThemeBox" HorizontalAlignment="Stretch" AutomationProperties.Name="Theme" />
+
+    <TextBlock Name="ErrorText" Classes="error" TextWrapping="Wrap" IsVisible="False" />
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,8,0,0">
+      <Button Content="Cancel" Click="OnCancel" />
+      <Button Content="Save" Classes="primary" Click="OnSave" IsDefault="True" />
+    </StackPanel>
+  </StackPanel>
+</Window>
