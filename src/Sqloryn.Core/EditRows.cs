@@ -27,6 +27,8 @@ public sealed class RowKey
                 throw new ArgumentException($"Duplicate key column: {columns[i]}");
             if (values[i] is null or DBNull)
                 throw new ArgumentException($"Key column {columns[i]} cannot be null.");
+            if (RawCellOmitted.IsOmitted(values[i]))
+                throw new ArgumentException($"Key column {columns[i]} was not fully loaded and cannot identify a row.");
         }
         Columns = columns;
         Values = values;
@@ -51,14 +53,48 @@ public sealed class EditRowsConflictException : Exception
 public sealed record EditParameter(string Name, object? Value);
 
 /// <summary>
-/// Parameterised statement. The final result set is a single int: the number of rows affected.
-/// Pass it to <see cref="EditRowsSql.EnsureSingleRowAffected"/>; zero rows means an optimistic-concurrency conflict.
+/// Parameterised statement. It emits a result set whose single int column is named <see cref="EditRowsSql.RowCountColumn"/>,
+/// holding <c>@@ROWCOUNT</c> read immediately after the write. Other result sets (trigger output) are ignored; see
+/// <see cref="EditRowsSql.ReadAffectedCountAsync"/>. Zero rows means an optimistic-concurrency conflict.
 /// </summary>
 public sealed record EditCommand(string CommandText, IReadOnlyList<EditParameter> Parameters);
 
 public static class EditRowsSql
 {
     public const int MaxTopRows = 1_000_000;
+
+    /// <summary>Column name that marks the row-count result set so trigger result sets cannot be mistaken for it.</summary>
+    public const string RowCountColumn = "__sqloryn_rowcount";
+
+    /// <summary>
+    /// Reads every result set and returns the single marked row count. Result sets that triggers emit are skipped
+    /// (not read row by row) but the reader is always advanced to the end so errors raised later still surface.
+    /// Throws <see cref="InvalidOperationException"/> when the marked set is missing, repeated, or malformed.
+    /// </summary>
+    public static async Task<int> ReadAffectedCountAsync(
+        System.Data.Common.DbDataReader reader, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        int? count = null;
+        var seen = 0;
+        do
+        {
+            if (reader.FieldCount != 1 || !string.Equals(reader.GetName(0), RowCountColumn, StringComparison.Ordinal))
+                continue;
+            seen++;
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) || reader.IsDBNull(0))
+                throw new InvalidOperationException("The server did not report an affected row count.");
+            count = Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
+        }
+        while (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false));
+
+        if (seen != 1 || count is null)
+            throw new InvalidOperationException(
+                seen == 0
+                    ? "The server did not report an affected row count."
+                    : "The server reported more than one affected row count; refusing to trust it.");
+        return count.Value;
+    }
 
     public static string BuildSelectTop(TableRef table, int topN)
     {
@@ -96,6 +132,8 @@ public static class EditRowsSql
         {
             if (key.Columns.Contains(column, StringComparer.OrdinalIgnoreCase))
                 throw new ArgumentException($"Key column {column} cannot be updated.");
+            if (RawCellOmitted.IsOmitted(value))
+                throw new ArgumentException($"Column {column} holds a value that was not fully loaded and cannot be written back.");
             var name = "@n" + index.ToString(CultureInfo.InvariantCulture);
             if (index > 0)
                 sb.Append(", ");
@@ -105,7 +143,7 @@ public static class EditRowsSql
         }
 
         AppendWhere(sb, parameters, key, originalValues, excludeFromConcurrency);
-        sb.Append(";\nSELECT @@ROWCOUNT;\n");
+        sb.Append(";\nSELECT @@ROWCOUNT AS [").Append(RowCountColumn).Append("];\n");
         return new EditCommand(sb.ToString(), parameters);
     }
 
@@ -122,7 +160,7 @@ public static class EditRowsSql
         sb.Append("SET NOCOUNT ON;").Append('\n');
         sb.Append("DELETE FROM ").Append(table.Qualified);
         AppendWhere(sb, parameters, key, originalValues, excludeFromConcurrency);
-        sb.Append(";\nSELECT @@ROWCOUNT;\n");
+        sb.Append(";\nSELECT @@ROWCOUNT AS [").Append(RowCountColumn).Append("];\n");
         return new EditCommand(sb.ToString(), parameters);
     }
 
@@ -161,6 +199,9 @@ public static class EditRowsSql
                 continue;
             if (excludeFromConcurrency is not null && excludeFromConcurrency.Contains(column))
                 continue;
+            if (RawCellOmitted.IsOmitted(value))
+                throw new ArgumentException(
+                    $"Column {column} was not fully loaded, so it cannot be used for the concurrency check. Exclude the column or refuse the edit.");
             sb.Append(" AND ").Append(SqlIdentity.QuoteIdentifier(column));
             if (value is null or DBNull)
             {
