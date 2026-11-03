@@ -26,7 +26,10 @@ Branch `codex/developer-preview-0` — Developer Preview 0
 | Open version race + failed read with intervening edit | Automated Core PASS |
 | Ordinary dirty Open/Quit in arm64 `.app` | Manual (prior tip) — not re-run this correction |
 | Hosted ubuntu + macos-15 + macos-15-intel | [41416613488](https://github.com/angaravasist/sqloryn/actions/runs/41416613488) |
-| Live SQL / provider SqlDataReader decimal(38) | **Unverified** — no host |
+| Optional `--ssh-identity-file` for PROBE-11 (command/SCP/tunnel/cleanup) | `695061aa8eca91ce9e99eb69d990c2b03af92eb8` (runner unit tests PASS) |
+| Mac arm64 PROBE-11 disposable SQL (E2) | **Blocked** — approved SSH path reached; remote Linux Docker socket unavailable (`unix:///var/run/docker.sock` missing; Desktop integration not active). No SQL suite result. |
+| Run-id cleanup after blocked attempt | **Unverified** — labelled Docker resources could not be inspected without a working sock; absent `/tmp/sqloryn-probe-*` alone is not cleanup proof after WSL `/tmp` reset. |
+| Live SQL / provider SqlDataReader decimal(38) | **Unverified** — awaiting remote Docker engine on approved host |
 
 ## Reviewer launch
 

@@ -24,7 +24,9 @@ Mark a feature as working only after a reproducible test is performed on the rel
 ## Active work
 
 - [SPEC-001](specs/001-sqlclient-probe.md) probe: Linux E2 historically verified;
-  Mac-to-server probe path still needs an approved host ([ADR-002](decisions/002-macos-ssh-sql-probe.md)).
+  Mac-to-server PROBE-11 has an approved SSH path and identity-file support, but
+  E2 remains **unverified** until the remote host exposes a working local
+  `unix:///var/run/docker.sock` ([ADR-002](decisions/002-macos-ssh-sql-probe.md)).
 - [SPEC-002](specs/002-developer-preview-0.md) Avalonia app ([ADR-003](decisions/003-desktop-avalonia.md)):
   locally launchable; live desktop SQL walkthrough **unverified**.
 - Authoritative exclusions and commands: [STATE.md](STATE.md).
