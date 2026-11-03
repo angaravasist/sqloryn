@@ -10,7 +10,7 @@ public partial class ConnectWindow : Window
     ConnectionProfile? _selectedProfile;
     bool _loadingProfile;
     bool _settingPassword;
-    readonly ProfileAutofillSession _autofill = new();
+    readonly ConnectAutofillController _autofill = new();
 
     public ConnectionOptions? Result { get; private set; }
 
@@ -66,6 +66,7 @@ public partial class ConnectWindow : Window
         if (ProfileBox.SelectedItem is not ConnectionProfile profile)
             return;
         _selectedProfile = profile;
+        long generation;
         _loadingProfile = true;
         try
         {
@@ -78,7 +79,9 @@ public partial class ConnectWindow : Window
             SaveProfileBox.IsChecked = true;
             ProfileNameBox.Text = profile.Name;
             RememberBox.IsChecked = profile.RememberPassword;
-            SetPasswordProgrammatically("");
+            // SelectProfile -> BeginLookup(generation); the box starts empty.
+            generation = _autofill.SelectProfile(profile);
+            SetPasswordProgrammatically(_autofill.PasswordText);
             ErrorText.IsVisible = false;
         }
         finally
@@ -86,13 +89,26 @@ public partial class ConnectWindow : Window
             _loadingProfile = false;
         }
 
-        // The session binds any looked-up secret to this profile's endpoint identity and discards the
-        // result if the user edits the endpoint, types a password or picks another profile first.
-        var outcome = await _autofill.BeginProfileAsync(profile, AppServices.Secrets);
+        if (!_autofill.LookupPending)
+            return;
+
+        // The controller binds any looked-up secret to this profile's endpoint identity and to the captured
+        // generation. A typed password, endpoint edit or another profile selection invalidates it, in which case the
+        // result is discarded and the password box is not touched.
+        AutofillOutcome outcome;
+        try
+        {
+            var secret = await AppServices.Secrets.GetAsync(ProfileSecretKeys.ForProfile(profile.Id));
+            outcome = _autofill.LookupCompleted(generation, secret);
+        }
+        catch (Exception ex)
+        {
+            outcome = _autofill.LookupFailed(generation, ex);
+        }
         switch (outcome.Status)
         {
             case AutofillStatus.Applied:
-                SetPasswordProgrammatically(outcome.Secret ?? "");
+                SetPasswordProgrammatically(_autofill.PasswordText);
                 break;
             case AutofillStatus.NotFound:
             case AutofillStatus.Failed:
@@ -129,9 +145,9 @@ public partial class ConnectWindow : Window
     {
         if (_loadingProfile)
             return;
-        if (_autofill.NotifyEndpointEdited(CurrentEndpoint()))
+        if (_autofill.UserChangedEndpoint(CurrentEndpoint()))
         {
-            SetPasswordProgrammatically("");
+            SetPasswordProgrammatically(_autofill.PasswordText);
             ShowError(ProfileAutofillSession.ChangedEndpointMessage);
         }
     }
@@ -140,7 +156,7 @@ public partial class ConnectWindow : Window
     {
         if (_loadingProfile || _settingPassword)
             return;
-        _autofill.NotifyPasswordEdited();
+        _autofill.UserTypedPassword(PasswordBox.Text);
     }
 
     void OnConnect(object? sender, RoutedEventArgs e)
@@ -151,10 +167,13 @@ public partial class ConnectWindow : Window
                 return;
             if (!int.TryParse(PortBox.Text, out var port))
                 throw new ArgumentException("Port must be an integer.");
-            var credential = _autofill.ResolvePassword(CurrentEndpoint(), PasswordBox.Text);
+            // Defence in depth: any box text the controller did not set itself is user input, never autofill.
+            if (!string.Equals(PasswordBox.Text ?? "", _autofill.PasswordText, StringComparison.Ordinal))
+                _autofill.UserTypedPassword(PasswordBox.Text);
+            var credential = _autofill.ResolveForConnect(CurrentEndpoint());
             if (!credential.Allowed)
             {
-                SetPasswordProgrammatically("");
+                SetPasswordProgrammatically(_autofill.PasswordText);
                 throw new ArgumentException(credential.Reason ?? ProfileAutofillSession.ChangedEndpointMessage);
             }
             var options = new ConnectionOptions

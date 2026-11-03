@@ -1482,6 +1482,122 @@ Pass("explorer-ownership");
         Pass("autofill-generation");
     }
 
+    // D8: TryApplySecret only applies for the current generation while still Waiting.
+    {
+        var session = new ProfileAutofillSession();
+        var gen = session.BeginLookup(Profile(pid));
+        Check(session.IsWaiting, "tryapply-waiting-after-begin");
+        Check(!session.TryApplySecret(gen - 1, "secretA"), "tryapply-wrong-generation");
+        Check(session.TryApplySecret(gen, "secretA"), "tryapply-ok");
+        Check(!session.TryApplySecret(gen, "other"), "tryapply-second-apply-ignored");
+        Check(session.ResolvePassword(Id(), "secretA").UsesRememberedSecret, "tryapply-first-secret-kept");
+
+        var typedSession = new ProfileAutofillSession();
+        var typedGen = typedSession.BeginLookup(Profile(pid));
+        typedSession.NotifyPasswordEdited();
+        Check(!typedSession.IsWaiting && !typedSession.TryApplySecret(typedGen, "secretA"), "tryapply-after-typed-ignored");
+        Check(!typedSession.TryApplySecret(typedSession.Generation, "secretA"), "tryapply-after-typed-current-generation-ignored");
+        Check(!typedSession.ResolvePassword(Id(), "secretA").UsesRememberedSecret, "tryapply-after-typed-not-remembered");
+
+        var noRemember = new ProfileAutofillSession();
+        var g = noRemember.BeginLookup(Profile(pid, remember: false));
+        Check(!noRemember.TryApplySecret(g, "secretA"), "tryapply-not-requested-ignored");
+        var empty = new ProfileAutofillSession();
+        Check(!empty.TryApplySecret(empty.BeginLookup(Profile(pid)), ""), "tryapply-empty-ignored");
+        Pass("autofill-tryapply-secret");
+    }
+
+    // D8: UI event sequence through the controller.
+    {
+        var pidB = Guid.NewGuid();
+
+        // typed password, then late Keychain
+        {
+            var c = new ConnectAutofillController();
+            var gen = c.SelectProfile(Profile(pid));
+            Check(c.LookupPending && c.PasswordText == "", "ctl-typed-select-pending");
+            c.UserTypedPassword("typedPw");
+            var outcome = c.LookupCompleted(gen, "secretA");
+            Check(outcome.Status == AutofillStatus.Stale && outcome.Secret is null, "ctl-typed-late-stale");
+            Check(c.PasswordText == "typedPw" && !c.PasswordIsAutofilled, "ctl-typed-box-untouched");
+            var d = c.ResolveForConnect(Id());
+            Check(d.Allowed && d.Password == "typedPw" && !d.UsesRememberedSecret, "ctl-typed-connect-explicit");
+            Pass("ctl-typed-then-late-keychain");
+        }
+
+        // change host, then late Keychain
+        {
+            var c = new ConnectAutofillController();
+            var gen = c.SelectProfile(Profile(pid));
+            Check(!c.UserChangedEndpoint(Id("hostB")), "ctl-host-pending-nothing-to-clear");
+            Check(!c.LookupPending, "ctl-host-invalidated-pending");
+            var outcome = c.LookupCompleted(gen, "secretA");
+            Check(outcome.Status == AutofillStatus.Stale && c.PasswordText == "" && !c.PasswordIsAutofilled, "ctl-host-late-stale");
+            var d = c.ResolveForConnect(Id("hostB"));
+            Check(d.Allowed && d.Password == "" && !d.UsesRememberedSecret, "ctl-host-connect-no-secret");
+            Pass("ctl-change-host-then-late-keychain");
+        }
+
+        // late Keychain applies, then change host before Connect
+        {
+            var c = new ConnectAutofillController();
+            var gen = c.SelectProfile(Profile(pid));
+            var outcome = c.LookupCompleted(gen, "secretA");
+            Check(outcome.Status == AutofillStatus.Applied && c.PasswordText == "secretA" && c.PasswordIsAutofilled, "ctl-apply-fills-box");
+            Check(c.ResolveForConnect(Id()).UsesRememberedSecret, "ctl-apply-connect-ok-same-endpoint");
+            Check(c.UserChangedEndpoint(Id("hostB")), "ctl-apply-host-change-clears");
+            Check(c.PasswordText == "" && !c.PasswordIsAutofilled, "ctl-apply-host-box-empty");
+            var d = c.ResolveForConnect(Id("hostB"));
+            Check(d.Allowed && d.Password == "" && !d.UsesRememberedSecret, "ctl-apply-host-connect-empty");
+
+            // defence in depth: box not cleared by the UI, Connect still refuses
+            var c2 = new ConnectAutofillController();
+            c2.LookupCompleted(c2.SelectProfile(Profile(pid)), "secretA");
+            var refused = c2.ResolveForConnect(Id("hostB"));
+            Check(!refused.Allowed && !refused.UsesRememberedSecret && refused.Password == "", "ctl-apply-mismatch-refused");
+            Check(c2.PasswordText == "", "ctl-apply-mismatch-box-cleared");
+            Pass("ctl-keychain-then-change-host");
+        }
+
+        // Connect never sees A's Keychain secret for B (profile switch and late result)
+        {
+            var c = new ConnectAutofillController();
+            var genA = c.SelectProfile(Profile(pid, "hostA"));
+            var genB = c.SelectProfile(Profile(pidB, "hostB", user: "bob"));
+            Check(genB > genA, "ctl-switch-generation-advances");
+            Check(c.LookupCompleted(genA, "secretA").Status == AutofillStatus.Stale, "ctl-switch-a-stale");
+            Check(c.PasswordText == "", "ctl-switch-box-empty-after-a");
+            var idB = Id("hostB", user: "bob");
+            var beforeB = c.ResolveForConnect(idB);
+            Check(beforeB.Allowed && beforeB.Password == "" && !beforeB.UsesRememberedSecret, "ctl-switch-connect-before-b");
+            Check(c.LookupCompleted(genB, "secretB").Status == AutofillStatus.Applied, "ctl-switch-b-applied");
+            var forB = c.ResolveForConnect(idB);
+            Check(forB.Allowed && forB.Password == "secretB" && forB.UsesRememberedSecret, "ctl-switch-connect-b-own-secret");
+            Check(!c.ResolveForConnect(Id("hostA")).Allowed, "ctl-switch-b-secret-refused-at-a");
+            Pass("ctl-connect-never-sees-other-secret");
+        }
+
+        // end-to-end with a delayed store: Window-style sequence
+        {
+            var store = new DelayedSecretStore();
+            var c = new ConnectAutofillController();
+            var gen = c.SelectProfile(Profile(pid));
+            var read = store.GetAsync(pidKey);
+            c.UserChangedEndpoint(Id("hostB"));
+            store.Release(pidKey, "secretA");
+            var outcome = c.LookupCompleted(gen, await read);
+            Check(outcome.Status == AutofillStatus.Stale && c.PasswordText == "", "ctl-delayed-store-discarded");
+            var late = c.ResolveForConnect(Id("hostB"));
+            Check(late.Password == "" && !late.UsesRememberedSecret, "ctl-delayed-store-connect-empty");
+
+            // failure for a superseded generation is silent
+            var g2 = c.SelectProfile(Profile(pid));
+            c.UserTypedPassword("x");
+            Check(c.LookupFailed(g2, new InvalidOperationException("denied")).Status == AutofillStatus.Stale, "ctl-failed-stale-silent");
+            Pass("ctl-delayed-store-sequence");
+        }
+    }
+
     // Identity normalisation: trimmed, blank pin == no pin, host case-insensitive, user case-sensitive.
     {
         Check(Id(" HostA ", pin: "  ").Matches(Id("hosta")), "identity-normalises");

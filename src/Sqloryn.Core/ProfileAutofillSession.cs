@@ -68,23 +68,83 @@ public sealed class ProfileAutofillSession
     public const string ChangedEndpointMessage =
         "Server, port, login or certificate settings changed. Re-enter the password for this endpoint.";
 
+    enum LookupState
+    {
+        Idle,
+        Waiting,
+        Applied
+    }
+
     long _generation;
     EndpointIdentity _bound;
     bool _hasBound;
+    LookupState _state;
     string? _secret;
     // Secret text that was revoked; if it is still in the password box and the user did not type it, it must not be used.
     string? _withheld;
 
     public long Generation => Volatile.Read(ref _generation);
 
-    /// <summary>Starts a profile selection: cancels any pending lookup, drops any applied secret and, when the profile remembers a password, looks it up.</summary>
+    /// <summary>True while a lookup was started for the current generation and has not been applied, discarded or cancelled.</summary>
+    public bool IsWaiting => _state == LookupState.Waiting;
+
+    /// <summary>
+    /// Starts a profile selection: cancels any pending lookup, drops any applied secret and binds the profile endpoint.
+    /// Returns the generation the lookup result must present to <see cref="TryApplySecret"/>. The session is Waiting only
+    /// when the profile remembers a password.
+    /// </summary>
+    public long BeginLookup(ConnectionProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        var generation = Revoke();
+        _bound = EndpointIdentity.From(profile);
+        _hasBound = true;
+        _state = profile.RememberPassword ? LookupState.Waiting : LookupState.Idle;
+        return generation;
+    }
+
+    /// <summary>
+    /// Applies a looked-up secret only when <paramref name="generation"/> is still current and the lookup is still Waiting.
+    /// After a typed password, endpoint edit, profile switch, forget or an earlier apply this returns false and the secret
+    /// is not retained, so the caller must not touch the password box.
+    /// </summary>
+    public bool TryApplySecret(long generation, string? secret)
+    {
+        if (generation != Generation || _state != LookupState.Waiting || string.IsNullOrEmpty(secret))
+            return false;
+        _secret = secret;
+        _state = LookupState.Applied;
+        return true;
+    }
+
+    /// <summary>Classifies a completed lookup: applies it when current, otherwise reports Stale/NotFound without retaining anything.</summary>
+    public AutofillOutcome CompleteLookup(long generation, string? secret)
+    {
+        if (generation != Generation || _state != LookupState.Waiting)
+            return new AutofillOutcome(AutofillStatus.Stale);
+        if (TryApplySecret(generation, secret))
+            return new AutofillOutcome(AutofillStatus.Applied, _secret);
+        _state = LookupState.Idle;
+        return new AutofillOutcome(AutofillStatus.NotFound,
+            Error: "No password found in the Keychain for this profile. Enter it to continue.");
+    }
+
+    /// <summary>Classifies a failed lookup; a failure for a superseded generation is Stale and shows nothing.</summary>
+    public AutofillOutcome FailLookup(long generation, Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        if (generation != Generation || _state != LookupState.Waiting)
+            return new AutofillOutcome(AutofillStatus.Stale);
+        _state = LookupState.Idle;
+        return new AutofillOutcome(AutofillStatus.Failed, Error: "Could not read the Keychain: " + error.Message);
+    }
+
+    /// <summary>Starts a profile selection and, when the profile remembers a password, looks it up and applies it if still current.</summary>
     public async Task<AutofillOutcome> BeginProfileAsync(ConnectionProfile profile, ISecretStore store)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(store);
-        var generation = Revoke();
-        _bound = EndpointIdentity.From(profile);
-        _hasBound = true;
+        var generation = BeginLookup(profile);
         if (!profile.RememberPassword)
             return new AutofillOutcome(AutofillStatus.NotRequested);
 
@@ -95,18 +155,9 @@ public sealed class ProfileAutofillSession
         }
         catch (Exception ex)
         {
-            return generation != Generation
-                ? new AutofillOutcome(AutofillStatus.Stale)
-                : new AutofillOutcome(AutofillStatus.Failed, Error: "Could not read the Keychain: " + ex.Message);
+            return FailLookup(generation, ex);
         }
-
-        if (generation != Generation)
-            return new AutofillOutcome(AutofillStatus.Stale);
-        if (string.IsNullOrEmpty(secret))
-            return new AutofillOutcome(AutofillStatus.NotFound,
-                Error: "No password found in the Keychain for this profile. Enter it to continue.");
-        _secret = secret;
-        return new AutofillOutcome(AutofillStatus.Applied, secret);
+        return CompleteLookup(generation, secret);
     }
 
     /// <summary>
@@ -128,6 +179,7 @@ public sealed class ProfileAutofillSession
         Interlocked.Increment(ref _generation);
         _secret = null;
         _withheld = null;
+        _state = LookupState.Idle;
     }
 
     /// <summary>Drops any applied secret and cancels pending lookups (profile deleted, save unchecked, dialog closing).</summary>
@@ -155,6 +207,7 @@ public sealed class ProfileAutofillSession
         if (_secret is not null)
             _withheld = _secret;
         _secret = null;
+        _state = LookupState.Idle;
         return Interlocked.Increment(ref _generation);
     }
 }
