@@ -1,7 +1,8 @@
 # SPEC-002 — Developer Preview 0 connected workspace
 
-Status: implemented for local builds and component tests; live SQL walkthrough
-**unverified** (no approved host). Owner: SQLoryn maintainer. Reviewed: 2026-11-01.
+Status: implemented for local builds and component tests; arm64 live connect +
+`SELECT 1` observed once (see STATE.md); remaining live walkthrough cells and
+Intel Mac SQL **unverified**. Owner: SQLoryn maintainer. Reviewed: 2026-11-03.
 Desktop choice: [ADR-003](../decisions/003-desktop-avalonia.md).
 
 ## Outcome
@@ -15,7 +16,7 @@ results/messages → cancel → disconnect. Single-batch execution only (no GO).
 
 | Area | Demonstrated (component / host-independent UI) | Live (needs approved host) |
 |---|---|---|
-| Connection options / TLS requirements | E1 validation tests | Wrong cert/password + successful connect |
+| Connection options / TLS requirements | E1 validation tests | arm64 successful connect + pinned cert (partial); wrong cert/password still open |
 | Async ownership; stale OE rejection; Qualify3 | E1 | Two DBs / identical names under load |
 | SqlDecimal via typed reader path (38-digit probe literal); no `System.Decimal` | E1 `ISqlTypedCellSource` | Provider `SqlDataReader.GetSqlDecimal` on SQL Server |
 | Output retention vs completion; drain after limit; unobserved completion | E1 `BatchObserver` | Wide live result sets |

@@ -1,6 +1,6 @@
 # Current engineering state
 
-Owner: SQLoryn maintainer. Reviewed: 2026-11-01. Experimental; no release support.
+Owner: SQLoryn maintainer. Reviewed: 2026-11-03. Experimental; no release support.
 
 ## Work under review
 
@@ -24,12 +24,13 @@ Branch `codex/developer-preview-0` — Developer Preview 0
 | Drain without discarded GetValue; later SQL error under drain deadline | Automated Core PASS |
 | Target verification never upgrades SQL Completion/StopCause | Automated Core PASS |
 | Open version race + failed read with intervening edit | Automated Core PASS |
-| Ordinary dirty Open/Quit in arm64 `.app` | Manual (prior tip) — not re-run this correction |
+| Ordinary dirty Open/Quit / remaining host-independent walkthrough steps | **Unverified** on this tip (prior dirty Open/Quit only) |
 | Hosted ubuntu + macos-15 + macos-15-intel | [41416613488](https://github.com/angaravasist/sqloryn/actions/runs/41416613488) |
 | Optional `--ssh-identity-file` for PROBE-11 (command/SCP/tunnel/cleanup) | `695061aa8eca91ce9e99eb69d990c2b03af92eb8` (runner unit tests PASS) |
-| Mac arm64 PROBE-11 disposable SQL (E2) | **Blocked** — approved SSH path reached; remote Linux Docker socket unavailable (`unix:///var/run/docker.sock` missing; Desktop integration not active). No SQL suite result. |
-| Run-id cleanup after blocked attempt | **Unverified** — labelled Docker resources could not be inspected without a working sock; absent `/tmp/sqloryn-probe-*` alone is not cleanup proof after WSL `/tmp` reset. |
-| Live SQL / provider SqlDataReader decimal(38) | **Unverified** — awaiting remote Docker engine on approved host |
+| Mac **arm64** desktop: connect (SQL auth + pinned cert) → OE system DBs → `SELECT 1 AS test_result` → `1` | **Observed** (Apple Silicon `.app`, disposable loopback tunnel to approved host) |
+| Lab cleanup for that desktop run (owned tunnel stop; remote workdir gone; Docker label absent; local secrets wiped; run-id preserved) | **Verified** (`cleanup_lab.sh` PASS; run-id `sqloryn-probe-9ccabb4ecf0a23ab`) |
+| Full PROBE-11 automated suite / SqlDataReader decimal(38) / cancel-disconnect live matrix | **Unverified** |
+| Intel Mac desktop SQL / Intel walkthrough | **Unverified** |
 
 ## Reviewer launch
 

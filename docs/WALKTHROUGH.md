@@ -47,9 +47,19 @@ Perform these in the launched app (distinct from Core tests above):
 5. **Run guard** — without a server, Run asks to connect.
 
 Record whether each manual step was performed on the local arm64 build in
-STATE.md. Intel UI smoke remains CI app-publish only unless an Intel Mac is used.
+STATE.md. Steps 1–5 above remain **unverified** on the current tip except where
+STATE notes otherwise. Intel UI smoke remains CI app-publish only unless an
+Intel Mac is used.
 
-## Live SQL (pending approved host)
+## Live SQL
 
-Wrong cert/password; connect; USE/target unknown; provider SqlDataReader
-decimal(38); cancel/disconnect. Keep arm64 and Intel evidence separate.
+**arm64 (observed, partial):** Apple Silicon `.app` connected with SQL auth and a
+pinned disposable server certificate over a process-owned loopback SSH tunnel to
+an approved host; Object Explorer listed system databases; `SELECT 1 AS test_result`
+returned `1`. Lab cleanup verified (tunnel stopped; remote workdir and Docker
+label absent; local credentials removed). Host addresses and key paths are not
+recorded here — see STATE.md for run-id only.
+
+**Still unverified:** wrong cert/password; USE/target unknown; provider
+`SqlDataReader` decimal(38); cancel/disconnect under load; remaining walkthrough
+UI checks; **Intel Mac** desktop SQL. Keep arm64 and Intel evidence separate.
