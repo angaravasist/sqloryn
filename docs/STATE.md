@@ -1,34 +1,54 @@
 # Current engineering state
 
-Owner: SQLoryn maintainer. Reviewed: 2026-11-03. Experimental; no release support.
+Owner: SQLoryn maintainer. Reviewed: 2026-11-04. Experimental; no release support.
 
 ## Work under review
 
 Branch `codex/macos-database-studio` — macOS Database Studio integrated preview
-([SPEC-003](specs/003-macos-database-studio.md), [ADR-004](decisions/004-macos-database-studio.md)).
-Builds on merged Developer Preview 0 (PR #6 / `f561597`).
+([SPEC-003](specs/003-macos-database-studio.md), [ADR-004](decisions/004-macos-database-studio.md),
+[PR7 acceptance](ssms/PR7-ACCEPTANCE.md)). Builds on merged Developer Preview 0 (PR #6 / `f561597`).
+Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
 
-## Evidence
+## PR #7 finding dispositions
 
-| Claim | Status |
+| # | Disposition | Evidence |
+|---|---|---|
+| 1 | **Fixed (component)** — design warnings separated from `ExecutableSql` | Core `table-design-preview` / hostile-identifier tests PASS |
+| 2 | **Fixed (component)** — Keychain autofill bound to endpoint identity + generation | Core `autofill-*` / `endpoint-identity` PASS; ConnectWindow wired |
+| 3 | **Fixed (component)** — transactional edit batch; conflict rolls back set | Core `edit-rows-batch` / `edit-rows-policy` PASS (fakes); live SqlTransaction **unverified** |
+| 4 | **Fixed (component)** — single-destination export; ordinal JSON; spreadsheet-safe CSV | Core `result-export-writer` / `json-duplicate-columns-preserved` PASS |
+| 5 | **Fixed (component)** — staged atomic script save (`SafeFileWriter`) | Core `safe-file-writer` PASS |
+| 6 | **Fixed (component)** — bounded `QueryRaw` / omit oversized cells; no writeback | Core `query-raw-budget` PASS; live MAX/xml **unverified** |
+| 7 | **Fixed (component)** — GO/SQLCMD preflight with source spans before any execute | Core `go-parse-source-spans` / `sqlcmd-preflight-rejection` / `sqlsession-preflight-before-execute` PASS |
+| 8–12 | **Implemented (build)** — native menu/⌘, welcome, system theme, compact layout, honest settings | Core `app-settings` PASS; UI **not** click/VoiceOver verified |
+| 13 | **Fixed (component+wiring)** — Script SELECT opens new tab bound to object DB | Core `script-from-object-plan` PASS; UI **not** click-tested |
+| 14 (partial) | **Partial** — truncation honesty in OE; keys/indexes/functions still incomplete | Core `oe-truncation-honesty` PASS |
+| 15 | **Open** — new-table-with-PK journey + estimated plan / SHOWPLAN denial | Not implemented this tip |
+| 16 | **Partial** — icon required; plist lint; optional `SQLORYN_SELF_CONTAINED=1`; unsigned only | Framework-dependent arm64 package rebuilt; clean-Mac install **unverified**; runtime licence audit for SC **pending** |
+| 17 | **Open** — VoiceOver walk + performance measurements | No numbers invented; smoke launch only |
+| 18 | **Partial** — STATE/matrix/ssms inventory updated; CAP catalogue still mostly candidates | Hosted component CI previously green on `96f742e`; recheck after this tip |
+
+## Integrated local checks (this tip)
+
+| Check | Result |
 |---|---|
-| Core modules: GO splitter, profiles, Keychain store, settings, export, metadata SQL, table design preview, edit-rows SQL, diagnostics redaction, find/replace | Automated Core suite PASS (this branch) |
-| Export/save safety (PR #7 findings 4–5): single-destination export, loss-aware JSON, spreadsheet-safe CSV option, staged atomic script save; policy in `SafeFileWriter` (symlink write-through, mode preserved, last-writer-wins, no external-edit detection) | Automated Core PASS; native save-sheet/UI path not click-tested |
-| `SqlSession` sequential GO batches + aggregate results | Automated Core PASS |
-| App builds (Release) with studio shell, DataGrid results, connect profiles UI | Local Release build 0 warnings / 0 errors |
-| Original icon packaged into `.app` Info.plist | Local `build_macos_app.sh` (arm64 host) |
-| Offline UI launch smoke (no crash on open) | Observed briefly; not a full click-through matrix |
-| PR #7 findings 3 & 6 (edit-rows atomic apply; QueryRaw byte budget) | Core component tests PASS with fakes (`edit-rows-batch`, `edit-rows-policy`, `query-raw-budget`); real SqlTransaction path, trigger behaviour, `GetChars` on xml/MAX columns and numeric(38) **unverified against SQL Server** |
-| PR #7 finding 13 (script object into new tab) and OE truncation honesty (part of 14) | Core component tests PASS (`script-from-object-plan`, `oe-truncation-honesty`). App wiring (new tab, sibling session bound to originating database, truncated-listing node/status, strict column/PK reads) builds but is **not click-tested and unverified against SQL Server** |
-| PR #7 findings 8–12 (shell: native macOS menu + ⌘ shortcuts, welcome panel, system appearance, compact layout, honest settings) | Settings clamp/layout persistence: Core tests PASS (`app-settings`). Menu, welcome, theming, sidebar and results panes: **Release build only**; not click-tested, no VoiceOver or Finder-launch pass, no light/dark mid-session switch observed, macOS menu title/⌘ equivalents not yet inspected on a real session. Line-number preference removed (no gutter exists); row preference capped at 5,000 = `QueryLimits.MaxRowsPerSet` |
-| Live SQL: connect / OE expand / GO / export / design / edit-rows | **Unverified on this branch** (no disposable lab in this session; Windows SSH product path not recreated) |
-| Prior DP0 arm64 connect + `SELECT 1` via disposable lab | Historical on PR #6; lab torn down; do not treat as current tip evidence |
-| Intel Mac desktop SQL | **Unverified** |
-| Hosted CI on this branch | Component CI passed on macOS arm64, macOS Intel and Ubuntu. Repository safeguards and CodeQL passed. SQL integration was skipped. [CI](https://github.com/angaravasist/sqloryn/actions/runs/41718868380) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41718863474) |
+| `dotnet build SQLoryn.slnx -c Release` | 0 warnings / 0 errors |
+| Core component executable | **71 PASS**, 0 FAIL |
+| SqlClientProbe.Tests | **35 PASS** |
+| Python `test_*.py` | **43 OK** |
+| `repo_preflight.py` | PASS |
+| `git diff --check` | clean |
+| `bash scripts/build_macos_app.sh` | arm64 `.app` with icon |
+| Launch smoke | process started then stopped |
+| Live disposable SQL / eight journeys | **Not run** (no authorised fixture this session) |
+| Windows SSH product path | **Closed** (not recreated) |
 
-## Comparator research
+## Explicit non-claims
 
-The [SSMS 22.11.3 inventory](ssms/README.md) adds reference-side research and concurrent feature ownership. The Windows binary and optional service combinations have not been independently swept. This documentation update ran no new SQL qualification and changes no supported-platform claim.
+- Not SSMS-compatible; not production-ready; not signed/notarised.
+- No Windows SSH connection feature in the product UI.
+- No Entra / Agent / AG / BI surfaces; CAP-176 AI remains deferred.
+- AI query assistant remains deferred pending maintainer approval.
 
 ## Reviewer launch
 
@@ -38,12 +58,10 @@ export DOTNET_CLI_TELEMETRY_OPTOUT=1
 dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
 dotnet build SQLoryn.slnx --no-restore -c Release
 dotnet run --project tests/Sqloryn.Core.Tests -c Release --no-build
+dotnet run --project tests/SqlClientProbe.Tests -c Release --no-build
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+python3 scripts/repo_preflight.py
 bash scripts/build_macos_app.sh
 open artifacts/macos/osx-arm64/SQLoryn.app   # osx-x64 on Intel
+# optional self-contained (licence audit still pending): SQLORYN_SELF_CONTAINED=1 bash scripts/build_macos_app.sh
 ```
-
-## Explicit non-claims
-
-- Not SSMS-compatible; not production-ready; not signed/notarised.
-- No Windows SSH connection feature in the product UI.
-- No Entra / Agent / AG / BI surfaces.

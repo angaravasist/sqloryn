@@ -14,8 +14,13 @@ esac
 OUT="$ROOT/artifacts/macos/$ARCH"
 APP="$OUT/SQLoryn.app"
 ICON_SRC="$ROOT/assets/icon/SQLoryn.icns"
+SELF_CONTAINED="${SQLORYN_SELF_CONTAINED:-0}"
 rm -rf "$OUT"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+if [[ ! -f "$ICON_SRC" ]]; then
+  echo "Missing required icon: $ICON_SRC" >&2
+  exit 1
+fi
 # Prefer repo-local or PATH dotnet that matches global.json
 DOTNET_BIN="${DOTNET_ROOT:+$DOTNET_ROOT/dotnet}"
 if [[ -z "${DOTNET_BIN}" || ! -x "${DOTNET_BIN}" ]]; then
@@ -26,11 +31,15 @@ if [[ -z "${DOTNET_BIN}" || ! -x "${DOTNET_BIN}" ]]; then
   fi
 fi
 "$DOTNET_BIN" restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
-"$DOTNET_BIN" publish src/Sqloryn.App/Sqloryn.csproj -c Release --self-contained false \
-  --no-restore -o "$APP/Contents/MacOS"
-if [[ -f "$ICON_SRC" ]]; then
-  cp "$ICON_SRC" "$APP/Contents/Resources/SQLoryn.icns"
+PUBLISH_ARGS=(publish src/Sqloryn.App/Sqloryn.csproj -c Release --no-restore -o "$APP/Contents/MacOS" -r "$ARCH")
+if [[ "$SELF_CONTAINED" == "1" ]]; then
+  PUBLISH_ARGS+=(--self-contained true)
+else
+  PUBLISH_ARGS+=(--self-contained false)
 fi
+"$DOTNET_BIN" "${PUBLISH_ARGS[@]}"
+cp "$ICON_SRC" "$APP/Contents/Resources/SQLoryn.icns"
+# Minimal Info.plist lint: required keys must be present after write
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -48,5 +57,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSHumanReadableCopyright</key><string>Copyright SQLoryn contributors. Independent open-source project; not affiliated with Microsoft.</string>
 </dict></plist>
 PLIST
-echo "Built $APP ($ARCH, framework-dependent)"
+for key in CFBundleExecutable CFBundleIdentifier CFBundleName CFBundleIconFile; do
+  /usr/libexec/PlistBuddy -c "Print :$key" "$APP/Contents/Info.plist" >/dev/null \
+    || { echo "Info.plist missing $key" >&2; exit 1; }
+done
+MODE="framework-dependent"
+[[ "$SELF_CONTAINED" == "1" ]] && MODE="self-contained"
+echo "Built $APP ($ARCH, $MODE)"
 echo "Launch: open \"$APP\""
+echo "Note: unsigned internal candidate only — not Gatekeeper-notarised public distribution."
