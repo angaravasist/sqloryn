@@ -45,12 +45,12 @@ CAP-043,Object Explorer,Object properties,Inspect definitions/options without un
 CAP-044,Editor & SQL scripting,Multiple query tabs,Preserve independent script and session state,Context tab switched,SPEC-003: multi-tab ScriptDocument with per-tab SQL isolation (script-document; tab-sql-isolation); Core-tested
 CAP-045,Editor & SQL scripting,New/open/save/save as,Edit local scripts predictably,Permission or encoding failure,SPEC-003: Open/Save/Save As UTF-8 .sql with staged replace and external-edit refusal (d2-*; script-save-*); Core-tested; native Save sheet unverified
 CAP-046,Editor & SQL scripting,Unsaved document recovery,Avoid losing drafts through normal interruptions,Sensitive SQL persisted without control,Unassessed candidate; not implemented
-CAP-047,Editor & SQL scripting,T-SQL syntax and semantics,Accurately highlight syntax,Version-specific syntax,Unassessed candidate; not implemented
+CAP-047,Editor & SQL scripting,T-SQL syntax and semantics,Accurately highlight syntax,Version-specific syntax,WS3-T1: lexical keyword/comment/string/identifier colouring via AvaloniaEdit (ADR-005; ws3-tsql-highlighting-definition); not a parser; native rendering unverified
 CAP-048,Editor & SQL scripting,Autocomplete and IntelliSense,Suggest schema-aware items without leaking data,Metadata unavailable,Unassessed candidate; not implemented
 CAP-049,Editor & SQL scripting,Error annotations,Highlight actual parser/compiler feedback,False positive,Unassessed candidate; not implemented
 CAP-050,Editor & SQL scripting,Code folding and minimap where useful,Navigate large procedures,Misleading folded execution,Unassessed candidate; not implemented
 CAP-051,Editor & SQL scripting,Find and replace,Navigate and edit long scripts,Encoding/unicode issue,SPEC-003: FindReplaceEngine + UI (find-*; replace-*); unit-tested
-CAP-052,Editor & SQL scripting,Line/column navigation,Map errors to right script coordinates,GO batch line offsets,SPEC-003: batch/GO/SQLCMD rejections map to document line (d5-*; preflight-error-location); editor caret jump unverified
+CAP-052,Editor & SQL scripting,Line/column navigation,Map errors to right script coordinates,GO batch line offsets,SPEC-003: batch/GO/SQLCMD rejections map to document line (d5-*; preflight-error-location); editor caret jump unverified; WS3-T1 adds line-number gutter and Go to Line (ws3-go-to-line-parse; ws3-app-wiring-source-scan); native caret jump unverified
 CAP-053,Editor & SQL scripting,Snippets and templates,Reuse editable SQL snippets,Unsafe default example,Unassessed candidate; not implemented
 CAP-054,Editor & SQL scripting,Query options and timeouts,Expose effective execution settings,Hidden setting changed,Unassessed candidate; not implemented
 CAP-055,Editor & SQL scripting,Selected-text execution,Execute only selected SQL when intended,Wrong selection,SPEC-003: F5 selection-or-document resolve (batch-selection; d5-go-selection-line); Core-tested

@@ -78,7 +78,12 @@ public partial class MainWindow
         var groups = new List<(string, Cmd?[])>
         {
             ("_File", file.ToArray()),
-            ("_Edit", [C("_Find / Replace…", () => OnFindReplace(this, e), Key.F, Primary)]),
+            ("_Edit",
+            [
+                C("_Find / Replace…", () => OnFindReplace(this, e), Key.F, Primary),
+                // Ctrl+G on every platform (⌃G on Mac): Cmd+G is conventionally "Find Next".
+                C("Go to _Line…", () => OnGoToLine(this, e), Key.G, KeyModifiers.Control)
+            ]),
             ("_View", [IsMac
                 ? C("Toggle _Sidebar", () => OnToggleSidebar(this, e), Key.S, KeyModifiers.Meta | KeyModifiers.Control)
                 : C("Toggle _Sidebar", () => OnToggleSidebar(this, e), Key.B, KeyModifiers.Control)]),
@@ -344,7 +349,7 @@ public partial class MainWindow
     {
         _welcomeDismissed = true;
         UpdateWelcome();
-        Editor.Focus();
+        Editor.TextArea.Focus();
     }
 
     /// <summary>True while nothing is connected and every tab is an untouched, unsaved blank document.</summary>

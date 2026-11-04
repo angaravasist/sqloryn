@@ -57,6 +57,10 @@ the project MIT licence. Inspect actual artifacts and notices before any release
   `src/Sqloryn.App/packages.lock.json`. `Avalonia.Controls.DataGrid` is pinned to
   12.1.2 (latest published; compatible with Avalonia 12.1.4). Inspect publish
   output before any redistribution.
+- `Avalonia.AvaloniaEdit` 12.0.0 (MIT, Avalonia Team; depends on Avalonia >= 12.0.0) provides the SQL editor
+  (`TextEditor`, line numbers, highlighting engine). Managed assembly only; locked in
+  `src/Sqloryn.App/packages.lock.json`. Rationale and rejected alternatives: [ADR-005](decisions/005-sql-editor-component.md).
+  Retain upstream copyright/licence notices in any artifact; inspect publish output before redistribution.
 - App icon under `assets/icon` is original SQLoryn artwork (MIT with the project);
   not copied from Microsoft/SSMS.
 - OpenSSL, Docker, Python and .NET are host prerequisites. OpenSSH client/scp are

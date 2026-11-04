@@ -48,6 +48,10 @@ public partial class MainWindow : Window
         Editor.LostFocus += (_, _) => CaptureSelection();
         Editor.PointerReleased += (_, _) => CaptureSelection();
         Editor.KeyUp += (_, _) => CaptureSelection();
+        Editor.TextArea.SelectionChanged += (_, _) => CaptureSelection();
+        Editor.TextChanged += OnEditorTextChanged;
+        Editor.ActualThemeVariantChanged += (_, _) => ApplyEditorHighlighting();
+        ApplyEditorHighlighting();
         Closing += OnWindowClosing;
         ApplySettings(_settings);
         WelcomePanel.ConnectRequested += (_, e) => OnConnect(this, e);
@@ -880,7 +884,10 @@ public partial class MainWindow : Window
             ActivateTab(tab);
     }
 
-    void OnEditorTextChanged(object? sender, TextChangedEventArgs e)
+    void ApplyEditorHighlighting()
+        => Editor.SyntaxHighlighting = EditorSupport.Highlighting(Editor.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Dark);
+
+    void OnEditorTextChanged(object? sender, EventArgs e)
     {
         if (_active is null)
             return;
@@ -894,8 +901,8 @@ public partial class MainWindow : Window
         if (_active is null)
             return;
         var text = Editor.Text ?? "";
-        var start = Math.Clamp(Math.Min(Editor.SelectionStart, Editor.SelectionEnd), 0, text.Length);
-        var end = Math.Clamp(Math.Max(Editor.SelectionStart, Editor.SelectionEnd), 0, text.Length);
+        var start = Math.Clamp(Editor.SelectionStart, 0, text.Length);
+        var end = Math.Clamp(Editor.SelectionStart + Editor.SelectionLength, start, text.Length);
         _active.Selection = start == end ? null : text[start..end];
         _active.SelectionStart = start;
         UpdateRunMode();
@@ -1196,6 +1203,18 @@ public partial class MainWindow : Window
         window.Closed += (_, _) => _findWindow = null;
         _findWindow = window;
         window.Show(this);
+    }
+
+    async void OnGoToLine(object? sender, RoutedEventArgs e)
+    {
+        var document = Editor.Document;
+        if (document is null)
+            return;
+        var dialog = new GoToLineWindow(document.LineCount, Editor.TextArea.Caret.Line);
+        await dialog.ShowDialog(this);
+        if (dialog.Result is { } target)
+            EditorSupport.GoTo(Editor, target);
+        Editor.TextArea.Focus();
     }
 
     // ---- Tools / Help ---------------------------------------------------------------------

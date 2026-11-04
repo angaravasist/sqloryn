@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Sqloryn"
+        xmlns:ae="using:AvaloniaEdit"
         x:Class="Sqloryn.MainWindow"
         Title="SQLoryn"
         Width="1180" Height="740"
@@ -126,10 +127,17 @@
                        Text="Run mode: document (select text to run a selection)"
                        AutomationProperties.Name="Run mode" />
           </Border>
-          <TextBox Name="Editor" Classes="editor mono" AcceptsReturn="True" TextWrapping="NoWrap" FontSize="13"
-                   PlaceholderText="Write T-SQL here. Run executes the selection when one exists; otherwise the document. GO on its own line splits batches."
-                   AutomationProperties.Name="SQL editor"
-                   TextChanged="OnEditorTextChanged" />
+          <!-- AvaloniaEdit (MIT, docs/decisions/005-sql-editor-component.md). ScriptDocument stays the source of truth;
+               MainWindow syncs Editor.Text <-> Document. Hint: Run executes the selection when one exists, otherwise
+               the document; GO on its own line splits batches. -->
+          <ae:TextEditor Name="Editor" ShowLineNumbers="True" WordWrap="False" FontSize="13"
+                         FontFamily="Menlo, Monaco, Consolas, monospace"
+                         HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                         Background="{DynamicResource ContentBg}" Foreground="{DynamicResource PrimaryText}"
+                         LineNumbersForeground="{DynamicResource SecondaryText}"
+                         Padding="6,6,10,6"
+                         AutomationProperties.Name="SQL editor"
+                         ToolTip.Tip="T-SQL editor. Run executes the selection when one exists; otherwise the document. GO on its own line splits batches. Go to line: Ctrl+G." />
         </DockPanel>
 
         <GridSplitter Grid.Row="2" Name="ResultsSplitter" Height="4" Background="{DynamicResource Separator}"

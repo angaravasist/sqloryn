@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using AvaloniaEdit;
 using Sqloryn.Core;
 
 namespace Sqloryn;
@@ -10,13 +11,13 @@ namespace Sqloryn;
 /// </summary>
 public partial class FindReplaceWindow : Window
 {
-    readonly TextBox _editor;
+    readonly TextEditor _editor;
 
-    public FindReplaceWindow() : this(new TextBox())
+    public FindReplaceWindow() : this(new TextEditor())
     {
     }
 
-    public FindReplaceWindow(TextBox editor)
+    public FindReplaceWindow(TextEditor editor)
     {
         _editor = editor;
         InitializeComponent();
@@ -37,8 +38,8 @@ public partial class FindReplaceWindow : Window
     (int Start, int End) Selection()
     {
         var text = EditorText;
-        var start = Math.Clamp(Math.Min(_editor.SelectionStart, _editor.SelectionEnd), 0, text.Length);
-        var end = Math.Clamp(Math.Max(_editor.SelectionStart, _editor.SelectionEnd), 0, text.Length);
+        var start = Math.Clamp(_editor.SelectionStart, 0, text.Length);
+        var end = Math.Clamp(_editor.SelectionStart + _editor.SelectionLength, start, text.Length);
         return (start, end);
     }
 
@@ -74,9 +75,8 @@ public partial class FindReplaceWindow : Window
             StatusText.Text = "No matches.";
             return false;
         }
-        _editor.SelectionStart = index;
-        _editor.SelectionEnd = index + Query.Length;
-        _editor.CaretIndex = index + Query.Length;
+        _editor.Select(index, Query.Length);
+        _editor.TextArea.Caret.BringCaretToView();
         StatusText.Text = $"Match at offset {index}.";
         return true;
     }
@@ -105,9 +105,7 @@ public partial class FindReplaceWindow : Window
         var replacement = ReplaceBox.Text ?? "";
         var updated = text[..start] + replacement + text[end..];
         Apply(updated);
-        _editor.SelectionStart = start;
-        _editor.SelectionEnd = start + replacement.Length;
-        _editor.CaretIndex = start + replacement.Length;
+        _editor.Select(start, replacement.Length);
         FindAndSelect(start + replacement.Length);
     }
 

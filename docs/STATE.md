@@ -34,6 +34,7 @@ Prior tip with hosted green checks: `78fba00`. Integrated tip `5757f72` includes
 | 5 | **Partial (D2)** | External edit refuses Save; on-disk external bytes preserved — Core `d2-external-edit-survives-save` PASS; UI Save As force path **unverified** |
 | 6 | **Partial** | Bounded QueryRaw; live MAX **unverified** |
 | 7 | **Partial (D5)** | Selection rejections map to document line — Core `d5-*` PASS; editor caret jump **unverified** |
+| 7b | **Partial (WS3-T1)** | SQL editor is AvaloniaEdit ([ADR-005](decisions/005-sql-editor-component.md)): line numbers, lexical T-SQL colouring, Go to Line (Ctrl+G); Core `ws3-*` + source scans PASS, headless highlighter [evidence](evidence/ws3-editor-highlighting.md); native rendering, caret jump and VoiceOver **unverified** |
 | 8–12 | **Partial** | Shell build-only |
 | 13 | **Partial** | New-tab script SELECT |
 | 14 | **Partial** | Keys/indexes/functions folders + truncation; live expand **unverified** |
