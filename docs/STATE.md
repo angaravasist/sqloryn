@@ -30,7 +30,7 @@ Prior six-scenario pass on `0af9108`: [run 41793052872](https://github.com/angar
 ## Work under review
 
 Branch `codex/macos-database-studio` — Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
-Full delivery contract active on tip `1a1d515`. Linux Core live evidence remains the **12/12** scenarios on ancestor `496b503` ([run 41807915637](https://github.com/angaravasist/sqloryn/actions/runs/41807915637)) until a new disposable run. **Not product-complete:** native Mac SQL/UI acceptance, Entra, multi-node HA, BI services, signing, Agent live, and remaining CAP rows stay open.
+Full delivery contract active on tip `3ddc1e9`. Linux Core live evidence remains the **12/12** scenarios on ancestor `496b503` ([run 41807915637](https://github.com/angaravasist/sqloryn/actions/runs/41807915637)) until a new disposable run. **Not product-complete:** native Mac SQL/UI acceptance, Entra, multi-node HA, BI services, signing, Agent live, and remaining CAP rows stay open.
 
 ## Hosted checks
 
@@ -41,7 +41,7 @@ Full delivery contract active on tip `1a1d515`. Linux Core live evidence remains
 | `496b503` | probe-components ×3 PASS · repo-safeguards PASS · **sql-integration PASS** (twelve CORE scenarios, pass=12 skip=0 fail=0, cleanup) — [run 41807915637](https://github.com/angaravasist/sqloryn/actions/runs/41807915637) | Independent verifier: Release 0/0, Core **227 PASS** |
 | `11c992b` | Continues from `496b503` with CAP-040/054/060/071 + CAP-084/075/087/099/014; Core **234 PASS** locally; SQL evidence still the twelve scenarios on `496b503` until re-run |
 | `1a1d515` | Merges CAP-081/046/064/091; Core **240 PASS** locally (independent verifier); SQL evidence still pinned to `496b503` until re-run |
-| `1a1d515` | Merges CAP-081/046/064/091; Core **240 PASS** locally (independent verifier); SQL evidence still pinned to `496b503` until re-run |
+| `3ddc1e9` | Merges CAP-043/034/096/078; SQL evidence still pinned to `496b503` until re-run |
 
 ## PR #7 finding dispositions
 
