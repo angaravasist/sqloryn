@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Sqloryn.Core;
@@ -30,15 +31,73 @@ public sealed class CsvImportDuplicateKeyException : Exception
     public CsvImportDuplicateKeyException(string message, Exception inner) : base(message, inner) { }
 }
 
-/// <summary>Where the import rows come from. <see cref="Open"/> is called once for validation and once for writing.</summary>
-public sealed record CsvImportSource(Func<Stream> Open, CsvImportOptions Options)
+/// <summary>
+/// Where the import rows come from. Prefer <see cref="LoadImmutable"/> for file imports so validation and apply
+/// share one snapshot and the on-disk fingerprint can be re-checked before any write.
+/// </summary>
+public sealed record CsvImportSource(
+    Func<Stream> Open,
+    CsvImportOptions Options,
+    string? ContentSha256 = null,
+    long? ByteLength = null,
+    string? SourcePath = null)
 {
+    /// <summary>Default upper bound for an immutable in-memory snapshot (256 MiB).</summary>
+    public const int DefaultMaxBytes = 256 * 1024 * 1024;
+
     public static CsvImportSource FromFile(string path, CsvImportOptions options)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
         return new CsvImportSource(
             () => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.SequentialScan),
-            options);
+            options,
+            ContentSha256: null,
+            ByteLength: null,
+            SourcePath: path);
+    }
+
+    /// <summary>
+    /// Reads the file once into a bounded byte array, records its SHA-256, and returns a source whose
+    /// <see cref="Open"/> always yields that snapshot. Apply re-hashes the path on disk before writing and
+    /// refuses when the file changed (including same-row-count edits).
+    /// </summary>
+    public static CsvImportSource LoadImmutable(string path, CsvImportOptions options, int maxBytes = DefaultMaxBytes)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        ArgumentNullException.ThrowIfNull(options);
+        if (maxBytes < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), "maxBytes must be at least 1.");
+
+        var info = new FileInfo(path);
+        if (!info.Exists)
+            throw new FileNotFoundException("The import file was not found.", path);
+        if (info.Length > maxBytes)
+            throw new InvalidOperationException(
+                $"The file is {info.Length.ToString("N0", CultureInfo.InvariantCulture)} bytes; " +
+                $"imports are limited to {maxBytes.ToString("N0", CultureInfo.InvariantCulture)} bytes in memory.");
+
+        var bytes = File.ReadAllBytes(path);
+        var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        return new CsvImportSource(
+            () => new MemoryStream(bytes, writable: false),
+            options,
+            ContentSha256: hash,
+            ByteLength: bytes.LongLength,
+            SourcePath: path);
+    }
+
+    /// <summary>SHA-256 (lowercase hex) of the current bytes at <see cref="SourcePath"/>, or null when unreadable.</summary>
+    public static string? HashFile(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.SequentialScan);
+            return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 }
 
@@ -121,6 +180,24 @@ public static class CsvImportApply
 
         if (validation.Refusal is { } refusal)
             return refusal;
+
+        // Fingerprint check before any transaction: same-row-count file edits must not reach DELETE/INSERT.
+        if (source.ContentSha256 is { Length: > 0 } expected
+            && source.SourcePath is { Length: > 0 } path)
+        {
+            var live = CsvImportSource.HashFile(path);
+            if (live is null || !string.Equals(live, expected, StringComparison.OrdinalIgnoreCase))
+            {
+                return Result(
+                    CsvImportOutcome.RefusedInvalidData,
+                    validation.Rows,
+                    0,
+                    0,
+                    [new CsvImportIssue(CsvIssueSeverity.Error, null, null, null,
+                        "The import file changed after it was loaded (content fingerprint mismatch, including same-row-count edits).")],
+                    "The import file changed after it was validated (fingerprint mismatch). Nothing was written.");
+            }
+        }
 
         ICsvImportTransaction transaction;
         try
@@ -243,6 +320,13 @@ public static class CsvImportApply
                     if (!CsvImportPlan.TryConvert(fields[m.SourceIndex], m.Type, plan.EmptyTextAsNull, out _, out var error))
                     {
                         Add((int)Math.Min(rows, int.MaxValue), line, m.SourceIndex, $"Row {rows}, column {m.SourceIndex + 1}: the value {error}.");
+                        rowOk = false;
+                    }
+                    else if (m.Destination is { } dest
+                             && !CsvDestinationFidelity.TryAccept(fields[m.SourceIndex], dest, plan.EmptyTextAsNull, out var fidelityError))
+                    {
+                        Add((int)Math.Min(rows, int.MaxValue), line, m.SourceIndex,
+                            $"Row {rows}, column {m.SourceIndex + 1}: the value {fidelityError}.");
                         rowOk = false;
                     }
                 }

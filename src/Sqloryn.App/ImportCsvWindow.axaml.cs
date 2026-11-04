@@ -25,6 +25,7 @@ public partial class ImportCsvWindow : Window
         public bool IsKey { get; set; }
         public int? Length { get; init; }
         public int? Scale { get; init; }
+        public CsvDestinationType? Destination { get; init; }
     }
 
     readonly SqlSession _session;
@@ -292,6 +293,15 @@ public partial class ImportCsvWindow : Window
             var usable = match is { IsIdentity: false, IsComputed: false };
             if (match is { IsIdentity: true } or { IsComputed: true })
                 notes.Add($"'{match.Name}' is an identity or computed column and was left unmapped.");
+            CsvDestinationType? destination = null;
+            if (usable && match is not null)
+            {
+                destination = new CsvDestinationType(
+                    match.TypeName,
+                    MaxLength: match.MaxLength,
+                    Precision: match.Precision,
+                    Scale: match.Scale);
+            }
             rows.Add(new MapRow
             {
                 SourceIndex = c.Index,
@@ -300,7 +310,14 @@ public partial class ImportCsvWindow : Window
                 Guess = c.GuessedType.ToString(),
                 Target = usable ? match!.Name : "",
                 TypeText = usable ? CsvSqlTypes.FromSqlTypeName(match!.TypeName).ToString() : c.GuessedType.ToString(),
-                IsKey = usable && keySet.Contains(match!.Name)
+                IsKey = usable && keySet.Contains(match!.Name),
+                Length = usable && CsvSqlTypes.FromSqlTypeName(match!.TypeName) == CsvSqlType.NVarChar
+                    ? (match.MaxLength < 0 ? null : match.MaxLength)
+                    : null,
+                Scale = usable && CsvSqlTypes.FromSqlTypeName(match!.TypeName) == CsvSqlType.Decimal
+                    ? match.Scale
+                    : null,
+                Destination = destination
             });
         }
 
@@ -333,9 +350,13 @@ public partial class ImportCsvWindow : Window
             if (!Enum.TryParse<CsvSqlType>(r.TypeText?.Trim(), ignoreCase: true, out var type) || !Enum.IsDefined(type))
                 throw new ArgumentException($"'{r.TypeText}' is not a supported type for '{r.Source}'. Use Int, BigInt, Decimal, Bit, DateTime2, UniqueIdentifier or NVarChar.");
             var target = (r.Target ?? "").Trim();
-            mappings.Add(new CsvColumnMapping(r.SourceIndex, target, type,
+            mappings.Add(new CsvColumnMapping(
+                r.SourceIndex,
+                target,
+                type,
                 type == CsvSqlType.NVarChar ? r.Length : null,
-                type == CsvSqlType.Decimal ? r.Scale ?? 10 : null));
+                type == CsvSqlType.Decimal ? r.Scale ?? 10 : null,
+                Mode == CsvImportMode.Create ? null : r.Destination));
             if (r.IsKey)
                 keys.Add(target);
         }
@@ -374,7 +395,8 @@ public partial class ImportCsvWindow : Window
             ShowIssues(_preview.Issues);
             SqlBox.Text = plan.GeneratePreviewSql();
             _previewedPlan = plan;
-            _previewedSource = CsvImportSource.FromFile(_path, _previewOptions);
+            // Immutable snapshot + fingerprint: validate/apply share one byte image; disk changes refuse before write.
+            _previewedSource = CsvImportSource.LoadImmutable(_path, _previewOptions);
             ConfirmButton.IsEnabled = true;
             StatusText.Text = plan.IsDestructive
                 ? "SQL preview ready. This mode DELETES every existing row first. Nothing has been executed."
