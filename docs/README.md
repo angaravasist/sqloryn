@@ -8,6 +8,7 @@ source of truth. Update relevant documents in the same PR as behaviour.
 
 | Question | Authoritative document |
 |---|---|
+| Taking over PR #7 at 573d749? | [Maintainer handoff](ssms/PR7-HANDOFF.md) and [frozen 192-capability inventory](ssms/PR7-HANDOFF-INVENTORY.csv); use the active queue for subsequent changes |
 | What did the independent code review establish? | [Codebase audit](ssms/CODEBASE-AUDIT.md) |
 | What should the Mac app look and feel like? | [Mac experience and screen acceptance](ssms/MAC-EXPERIENCE.md) |
 | What is the complete delivery contract? | [Full implementation and acceptance](ssms/DELIVERY-CONTRACT.md) |
