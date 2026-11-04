@@ -101,3 +101,7 @@ remain unsupported (throw `NotSupportedException`).
 ## Explicit non-claims
 
 Not SSMS-compatible; not signed/notarised; AI assistant deferred; no Windows SSH product path.
+
+## WS10-T1 / WS11-T1 gated shells
+
+Tools menu entries open honest gated windows (`GatedWorkspaceWindow`, model in `Sqloryn.Core/GatedWorkspace.cs`) for high availability, replication and BI/cloud. They are explanations only: no server read, no health or topology claim, no credential field, no cloud call. HA/replication stay incomplete until an isolated multi-node fixture verifies the real operation and recovery; SSISDB/SSAS/SSRS/Fabric/Azure stay disabled until each protocol and authentication path exists. CAP-157/158/163–168/170/171 remain `missing`/`unverified` in [CAP_EVIDENCE](ssms/CAP_EVIDENCE.csv). Component evidence only (source scans, no native UI walk).
