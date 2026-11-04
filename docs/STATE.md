@@ -41,6 +41,7 @@ Full delivery contract active on tip `1a1d515`. Linux Core live evidence remains
 | `496b503` | probe-components ×3 PASS · repo-safeguards PASS · **sql-integration PASS** (twelve CORE scenarios, pass=12 skip=0 fail=0, cleanup) — [run 41807915637](https://github.com/angaravasist/sqloryn/actions/runs/41807915637) | Independent verifier: Release 0/0, Core **227 PASS** |
 | `11c992b` | Continues from `496b503` with CAP-040/054/060/071 + CAP-084/075/087/099/014; Core **234 PASS** locally; SQL evidence still the twelve scenarios on `496b503` until re-run |
 | `1a1d515` | Merges CAP-081/046/064/091; Core **240 PASS** locally (independent verifier); SQL evidence still pinned to `496b503` until re-run |
+| `1a1d515` | Merges CAP-081/046/064/091; Core **240 PASS** locally (independent verifier); SQL evidence still pinned to `496b503` until re-run |
 
 ## PR #7 finding dispositions
 
