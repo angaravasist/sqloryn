@@ -323,8 +323,8 @@ sealed class AcceptanceRun
         }
     }
 
-    static CellValue JsonCell(JsonElement element)
-        => element.ValueKind == JsonValueKind.Null ? CellValue.Null : CellValue.Text(element.GetString()!, "number");
+    static CellValue JsonCell(JsonElement element, string kind)
+        => element.ValueKind == JsonValueKind.Null ? CellValue.Null : CellValue.Text(element.GetString()!, kind);
 
     async Task ExportAsync(SqlSession session, CancellationToken ct)
     {
@@ -369,8 +369,8 @@ sealed class AcceptanceRun
                 RequireEqual(cell.Display, row[c].GetString(), $"JSON row {r} col {c}");
             }
             // Full money/smallmoney precision survives as the exact decimal value, not a rounded double.
-            RequireMoney(JsonCell(row[2]), expected.Money, $"JSON row {r} money");
-            RequireMoney(JsonCell(row[3]), expected.Small, $"JSON row {r} smallmoney");
+            RequireMoney(JsonCell(row[2], "money"), expected.Money, $"JSON row {r} money", "money");
+            RequireMoney(JsonCell(row[3], "smallmoney"), expected.Small, $"JSON row {r} smallmoney", "smallmoney");
         }
     }
 
