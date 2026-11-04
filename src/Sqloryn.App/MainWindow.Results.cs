@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Avalonia.Media;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
@@ -16,6 +17,7 @@ public partial class MainWindow
     sealed record ResultRow(int Number, CellValue[] Cells);
 
     bool _renderingResults;
+    bool _resultsAsText;
 
     /// <summary>Rebuilds the results area: one DataGrid tab per result set plus a Messages tab.</summary>
     void RenderResult(QueryResult? result)
@@ -49,11 +51,15 @@ public partial class MainWindow
                     {
                         Header = $"Result {i + 1} ({kept})",
                         Tag = i,
-                        Content = BuildResultGrid(set, shown)
+                        Content = _resultsAsText ? BuildResultText(set, shown) : BuildResultGrid(set, shown)
                     });
                 }
                 MessagesBox.Text = QueryOutcomeFormatter.FormatMessages(result);
+                var affected = QueryOutcomeFormatter.DescribeRowsAffected(result.RowsAffected);
+                var elapsed = QueryOutcomeFormatter.DescribeClientElapsed(result.ClientElapsedMilliseconds);
                 ResultSummary.Text = $"{QueryOutcomeFormatter.DescribeStatus(result)} · {result.ResultSets.Count} result set(s)" +
+                                     (affected.Length > 0 ? " · " + affected : "") +
+                                     (elapsed.Length > 0 ? " · " + elapsed : "") +
                                      (result.PartialResults || result.RetentionLimitReached ? " · output truncated" : "") +
                                      (shownNote.Length > 0 ? " · " + shownNote.ToString().TrimEnd() : "");
             }
@@ -159,7 +165,7 @@ public partial class MainWindow
                 MinWidth = 64,
                 MaxWidth = 640,
                 Width = new DataGridLength(1, DataGridLengthUnitType.Auto),
-                ClipboardContentBinding = new Binding($"Cells[{index}].Display"),
+                ClipboardContentBinding = new Binding($"Cells[{index}].ClipboardText"),
                 CellTemplate = new FuncDataTemplate<ResultRow>((row, _) => BuildCell(row, index))
             };
             grid.Columns.Add(dataColumns[i]);
@@ -267,6 +273,109 @@ public partial class MainWindow
         host.Children.Add(banner);
         host.Children.Add(grid);
         return host;
+    }
+
+    /// <summary>Retained rows as aligned monospace text. Uses <see cref="ResultTextFormatter"/> and does not run SQL.</summary>
+    static Control BuildResultText(ResultSet set, int shownRows)
+    {
+        var text = new TextBox
+        {
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.NoWrap,
+            FontFamily = new FontFamily("Menlo, Monaco, Consolas, monospace"),
+            Text = ResultTextFormatter.Format(set, shownRows),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+        AutomationProperties.SetName(text, "Results as text");
+        ToolTip.SetTip(text,
+            "Retained rows as aligned text. Does not re-query the server. SQL NULL is (null); an empty string is blank; the word NULL is a real value.");
+        return text;
+    }
+
+    async void OnCopyResults()
+    {
+        var copied = CopyTextForActiveResult();
+        if (copied is null)
+        {
+            StatusBar.Text = "Select result rows to copy. SQL NULL copies as an empty field, not the word NULL; an empty string copies as \"\".";
+            return;
+        }
+        try
+        {
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard is null)
+            {
+                StatusBar.Text = "Clipboard unavailable.";
+                return;
+            }
+            await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(clipboard, copied.Value.Text);
+            StatusBar.Text = copied.Value.TextView
+                ? "Copied the retained text view. SQL NULL is (null); an empty string is blank."
+                : "Copied results. SQL NULL is an empty field (not the word NULL); an empty string is \"\".";
+        }
+        catch (Exception ex)
+        {
+            StatusBar.Text = "Copy failed: " + ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Selected grid rows, or the retained text view. Grid copy uses <see cref="ResultCopy"/> (SQL NULL is an empty field).
+    /// The text view already writes SQL NULL as (null).
+    /// </summary>
+    (string Text, bool TextView)? CopyTextForActiveResult()
+    {
+        if (ResultTabs.SelectedItem is not TabItem { Content: Control content, Tag: int index and >= 0 })
+            return null;
+        if (_resultsAsText && content is TextBox box && !string.IsNullOrEmpty(box.Text))
+            return (box.Text, true);
+        if (_active?.LastResult is not { } result || index >= result.ResultSets.Count)
+            return null;
+        if (FindGrid(content) is not { } grid)
+            return null;
+        var selected = grid.SelectedItems?.OfType<ResultRow>().ToList();
+        if (selected is null || selected.Count == 0)
+            return null;
+
+        var set = result.ResultSets[index];
+        var lines = new StringBuilder();
+        lines.Append('#').Append('\t');
+        for (var c = 0; c < set.Columns.Count; c++)
+        {
+            if (c > 0)
+                lines.Append('\t');
+            lines.Append(string.IsNullOrEmpty(set.Columns[c]) ? "(no column name)" : set.Columns[c]);
+        }
+        lines.AppendLine();
+        foreach (var row in selected)
+        {
+            lines.Append(row.Number.ToString(CultureInfo.InvariantCulture));
+            for (var c = 0; c < set.Columns.Count; c++)
+            {
+                lines.Append('\t');
+                lines.Append(ResultCopy.FormatCell(c < row.Cells.Length ? row.Cells[c] : CellValue.Null));
+            }
+            lines.AppendLine();
+        }
+        return (lines.ToString(), false);
+    }
+
+    static DataGrid? FindGrid(Control? content)
+    {
+        switch (content)
+        {
+            case DataGrid grid:
+                return grid;
+            case Panel panel:
+                foreach (var child in panel.Children)
+                    if (child is Control control && FindGrid(control) is { } found)
+                        return found;
+                return null;
+            default:
+                return null;
+        }
     }
 
     static string ShownFilter(string text)

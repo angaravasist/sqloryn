@@ -117,6 +117,11 @@ public partial class MainWindow
                 // Compiles under SET SHOWPLAN_XML; the SQL is never executed.
                 C("Display _Estimated Plan", () => OnDisplayEstimatedPlan(this, e), Key.L, Primary)
             ]),
+            ("_Results",
+            [
+                C(_resultsAsText ? "Results as _Grid" : "Results as _Text", OnResultsAsText),
+                C("Copy _Results", OnCopyResults)
+            ]),
             ("_Object",
             [
                 C("_Expand Selected", () => OnExpandSelected(this, e), Key.E, Primary),
@@ -135,6 +140,7 @@ public partial class MainWindow
 
     void BuildMenus()
     {
+        WindowMenu.Items.Clear();
         var groups = CommandGroups();
         if (IsMac)
         {
@@ -196,6 +202,17 @@ public partial class MainWindow
     }
 
     static string Plain(string header) => header.Replace("_", "");
+
+    /// <summary>Switches the retained result between the grid and aligned text. Does not run SQL.</summary>
+    void OnResultsAsText()
+    {
+        _resultsAsText = !_resultsAsText;
+        BuildMenus();
+        if (_active is not null)
+            RenderResult(_active.LastResult);
+        else
+            StatusBar.Text = "Results as text uses retained rows and does not run SQL.";
+    }
 
     /// <summary>F5 runs on every platform; Escape cancels only while a command is running.</summary>
     void OnShellKeyDown(object? sender, KeyEventArgs e)

@@ -191,6 +191,7 @@ public partial class ConnectWindow : Window
                 SetPasswordProgrammatically(_autofill.PasswordText);
                 throw new ArgumentException(credential.Reason ?? ProfileAutofillSession.ChangedEndpointMessage);
             }
+            var settings = AppServices.Settings.Load();
             var options = new ConnectionOptions
             {
                 Server = ServerBox.Text?.Trim() ?? "",
@@ -200,7 +201,8 @@ public partial class ConnectWindow : Window
                 Password = credential.Password,
                 Encrypt = true,
                 TrustServerCertificate = TrustBox.IsChecked == true,
-                ServerCertificatePath = string.IsNullOrWhiteSpace(PinBox.Text) ? null : PinBox.Text.Trim()
+                ServerCertificatePath = string.IsNullOrWhiteSpace(PinBox.Text) ? null : PinBox.Text.Trim(),
+                ConnectTimeoutSeconds = settings.ConnectTimeoutSeconds
             };
             options.Validate();
 

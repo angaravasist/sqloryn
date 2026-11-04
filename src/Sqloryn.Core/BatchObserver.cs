@@ -109,6 +109,10 @@ public static class BatchObserver
         public bool RetentionLimitReached { get; set; }
         public string? ErrorSummary { get; set; }
         public List<QueryMessage> Messages { get; } = [];
+        /// <summary>Provider RecordsAffected when non-negative. Null means the provider did not report a count.</summary>
+        public int? RowsAffected { get; set; }
+        /// <summary>Client stopwatch around execute, in milliseconds. Not a server statistic.</summary>
+        public long? ClientElapsedMilliseconds { get; set; }
     }
 
     /// <summary>Advance the reader without accessing discarded cell values.</summary>
@@ -350,7 +354,9 @@ public static class BatchObserver
             TransactionState = transactionState,
             TargetConfidence = targetConfidence,
             RetentionLimitReached = obs.RetentionLimitReached,
-            StopCause = obs.StopCause
+            StopCause = obs.StopCause,
+            RowsAffected = obs.RowsAffected,
+            ClientElapsedMilliseconds = obs.ClientElapsedMilliseconds
         };
     }
 

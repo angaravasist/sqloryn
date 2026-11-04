@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Sqloryn.Core;
@@ -43,6 +44,12 @@ public static class QueryOutcomeFormatter
         msg.AppendLine($"Target: {result.TargetConfidence}");
         if (result.TransactionState is int xact)
             msg.AppendLine($"XACT_STATE: {xact}");
+        var affected = DescribeRowsAffected(result.RowsAffected);
+        if (affected.Length > 0)
+            msg.AppendLine(affected);
+        var elapsed = DescribeClientElapsed(result.ClientElapsedMilliseconds);
+        if (elapsed.Length > 0)
+            msg.AppendLine(elapsed);
         if (!string.IsNullOrEmpty(result.ErrorSummary))
             msg.AppendLine(result.ErrorSummary);
         foreach (var m in result.Messages)
@@ -63,6 +70,29 @@ public static class QueryOutcomeFormatter
             sb.AppendLine(result.ErrorSummary);
         sb.Append(ResultMaterializer.FormatResultSets(result));
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Provider-reported row count. Empty when the provider did not report one, so a SELECT is not shown as zero rows affected.
+    /// </summary>
+    public static string DescribeRowsAffected(int? count)
+    {
+        if (count is not int n || n < 0)
+            return "";
+        var noun = n == 1 ? "row" : "rows";
+        return n.ToString(CultureInfo.InvariantCulture) + " " + noun + " affected (provider-reported)";
+    }
+
+    /// <summary>
+    /// Client-measured elapsed time for the batch. Empty when it was not measured.
+    /// This is a stopwatch on this computer, not server statistics.
+    /// </summary>
+    public static string DescribeClientElapsed(long? milliseconds)
+    {
+        if (milliseconds is not long ms || ms < 0)
+            return "";
+        return "Client elapsed: " + ms.ToString(CultureInfo.InvariantCulture)
+            + " ms (measured on this computer; not server statistics)";
     }
 
     /// <summary>Status, results and messages must name the same completion outcome.</summary>

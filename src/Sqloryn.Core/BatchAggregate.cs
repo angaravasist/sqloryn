@@ -13,6 +13,9 @@ sealed class BatchAggregate
     int? _transactionState;
     TargetConfidence _target = TargetConfidence.Known;
     string? _database;
+    readonly List<int?> _rowsAffected = [];
+    long _clientElapsed;
+    bool _hasClientElapsed;
 
     public void Add(QueryResult result, int index, int total)
     {
@@ -47,6 +50,12 @@ sealed class BatchAggregate
         _transactionState = result.TransactionState ?? _transactionState;
         _target = result.TargetConfidence;
         _database = result.Database;
+        _rowsAffected.Add(result.RowsAffected);
+        if (result.ClientElapsedMilliseconds is long ms && ms >= 0)
+        {
+            _clientElapsed += ms;
+            _hasClientElapsed = true;
+        }
     }
 
     public void NoteSkipped(int completedIndex, int total)
@@ -97,7 +106,9 @@ sealed class BatchAggregate
             TransactionState = _transactionState,
             TargetConfidence = _target,
             RetentionLimitReached = _retentionLimit,
-            StopCause = _stopCause
+            StopCause = _stopCause,
+            RowsAffected = ProviderRowsAffected.SumReported(_rowsAffected),
+            ClientElapsedMilliseconds = _hasClientElapsed ? _clientElapsed : null
         };
     }
 

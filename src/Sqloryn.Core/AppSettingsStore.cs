@@ -12,6 +12,9 @@ public sealed record AppSettings
     public const double DefaultSidebarWidth = 240;
     public const double MinSidebarWidth = 180;
     public const double MaxSidebarWidth = 480;
+    public const int MinConnectTimeoutSeconds = 1;
+    public const int MaxConnectTimeoutSeconds = 120;
+    public const int DefaultConnectTimeoutSeconds = 15;
 
     public double EditorFontSize { get; init; } = 13;
     public int ResultsMaxRows { get; init; } = QueryLimits.MaxRowsPerSet;
@@ -23,6 +26,8 @@ public sealed record AppSettings
     public bool SidebarVisible { get; init; } = true;
     /// <summary>Results pane height in device-independent pixels; 0 means "use the default split".</summary>
     public double ResultsHeight { get; init; }
+    /// <summary>Client connect timeout applied the next time a session connects. Not a server setting.</summary>
+    public int ConnectTimeoutSeconds { get; init; } = DefaultConnectTimeoutSeconds;
 
     public AppSettings Normalize()
     {
@@ -36,7 +41,8 @@ public sealed record AppSettings
             ResultsMaxRows = Math.Clamp(ResultsMaxRows, MinResultsMaxRows, MaxResultsMaxRows),
             Theme = theme,
             SidebarWidth = sidebar,
-            ResultsHeight = results
+            ResultsHeight = results,
+            ConnectTimeoutSeconds = Math.Clamp(ConnectTimeoutSeconds, MinConnectTimeoutSeconds, MaxConnectTimeoutSeconds)
         };
     }
 }

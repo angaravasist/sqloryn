@@ -441,6 +441,12 @@ public partial class MainWindow : Window
                 return;
             tab.LastResult = result;
             tab.Status = QueryOutcomeFormatter.DescribeStatus(result);
+            var affected = QueryOutcomeFormatter.DescribeRowsAffected(result.RowsAffected);
+            var elapsed = QueryOutcomeFormatter.DescribeClientElapsed(result.ClientElapsedMilliseconds);
+            if (affected.Length > 0)
+                tab.Status += " · " + affected;
+            if (elapsed.Length > 0)
+                tab.Status += " · " + elapsed;
             if (ReferenceEquals(_active, tab))
             {
                 RenderResult(result);
