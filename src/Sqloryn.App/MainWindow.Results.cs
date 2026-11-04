@@ -93,17 +93,23 @@ public partial class MainWindow
             _active.LastResultSetIndex = index;
     }
 
+    /// <summary>
+    /// One result set as a grid. Header clicks cycle ascending, descending and original order over the
+    /// rows retained in memory (Core <see cref="ResultSetView.SortedRowIndexes"/>; NULLs last); the server is never re-queried,
+    /// so a banner states when sorting covers only the retained rows of a truncated set.
+    /// </summary>
     static Control BuildResultGrid(ResultSet set, int shownRows)
     {
-        var rows = new List<ResultRow>(shownRows);
-        for (var r = 0; r < shownRows; r++)
+        ResultRow MakeRow(int index)
         {
-            var row = set.Rows[r];
+            var row = set.Rows[index];
             var cells = new CellValue[set.Columns.Count];
             for (var c = 0; c < cells.Length; c++)
                 cells[c] = c < row.Count ? row[c] : CellValue.Null;
-            rows.Add(new ResultRow(r + 1, cells));
+            return new ResultRow(index + 1, cells);
         }
+
+        List<ResultRow> Project(IEnumerable<int> order) => order.Take(shownRows).Select(MakeRow).ToList();
 
         var grid = new DataGrid
         {
@@ -111,11 +117,11 @@ public partial class MainWindow
             IsReadOnly = true,
             CanUserResizeColumns = true,
             CanUserReorderColumns = true,
-            CanUserSortColumns = false,
+            CanUserSortColumns = true,
             SelectionMode = DataGridSelectionMode.Extended,
             ClipboardCopyMode = DataGridClipboardCopyMode.IncludeHeader,
             HeadersVisibility = DataGridHeadersVisibility.All,
-            ItemsSource = rows
+            ItemsSource = Project(Enumerable.Range(0, shownRows))
         };
         grid.Columns.Add(new DataGridTemplateColumn
         {
@@ -136,23 +142,69 @@ public partial class MainWindow
             })
         });
 
+        var headerNames = new string[set.Columns.Count];
+        var dataColumns = new DataGridTemplateColumn[set.Columns.Count];
         for (var i = 0; i < set.Columns.Count; i++)
         {
             var index = i;
             var name = set.Columns[i];
-            grid.Columns.Add(new DataGridTemplateColumn
+            headerNames[i] = string.IsNullOrEmpty(name) ? "(no column name)" : name;
+            dataColumns[i] = new DataGridTemplateColumn
             {
-                Header = string.IsNullOrEmpty(name) ? "(no column name)" : name,
+                Header = headerNames[i],
                 IsReadOnly = true,
-                CanUserSort = false,
+                CanUserSort = true,
                 MinWidth = 64,
                 MaxWidth = 640,
                 Width = new DataGridLength(1, DataGridLengthUnitType.Auto),
                 ClipboardContentBinding = new Binding($"Cells[{index}].Display"),
                 CellTemplate = new FuncDataTemplate<ResultRow>((row, _) => BuildCell(row, index))
-            });
+            };
+            grid.Columns.Add(dataColumns[i]);
         }
-        return grid;
+
+        var banner = new TextBlock
+        {
+            IsVisible = false,
+            Margin = new Avalonia.Thickness(8, 4),
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap
+        };
+        banner.Classes.Add("muted");
+
+        ResultSetView? view = null;
+        var sortColumn = -1;
+        var descending = false;
+        grid.Sorting += (_, e) =>
+        {
+            e.Handled = true; // Core sorts retained rows; the DataGrid's own view sort is not used.
+            var column = Array.IndexOf(dataColumns, e.Column as DataGridTemplateColumn);
+            if (column < 0)
+                return;
+            if (sortColumn != column) { sortColumn = column; descending = false; }
+            else if (!descending) descending = true;
+            else sortColumn = -1;
+
+            view ??= ResultSetView.FromResultSet(set);
+            grid.ItemsSource = sortColumn < 0
+                ? Project(Enumerable.Range(0, shownRows))
+                : Project(view.SortedRowIndexes(sortColumn, descending));
+            for (var c = 0; c < dataColumns.Length; c++)
+                dataColumns[c].Header = c == sortColumn ? headerNames[c] + (descending ? " ▼" : " ▲") : headerNames[c];
+            if (sortColumn < 0)
+                banner.IsVisible = false;
+            else
+            {
+                var scope = view.SortByColumn(sortColumn, descending).ScopeLabel ?? "Retained rows only";
+                banner.Text = $"Sorted by {headerNames[sortColumn]} ({(descending ? "descending" : "ascending")}, NULL last). {scope}.";
+                banner.IsVisible = true;
+            }
+        };
+
+        var host = new DockPanel();
+        DockPanel.SetDock(banner, Dock.Top);
+        host.Children.Add(banner);
+        host.Children.Add(grid);
+        return host;
     }
 
     static Control BuildCell(ResultRow? row, int index)

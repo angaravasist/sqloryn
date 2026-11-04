@@ -35,6 +35,8 @@ sealed class FakeSqlTypedCellSource : ISqlTypedCellSource
     public DateTimeOffset GetDateTimeOffset(int ordinal) => (DateTimeOffset)_values[ordinal]!;
     public SqlMoney GetSqlMoney(int ordinal) => (SqlMoney)_values[ordinal]!;
     public DateTime GetDate(int ordinal) => (DateTime)_values[ordinal]!;
+    public TimeSpan GetTime(int ordinal) => (TimeSpan)_values[ordinal]!;
+    public Guid GetGuid(int ordinal) => (Guid)_values[ordinal]!;
     public long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
     {
         var s = (string)_values[ordinal]!;
