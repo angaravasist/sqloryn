@@ -2,12 +2,16 @@
 
 Owner: SQLoryn maintainer. Reviewed: 2026-11-04. Experimental; no release support.
 
+## Active assignment
+
+[Delivery contract](ssms/DELIVERY-CONTRACT.md) + [Mac experience](ssms/MAC-EXPERIENCE.md) supersede incremental follow-ups ([audit](ssms/CODEBASE-AUDIT.md), [queue](ssms/DELIVERY-QUEUE.md), [CAP evidence](ssms/CAP_EVIDENCE.csv)). Draft PR #7 remains the single integration PR.
+
 ## Work under review
 
 Branch `codex/macos-database-studio` — Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
 Prior tip with hosted green checks: `78fba00`. Integrated tip `5757f72` includes S-2, plan budget/SHOWPLAN discard, Core acceptance harness, offline journeys and catalogue realignment.
 
-## Hosted checks on `5757f72`
+## Hosted checks on `06bc2ad`
 
 | Check | Result |
 |---|---|
@@ -17,7 +21,7 @@ Prior tip with hosted green checks: `78fba00`. Integrated tip `5757f72` includes
 | repo-safeguards | PASS |
 | CodeQL · Analyze (actions/csharp/python) | PASS |
 | sql-integration | **SKIPPED** |
-| Runs | [components](https://github.com/angaravasist/sqloryn/actions/runs/41749584482) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41749579718) |
+| Runs | [components](https://github.com/angaravasist/sqloryn/actions/runs/41750374026) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41750368912) |
 
 ## PR #7 finding dispositions
 
@@ -65,6 +69,10 @@ real run is recorded. S-2 is fixed in `ResultMaterializer` and fixture-tested, s
 `CORE-MATERIALISE` / `CORE-EXPORT` are no longer expected to fail on the missing
 `date`/`money` handling, but that expectation is a prediction, not evidence: no
 acceptance transcript exists yet.
+
+## Independent review on 4 November 2026
+
+See [CODEBASE-AUDIT](ssms/CODEBASE-AUDIT.md) for the 06bc2ad source audit, independently repeated Release/component/Python checks and limited native offline observations. The inspected existing package differs from the fresh build, so its UI observations have separate provenance. These checks add no live SQL evidence. Continue through the [full delivery contract](ssms/DELIVERY-CONTRACT.md).
 
 ## Reviewer launch
 

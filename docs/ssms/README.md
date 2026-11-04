@@ -48,4 +48,6 @@ Create an observation ledger keyed by surface ID, SSMS version, installed profil
 
 ## Cursor assignment
 
+The [codebase audit](CODEBASE-AUDIT.md) and [full delivery contract](DELIVERY-CONTRACT.md) supersede the incremental follow-up assignments. Start from the [Cursor entry prompt](CURSOR.md).
+
 Use [parallel feature ownership and TDD](PARALLEL-TDD.md). Keep the existing Mac redesign, data-safety findings, packaging requirements and acceptance journeys in scope. This register expands the coverage contract; it does not approve new infrastructure, Windows connectivity, new vendors, proprietary binaries or a release.

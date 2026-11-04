@@ -8,6 +8,9 @@ source of truth. Update relevant documents in the same PR as behaviour.
 
 | Question | Authoritative document |
 |---|---|
+| What did the independent code review establish? | [Codebase audit](ssms/CODEBASE-AUDIT.md) |
+| What should the Mac app look and feel like? | [Mac experience and screen acceptance](ssms/MAC-EXPERIENCE.md) |
+| What is the complete delivery contract? | [Full implementation and acceptance](ssms/DELIVERY-CONTRACT.md) |
 | How do I run the full implementation in Cursor? | [Cursor setup and paste-ready assignment](ssms/CURSOR.md) |
 | Product, users, boundaries | [Product](PRODUCT.md), [candidate catalogue](FEATURE_CATALOG.csv) |
 | What does the Windows comparator expose, and how is the work distributed? | [Versioned SSMS inventory](ssms/README.md), [parallel feature TDD](ssms/PARALLEL-TDD.md) |

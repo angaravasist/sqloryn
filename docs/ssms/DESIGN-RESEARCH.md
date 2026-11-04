@@ -1,5 +1,7 @@
 # Design research · SQLoryn for Mac
 
+The [Mac experience specification](MAC-EXPERIENCE.md) turns this research into required screens and visual/interaction acceptance. Implement it with the full delivery contract.
+
 56 distinct products reviewed through first-party product pages or documentation on 3 November 2026. This is desk research of documented interactions, published examples and product imagery where available. It is not a hands-on usability test of the competing products. The final column is our design inference. Sources that returned only errors or redirects without usable material were excluded. Database products establish work patterns; Mac developer tools establish interaction conventions; adjacent creative and productivity apps inform particular details only.
 
 | # | Official source | Pattern studied | SQLoryn decision |

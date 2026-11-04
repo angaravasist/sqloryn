@@ -1,5 +1,7 @@
 # One integrated PR, feature-owned tests
 
+The [full delivery contract](DELIVERY-CONTRACT.md) defines the active implementation scope and completion conditions. This document supplies ownership and test patterns.
+
 Start a local Agent session with the [Cursor assignment](CURSOR.md). Cursor is the implementation lead. Continue on the existing feature PR after checking its live head. Deliver working features and documentation together. No sequence of separate milestone PRs or routine per-feature permission requests. Treat the 18 ownership groups in actions.csv as concurrent queues. Use a subagent for each independent feature or closely coupled family as agent capacity permits. Keep one integrator responsible for conflicts, behaviour across families and the final PR. Start unblocked work immediately. Never ship a stub control to satisfy an inventory row.
 
 ## Parallel ownership
