@@ -64,6 +64,64 @@ static class CatalogClient
     public static Task<CatalogListing<SchemaObject>> ListFunctionsAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
         => ListSchemaObjectsAsync(session, MetadataCatalog.ListFunctions(database, schema), schema, ct);
 
+    public static Task<CatalogListing<SchemaObject>> ListSequencesAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
+        => ListSchemaObjectsAsync(session, MetadataCatalog.ListSequences(database, schema), schema, ct);
+
+    public static Task<CatalogListing<SchemaObject>> ListSynonymsAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
+        => ListSchemaObjectsAsync(session, MetadataCatalog.ListSynonyms(database, schema), schema, ct);
+
+    public static Task<CatalogListing<SchemaObject>> ListForeignKeysAsync(SqlSession session, string database, string schema, string table, CancellationToken ct = default)
+        => ListTableObjectsAsync(session, MetadataCatalog.ListForeignKeys(database, schema, table), schema, table, ct);
+
+    public static Task<CatalogListing<SchemaObject>> ListConstraintsAsync(SqlSession session, string database, string schema, string table, CancellationToken ct = default)
+        => ListTableObjectsAsync(session, MetadataCatalog.ListConstraints(database, schema, table), schema, table, ct);
+
+    public static Task<CatalogListing<SchemaObject>> ListTriggersAsync(SqlSession session, string database, string schema, string table, CancellationToken ct = default)
+        => ListTableObjectsAsync(session, MetadataCatalog.ListTriggers(database, schema, table), schema, table, ct);
+
+    static async Task<CatalogListing<SchemaObject>> ListTableObjectsAsync(
+        SqlSession session, string sql, string schema, string table, CancellationToken ct)
+    {
+        var rows = await session.QueryRawAsync(
+            sql,
+            [new EditParameter(MetadataCatalog.SchemaParameter, schema), new EditParameter(MetadataCatalog.TableParameter, table)],
+            MaxItems,
+            ct);
+        return Listing(rows, SchemaObjectCatalog.Parse(rows));
+    }
+
+    /// <summary>
+    /// Object overview for the inspector: bounded column page, primary key columns and key/constraint counts.
+    /// Counts and key columns degrade independently (null/empty) so a partial permission failure is still shown honestly.
+    /// </summary>
+    public static async Task<string> LoadOverviewAsync(
+        SqlSession session, string database, string schema, string table, string kind, CancellationToken ct = default)
+    {
+        var columns = await ListColumnsPageAsync(session, database, schema, table, ct);
+        var overviewColumns = columns.Items
+            .Select(c => new OverviewColumn(c.Name, c.TypeDisplay, c.IsNullable, c.IsIdentity, c.IsComputed)).ToList();
+        var notes = new List<string>();
+        IReadOnlyList<string> pk = [];
+        try { pk = await ListPrimaryKeyAsync(session, database, schema, table, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        { notes.Add(CatalogFailure.From(ex, "primary key").Text); }
+        ObjectCounts? counts = null;
+        try
+        {
+            var rows = await session.QueryRawAsync(
+                MetadataCatalog.TableOverviewCounts(database, schema, table),
+                [new EditParameter(MetadataCatalog.SchemaParameter, schema), new EditParameter(MetadataCatalog.TableParameter, table)],
+                1,
+                ct);
+            counts = ObjectCounts.Parse(rows);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        { notes.Add(CatalogFailure.From(ex, "constraint counts").Text); }
+        var text = ObjectOverviewFormatter.Format(
+            kind, SqlIdentity.Qualify3(database, schema, table), overviewColumns, columns.Truncated, pk, counts);
+        return notes.Count == 0 ? text : text + "\n\n" + string.Join('\n', notes);
+    }
+
     static async Task<CatalogListing<SchemaObject>> ListSchemaObjectsAsync(SqlSession session, string sql, string schema, CancellationToken ct)
     {
         var rows = await session.QueryRawAsync(

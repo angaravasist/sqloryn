@@ -129,6 +129,133 @@ public static class MetadataCatalog
             """;
     }
 
+    // Object-detail listings share one row shape, parsed by SchemaObjectCatalog.Parse:
+    //   schema name, object name, parent (table/view or NULL), type_desc, is_unique, detail text, is_disabled.
+
+    /// <summary>
+    /// Foreign keys on one table; detail is the referenced "schema.table". Requires <see cref="SchemaParameter"/>
+    /// and <see cref="TableParameter"/>.
+    /// </summary>
+    public static string ListForeignKeys(string database, string schema, string table)
+    {
+        RequireName(schema);
+        RequireName(table);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT s.name, f.name, p.name, f.type_desc, CONVERT(bit, 0),
+                   CONVERT(nvarchar(300), rs.name + N'.' + rp.name), f.is_disabled
+            FROM {db}.sys.foreign_keys AS f
+            INNER JOIN {db}.sys.objects AS p ON f.parent_object_id = p.object_id
+            INNER JOIN {db}.sys.schemas AS s ON p.schema_id = s.schema_id
+            INNER JOIN {db}.sys.objects AS rp ON f.referenced_object_id = rp.object_id
+            INNER JOIN {db}.sys.schemas AS rs ON rp.schema_id = rs.schema_id
+            WHERE s.name = {SchemaParameter} AND p.name = {TableParameter}
+            ORDER BY f.name;
+            """;
+    }
+
+    /// <summary>
+    /// CHECK and DEFAULT constraints on one table; detail is the definition text. Requires
+    /// <see cref="SchemaParameter"/> and <see cref="TableParameter"/>.
+    /// </summary>
+    public static string ListConstraints(string database, string schema, string table)
+    {
+        RequireName(schema);
+        RequireName(table);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT s.name, c.name, p.name, c.type_desc, CONVERT(bit, 0), c.definition, c.is_disabled
+            FROM {db}.sys.check_constraints AS c
+            INNER JOIN {db}.sys.objects AS p ON c.parent_object_id = p.object_id
+            INNER JOIN {db}.sys.schemas AS s ON p.schema_id = s.schema_id
+            WHERE s.name = {SchemaParameter} AND p.name = {TableParameter}
+            UNION ALL
+            SELECT s.name, d.name, p.name, d.type_desc, CONVERT(bit, 0), d.definition, CONVERT(bit, 0)
+            FROM {db}.sys.default_constraints AS d
+            INNER JOIN {db}.sys.objects AS p ON d.parent_object_id = p.object_id
+            INNER JOIN {db}.sys.schemas AS s ON p.schema_id = s.schema_id
+            WHERE s.name = {SchemaParameter} AND p.name = {TableParameter}
+            ORDER BY 4, 2;
+            """;
+    }
+
+    /// <summary>
+    /// DML triggers on one table or view; detail is AFTER or INSTEAD OF. Database-scoped DDL triggers are excluded.
+    /// Requires <see cref="SchemaParameter"/> and <see cref="TableParameter"/>.
+    /// </summary>
+    public static string ListTriggers(string database, string schema, string table)
+    {
+        RequireName(schema);
+        RequireName(table);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT s.name, t.name, p.name, t.type_desc, CONVERT(bit, 0),
+                   CASE WHEN t.is_instead_of_trigger = 1 THEN N'INSTEAD OF' ELSE N'AFTER' END, t.is_disabled
+            FROM {db}.sys.triggers AS t
+            INNER JOIN {db}.sys.objects AS p ON t.parent_id = p.object_id
+            INNER JOIN {db}.sys.schemas AS s ON p.schema_id = s.schema_id
+            WHERE t.parent_class = 1 AND s.name = {SchemaParameter} AND p.name = {TableParameter}
+            ORDER BY t.name;
+            """;
+    }
+
+    /// <summary>Sequences in a schema; detail is "type · start N · increment N". Requires <see cref="SchemaParameter"/>.</summary>
+    public static string ListSequences(string database, string schema)
+    {
+        RequireName(schema);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT s.name, q.name, CONVERT(nvarchar(128), NULL), q.type_desc, CONVERT(bit, 0),
+                   CONVERT(nvarchar(300), t.name + N' · start ' + CONVERT(nvarchar(40), q.start_value) +
+                       N' · increment ' + CONVERT(nvarchar(40), q.increment)),
+                   CONVERT(bit, 0)
+            FROM {db}.sys.sequences AS q
+            INNER JOIN {db}.sys.schemas AS s ON q.schema_id = s.schema_id
+            INNER JOIN {db}.sys.types AS t ON q.user_type_id = t.user_type_id
+            WHERE s.name = {SchemaParameter} AND q.is_ms_shipped = 0
+            ORDER BY q.name;
+            """;
+    }
+
+    /// <summary>Synonyms in a schema; detail is the base object name. Requires <see cref="SchemaParameter"/>.</summary>
+    public static string ListSynonyms(string database, string schema)
+    {
+        RequireName(schema);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT s.name, y.name, CONVERT(nvarchar(128), NULL), y.type_desc, CONVERT(bit, 0), y.base_object_name, CONVERT(bit, 0)
+            FROM {db}.sys.synonyms AS y
+            INNER JOIN {db}.sys.schemas AS s ON y.schema_id = s.schema_id
+            WHERE s.name = {SchemaParameter} AND y.is_ms_shipped = 0
+            ORDER BY y.name;
+            """;
+    }
+
+    /// <summary>
+    /// One row of counts for the object overview: primary keys, unique constraints, foreign keys, check constraints,
+    /// default constraints, triggers, named indexes. Requires <see cref="SchemaParameter"/> and <see cref="TableParameter"/>.
+    /// </summary>
+    public static string TableOverviewCounts(string database, string schema, string table)
+    {
+        RequireName(schema);
+        RequireName(table);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT
+              (SELECT CONVERT(int, COUNT(*)) FROM {db}.sys.key_constraints AS k WHERE k.parent_object_id = o.object_id AND k.type = 'PK'),
+              (SELECT CONVERT(int, COUNT(*)) FROM {db}.sys.key_constraints AS k WHERE k.parent_object_id = o.object_id AND k.type = 'UQ'),
+              (SELECT CONVERT(int, COUNT(*)) FROM {db}.sys.foreign_keys AS f WHERE f.parent_object_id = o.object_id),
+              (SELECT CONVERT(int, COUNT(*)) FROM {db}.sys.check_constraints AS c WHERE c.parent_object_id = o.object_id),
+              (SELECT CONVERT(int, COUNT(*)) FROM {db}.sys.default_constraints AS d WHERE d.parent_object_id = o.object_id),
+              (SELECT CONVERT(int, COUNT(*)) FROM {db}.sys.triggers AS t WHERE t.parent_id = o.object_id AND t.parent_class = 1),
+              (SELECT CONVERT(int, COUNT(*)) FROM {db}.sys.indexes AS i
+                 WHERE i.object_id = o.object_id AND i.index_id > 0 AND i.name IS NOT NULL AND i.is_hypothetical = 0)
+            FROM {db}.sys.objects AS o
+            INNER JOIN {db}.sys.schemas AS s ON o.schema_id = s.schema_id
+            WHERE s.name = {SchemaParameter} AND o.name = {TableParameter} AND o.type IN ('U', 'V');
+            """;
+    }
+
     /// <summary>
     /// Columns: name, type name, is_nullable, is_identity, max length in characters (-1 = MAX), precision, scale, is_computed.
     /// Requires <see cref="SchemaParameter"/> and <see cref="TableParameter"/>.
