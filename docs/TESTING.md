@@ -44,6 +44,45 @@ dotnet build SQLoryn.slnx --configuration Release
 python3 scripts/run_sql_probe.py --accept-sql-server-license
 ```
 
+### Probe alone is not Core acceptance
+
+`SqlClientProbe` proves transport, TLS pinning and the SqlClient/server pairing.
+It does **not** exercise `Sqloryn.Core`, so a green probe alone cannot close any
+Core finding (date/money materialisation, export fidelity, DDL, edit conflicts,
+SHOWPLAN). After the probe passes, `run_sql_probe.py` runs
+`tests/Sqloryn.Core.SqlAcceptance` against the **same** disposable instance (a
+probe failure stops the run before this step; both local and PROBE-11 SSH-tunnel
+modes do this, and neither is relaxed). Stable lines: `PASS`/`SKIP`/`FAIL CORE-*`
+and `CORE-ACCEPTANCE COMPLETE pass=N skip=M fail=K`. The runner rejects a run
+with no summary, any `fail`, fewer than 5 passes, or a skip other than
+`CORE-PLAN-DENIED` (server refused to create a restricted login).
+
+Checks use one uniquely named synthetic schema that is dropped afterwards:
+`CORE-MATERIALISE` (date, money, smallmoney: NULL, negative, fractional, extremes),
+`CORE-EXPORT` (CSV and JSON from `ResultSetView.FromResultSet`),
+`CORE-DESIGN-PK` (`TableDesignSql.PreviewCreate` + execute; second connection
+verifies columns and composite PK), `CORE-EDIT-CONFLICT` (two sessions: CI-collation
+case change conflicts through the BIN2 predicate, fresh edit commits, two-row
+batch rolls back), `CORE-PLAN-INSERT` and `CORE-PLAN-DENIED` (`EstimatePlanAsync`
+INSERT writes no row; denied login via `DENY SHOWPLAN`).
+
+Manual run against an instance you already own (disposable, synthetic data only;
+encryption is mandatory; set `SQLORYN_ACCEPTANCE_CERT` *or*
+`SQLORYN_ACCEPTANCE_TRUST=1`, never both). With none of the variables set it
+prints `SKIP CORE-ACCEPTANCE …` and exits 0, which is **not** evidence; a
+partial set exits 2:
+
+```sh
+export SQLORYN_ACCEPTANCE_SERVER=127.0.0.1 SQLORYN_ACCEPTANCE_PORT=<port> \
+  SQLORYN_ACCEPTANCE_USER=<admin> SQLORYN_ACCEPTANCE_DATABASE=<db> \
+  SQLORYN_ACCEPTANCE_CERT=/path/to/server.crt
+read -rs SQLORYN_ACCEPTANCE_PASSWORD && export SQLORYN_ACCEPTANCE_PASSWORD
+dotnet run --project tests/Sqloryn.Core.SqlAcceptance -c Release --no-build
+```
+
+The login needs CREATE SCHEMA in the database; `CORE-PLAN-DENIED` also needs
+CREATE LOGIN (otherwise it SKIPs with a reason).
+
 Optional PROBE-11 remote mode (maintainer-approved host only). Requires an
 existing known_hosts file with the verified host key. Optional
 `--ssh-identity-file` selects a dedicated private key for every SSH/SCP/tunnel

@@ -14,6 +14,13 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "experiments/SqlClientProbe/bin/Release/net10.0/SqlClientProbe.dll"
+CORE_ACCEPTANCE_PROJECT = ROOT / "tests/Sqloryn.Core.SqlAcceptance/Sqloryn.Core.SqlAcceptance.csproj"
+CORE_ACCEPTANCE = ROOT / "tests/Sqloryn.Core.SqlAcceptance/bin/Release/net10.0/Sqloryn.Core.SqlAcceptance.dll"
+# A green SqlClientProbe alone never closes Core findings; at least this many Core checks must PASS.
+CORE_ACCEPTANCE_MIN_PASS = 5
+# The only case that may SKIP (server refuses to create a restricted login); anything else is a failure.
+CORE_ACCEPTANCE_ALLOWED_SKIPS = {"CORE-PLAN-DENIED"}
+CORE_ACCEPTANCE_COMPLETE_RE = re.compile(r"\ACORE-ACCEPTANCE COMPLETE pass=(\d+) skip=(\d+) fail=(\d+)\Z")
 REMOTE_HELPER = Path(__file__).resolve().parent / "sql_probe_remote_helper.py"
 # SQL Server 2022 CU27 GDR1, Ubuntu 22.04; resolved from MCR on 2026-10-31.
 IMAGE = "mcr.microsoft.com/mssql/server@sha256:cf8f0ab2ebe61feec2eed2629061a07d247f791c2a8ddda74a4ac9f06a291718"
@@ -336,9 +343,79 @@ def invoke_probe(port, expected_server, certificate, wrong_certificate, password
         raise ProbeError("SQL acceptance suite failed; no compatibility claim is valid.")
 
 
-def execute_local():
-    if not PROBE.is_file():
+def core_acceptance_environment(port, certificate, password, base=None):
+    """Connection settings for the Core acceptance executable. Secrets live only in this child's environment."""
+    env = {k: v for k, v in (os.environ if base is None else base).items()
+           if not k.startswith("SQLORYN_ACCEPTANCE_")}
+    env.update({
+        "SQLORYN_ACCEPTANCE_SERVER": "127.0.0.1",
+        "SQLORYN_ACCEPTANCE_PORT": str(port),
+        "SQLORYN_ACCEPTANCE_USER": "sa",
+        "SQLORYN_ACCEPTANCE_PASSWORD": password,
+        "SQLORYN_ACCEPTANCE_DATABASE": "master",
+        "SQLORYN_ACCEPTANCE_CERT": str(certificate),
+        "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+    })
+    return env
+
+
+def check_core_acceptance_output(stdout):
+    """Pure verdict for the acceptance transcript; a missing/partial/skipped run is never success."""
+    complete = None
+    skipped = []
+    for line in stdout.splitlines():
+        if line.startswith("SKIP CORE-ACCEPTANCE "):
+            raise ProbeError("Core acceptance was skipped; probe alone does not close Core findings.")
+        if line.startswith("SKIP CORE-"):
+            skipped.append(line.split()[1])
+        matched = CORE_ACCEPTANCE_COMPLETE_RE.match(line)
+        if matched:
+            complete = tuple(int(group) for group in matched.groups())
+    if complete is None:
+        raise ProbeError("Core acceptance produced no completion summary; no Core claim is valid.")
+    passed, _skipped, failed = complete
+    if failed:
+        raise ProbeError("Core acceptance reported failures; no Core claim is valid.")
+    if passed < CORE_ACCEPTANCE_MIN_PASS:
+        raise ProbeError("Core acceptance passed too few checks; no Core claim is valid.")
+    if not set(skipped) <= CORE_ACCEPTANCE_ALLOWED_SKIPS:
+        raise ProbeError("Core acceptance skipped an unexpected check; no Core claim is valid.")
+    return complete
+
+
+def invoke_core_acceptance(port, certificate, password):
+    """Run Sqloryn.Core live checks against the same disposable instance (after PROBE passed)."""
+    if not CORE_ACCEPTANCE.is_file():
+        raise ProbeError("Build the Release configuration first (Core acceptance project missing); see docs/TESTING.md.")
+    result = subprocess.run(
+        ["dotnet", "run", "--project", str(CORE_ACCEPTANCE_PROJECT), "-c", "Release", "--no-build"],
+        cwd=ROOT, env=core_acceptance_environment(port, certificate, password),
+        text=True, capture_output=True, timeout=330)
+    for line in result.stdout.splitlines():
+        if line.startswith(("PASS CORE-", "SKIP CORE-", "CORE-ACCEPTANCE COMPLETE", "Core acceptance target:")):
+            print(line)
+    if result.returncode:
+        for line in result.stderr.splitlines():
+            if line.startswith("FAIL CORE-"):
+                print(line, file=sys.stderr)
+        raise ProbeError("Core SQL acceptance failed; no Core claim is valid.")
+    check_core_acceptance_output(result.stdout)
+
+
+def run_sql_acceptance(port, expected_server, certificate, wrong_certificate, password):
+    """Probe first (a failure stops here), then the Core acceptance on the same instance."""
+    invoke_probe(port, expected_server, certificate, wrong_certificate, password)
+    invoke_core_acceptance(port, certificate, password)
+
+
+def require_acceptance_builds():
+    """Fail before creating any resource when either acceptance executable is not built."""
+    if not PROBE.is_file() or not CORE_ACCEPTANCE.is_file():
         raise ProbeError("Build the Release configuration first; see docs/TESTING.md.")
+
+
+def execute_local():
+    require_acceptance_builds()
     endpoint = os.environ.get("DOCKER_HOST") or run(
         ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"])
     info = json.loads(run(["docker", "info", "--format", "{{json .}}"]))
@@ -381,7 +458,7 @@ def execute_local():
             bindings = json.loads(run(["docker", "inspect", "--format", '{{json (index .NetworkSettings.Ports "1433/tcp")}}', name]))
             port = published_port(bindings)
             print(f"Image: {IMAGE}", flush=True)
-            invoke_probe(port, name, certs / "server.crt", certs / "wrong.crt", password)
+            run_sql_acceptance(port, name, certs / "server.crt", certs / "wrong.crt", password)
         finally:
             cleanup(name)
     print("PASS PROBE-10 disposable container/network and temporary files removed.")
@@ -426,8 +503,7 @@ def require_remote_helper_present(user, host, known_hosts, name, identity_file=N
 
 
 def execute_ssh(destination, known_hosts, identity_file=None):
-    if not PROBE.is_file():
-        raise ProbeError("Build the Release configuration first; see docs/TESTING.md.")
+    require_acceptance_builds()
     if not REMOTE_HELPER.is_file():
         raise ProbeError("Missing remote helper script.")
     user, host = parse_ssh_destination(destination)
@@ -487,7 +563,7 @@ def execute_ssh(destination, known_hosts, identity_file=None):
                 user, host, known_hosts_path, local_port, remote_port, identity_file=identity_path)
             print(f"Image: {IMAGE}", flush=True)
             print(f"Transport: ssh-loopback local={local_port} remote={remote_port}", flush=True)
-            invoke_probe(local_port, name, server_cert, wrong_cert, password)
+            run_sql_acceptance(local_port, name, server_cert, wrong_cert, password)
     finally:
         if helper_ready or tunnel is not None:
             remote_cleanup(user, host, known_hosts_path, name, tunnel, identity_file=identity_path)
