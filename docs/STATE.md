@@ -2,6 +2,23 @@
 
 Owner: SQLoryn maintainer. Reviewed: 2026-11-04. Experimental; no release support.
 
+## Live Linux Core evidence on 0af9108 — 4 November 2026
+
+The disposable SQL integration job passed on SQL Server 16.0.4305.5 Developer edition, on a GitHub-hosted Linux x64 runner. All six named Core scenarios passed with zero skips and zero failures. The transport probe also passed, and PROBE-10 verified removal of its container, network and temporary files. [Run 41793052872](https://github.com/angaravasist/sqloryn/actions/runs/41793052872)
+
+The same workflow completed successfully for Linux, Mac arm64 and Mac Intel component jobs and repository safeguards. Mac component success does not imply live Mac SQL or native UI acceptance.
+
+| Scenario | Observed result |
+|---|---|
+| CORE-MATERIALISE | date/money/smallmoney, NULL, negative, fractional and extreme values passed |
+| CORE-EXPORT | Materialised values preserved in CSV and JSON |
+| CORE-DESIGN-PK | Generated CREATE TABLE and composite PK observed independently |
+| CORE-EDIT-CONFLICT | Case-only conflict refused, fresh update committed, second-row conflict rolled back first write |
+| CORE-PLAN-INSERT | Estimated INSERT returned a plan and inserted no row |
+| CORE-PLAN-DENIED | Restricted-principal estimate denied and inserted no row |
+
+This supersedes older statements that no live Core run exists, for these scenarios on this Linux target only. New CSV import, transactional designer alteration, insert/delete, security changes, backup/restore, Agent, time/GUID and native Mac paths require additional scenarios/evidence. No native Mac SQL qualification or full-workflow acceptance is implied.
+
 ## Active assignment
 
 [Delivery contract](ssms/DELIVERY-CONTRACT.md) + [Mac experience](ssms/MAC-EXPERIENCE.md) supersede incremental follow-ups ([audit](ssms/CODEBASE-AUDIT.md), [queue](ssms/DELIVERY-QUEUE.md), [CAP evidence](ssms/CAP_EVIDENCE.csv)). Draft PR #7 remains the single integration PR.
@@ -9,14 +26,14 @@ Owner: SQLoryn maintainer. Reviewed: 2026-11-04. Experimental; no release suppor
 ## Work under review
 
 Branch `codex/macos-database-studio` — Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
-WS7-T1 security (worktree `ws7-security`, not yet merged): `SecurityTests` named assertions PASS with fakes; no live restricted-principal evidence. Full delivery contract active. Tip merges WS1–WS12 component workstreams (connections, explorer, editor, types, schema/edit, import, security, ops, Agent/plans, HA/BI gates, Mac shell/packaging). **Not product-complete:** live SQL, screenshots/VoiceOver, Entra, multi-node HA, BI services, signing, and remaining CAP rows stay open.
+Full delivery contract active on tip after WS1–WS12 merges. **Not product-complete:** expanded live scenarios beyond the six on `0af9108`, native Mac SQL/UI acceptance, Entra, multi-node HA, BI services, signing, and remaining CAP rows stay open.
 
 ## Hosted checks
 
 | Tip | Result |
 |---|---|
 | `06bc2ad` | probe-components ×3 PASS · repo-safeguards PASS · CodeQL PASS · sql-integration SKIPPED — [components](https://github.com/angaravasist/sqloryn/actions/runs/41750374026) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41750368912) |
-| post-WS12 tip | pending after this push |
+| `0af9108` | probe-components ×3 PASS · repo-safeguards PASS · CodeQL PASS · **sql-integration PASS** (six CORE scenarios, cleanup) — [run 41793052872](https://github.com/angaravasist/sqloryn/actions/runs/41793052872) |
 
 ## PR #7 finding dispositions
 
@@ -48,22 +65,19 @@ WS7-T1 security (worktree `ws7-security`, not yet merged): `SecurityTests` named
 | Python tests | **51 OK** |
 | `repo_preflight.py` | PASS |
 | `bash scripts/build_macos_app.sh` | arm64 FD `.app` + [provenance](evidence/package-arm64.md) |
-| Launch / screenshots | **Blocked** — Screen Recording denied; agent-shell Avalonia RenderTimer `-6661` on direct exec |
-| Live disposable SQL / eight journeys | **Not run** — CORE harness present; offline journey ledger in [JOURNEY_EVIDENCE](ssms/JOURNEY_EVIDENCE.md) |
+| Launch / screenshots | Screen Recording **denied** (rechecked); Accessibility **available**. Agent-shell Avalonia RenderTimer `-6661` on direct exec; prefer `open` + AX tree over claiming universal screenshot block |
+| Live disposable SQL (Linux) | **PASS on 0af9108** for the six scenarios listed above — [run 41793052872](https://github.com/angaravasist/sqloryn/actions/runs/41793052872). Expanded scenarios for this wave (CSV fidelity, design apply, insert/delete, security, backup, time/GUID) are in progress. Offline journey ledger: [JOURNEY_EVIDENCE](ssms/JOURNEY_EVIDENCE.md) |
+| Native Mac SQL / screenshots | **Not accepted** — Screen Recording still denied; AX available. Linux live evidence ≠ Mac native |
 | Windows SSH product path | **Closed** |
 
 ## Core SQL acceptance harness
 
 `tests/Sqloryn.Core.SqlAcceptance` runs after a passing `SqlClientProbe` inside
-`scripts/run_sql_probe.py` (same licence gate, same disposable instance, local and
-SSH modes). **A green probe alone is not Core acceptance** and closes no Core
-finding. Added here, but **not yet run against a live SQL Server** (no Docker
-engine in the authoring environment): findings 3 (live collation/transaction),
-6, 15 and S-2 (live date/money reads) stay open until a `CORE-*` transcript from a
-real run is recorded. S-2 is fixed in `ResultMaterializer` and fixture-tested, so
-`CORE-MATERIALISE` / `CORE-EXPORT` are no longer expected to fail on the missing
-`date`/`money` handling, but that expectation is a prediction, not evidence: no
-acceptance transcript exists yet.
+`scripts/run_sql_probe.py` (same licence gate, same disposable instance). **A green
+probe alone is not Core acceptance.** Linux evidence on `0af9108` closed the six
+named scenarios in the table above only. Expand the harness for CSV fidelity,
+transactional schema apply, insert/delete, security, backup/restore, time/GUID
+and Agent before treating those as live-verified.
 
 ## Independent review on 4 November 2026
 
@@ -83,9 +97,10 @@ open artifacts/macos/osx-arm64/SQLoryn.app
 ## Result type coverage (S-2)
 
 `date` (ISO `yyyy-MM-dd`), `money` and `smallmoney` (four fractional digits via `SqlMoney`, invariant, sign preserved)
-are materialised by `ResultMaterializer` and covered by fixture tests (`s2-date-money-types`). Live `SqlDataReader`
-behaviour against SQL Server for these types is not yet evidenced; `time`, `uniqueidentifier`, `sql_variant` etc.
-remain unsupported (throw `NotSupportedException`).
+are materialised by `ResultMaterializer` and covered by fixtures (`s2-date-money-types`) **and** live Linux
+`CORE-MATERIALISE` / `CORE-EXPORT` on `0af9108`. `time` and `uniqueidentifier` have component fixtures (`ws4-*`);
+live reader evidence for those types is still pending. `sql_variant` and other unhandled types still throw
+`NotSupportedException`.
 
 ## WS1-T1 connections (component-verified only)
 
