@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     bool _closeApproved;
     bool _closePromptInFlight;
     long _treeLoadGeneration;
+    bool _suppressDatabaseChoice;
 
     public MainWindow()
     {
@@ -248,6 +249,8 @@ public partial class MainWindow : Window
         DisconnectButton.IsEnabled = connected && !executing;
         DisconnectButton.IsVisible = connected;
         RunButton.IsEnabled = connected && !executing;
+        RunBatchButton.IsEnabled = connected && !executing;
+        DatabaseBox.IsEnabled = connected && !executing && !tab.Session.TargetUnknown;
         CancelButton.IsEnabled = executing;
         CancelButton.IsVisible = executing;
         // Export is only offered once there is something to export.
@@ -394,6 +397,7 @@ public partial class MainWindow : Window
         if (ReferenceEquals(_active, tab))
         {
             _explorer.Clear();
+            SetDatabaseChoices(tab, []);
             UpdateStatus();
         }
     }
@@ -404,82 +408,7 @@ public partial class MainWindow : Window
             return;
         var tab = _active;
         CaptureSelection();
-        var sql = tab.BatchToRun;
-        var origin = tab.BatchOrigin;
-        if (string.IsNullOrWhiteSpace(sql))
-        {
-            StatusBar.Text = "Nothing to run.";
-            return;
-        }
-        if (!tab.Session.IsConnected)
-        {
-            StatusBar.Text = "Connect before running SQL.";
-            return;
-        }
-        if (tab.Session.TargetUnknown)
-        {
-            StatusBar.Text =
-                "Database target unknown after a prior batch. Reconnect or revalidate before running. SQL is never replayed.";
-            return;
-        }
-        if (tab.IsExecuting || tab.Session.HasActiveCommand || !tab.TryBeginRun())
-        {
-            StatusBar.Text = "A command is already running on this tab. Use Cancel; Run will not queue or replay SQL.";
-            return;
-        }
-
-        tab.RunCts = new CancellationTokenSource();
-        var cts = tab.RunCts;
-        var binding = tab.CaptureBinding();
-        tab.Status = "Running…";
-        if (ReferenceEquals(_active, tab))
-            UpdateStatus();
-        try
-        {
-            var result = await tab.Session.ExecuteAsync(sql, origin, cts.Token);
-            if (!OwnerStillCurrent(tab, binding))
-                return;
-            tab.LastResult = result;
-            tab.Status = QueryOutcomeFormatter.DescribeStatus(result);
-            var affected = QueryOutcomeFormatter.DescribeRowsAffected(result.RowsAffected);
-            var elapsed = QueryOutcomeFormatter.DescribeClientElapsed(result.ClientElapsedMilliseconds);
-            if (affected.Length > 0)
-                tab.Status += " · " + affected;
-            if (elapsed.Length > 0)
-                tab.Status += " · " + elapsed;
-            if (ReferenceEquals(_active, tab))
-            {
-                RenderResult(result);
-                UpdateStatus();
-            }
-        }
-        catch (Exception ex)
-        {
-            if (!OwnerStillCurrent(tab, binding))
-                return;
-            tab.Status = "Run failed";
-            if (ReferenceEquals(_active, tab))
-            {
-                _lastError = ex.Message;
-                MessagesBox.Text = SafeUi(ex.Message);
-                SetResultsVisible(true);
-                ShowMessagesTab();
-                UpdateStatus();
-                StatusBar.Text = SafeUi(ex.Message);
-            }
-            else
-            {
-                _lastError = ex.Message;
-            }
-        }
-        finally
-        {
-            tab.EndRun();
-            if (ReferenceEquals(tab.RunCts, cts))
-                tab.RunCts = null;
-            if (ReferenceEquals(_active, tab))
-                UpdateStatus();
-        }
+        await ExecuteOnTabAsync(tab, tab.BatchToRun, tab.BatchOrigin);
     }
 
     /// <summary>
@@ -933,6 +862,8 @@ public partial class MainWindow : Window
         if (!ReferenceEquals(_active, tab))
             return;
         _explorer.Clear();
+        SetDatabaseChoices(tab, []);
+        DatabaseBox.PlaceholderText = tab.Session.IsConnected ? "Loading databases…" : "Database";
         PropertiesBox.Text = "";
         SetPropertiesVisible(false);
         if (!tab.Session.IsConnected)
@@ -944,6 +875,7 @@ public partial class MainWindow : Window
                 !ReferenceEquals(tab.Session, binding.SessionKey))
                 return;
             _explorer.SetRoots(names.Select(n => ExplorerController.WithPlaceholder(new ExplorerNode(n, "database", database: n))));
+            SetDatabaseChoices(tab, names);
             if (names.Count == 0)
                 StatusBar.Text = "Object explorer: no accessible databases.";
         }

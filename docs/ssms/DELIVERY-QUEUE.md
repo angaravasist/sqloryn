@@ -36,11 +36,11 @@ Outside the sandbox, `AXIsProcessTrusted` is true for this agent process and `CG
 
 ## Where to start next
 
-CSV fidelity trio is merged (done-component). CAP-084, CAP-075, CAP-087, CAP-099 and CAP-014 are done-component (component tests only; no live SQL and no native screenshot). Next open work is LIVE-WAVE disposable Linux evidence and the remaining ready rows. Retained-row filter (CAP-098) and last-batch transaction label (CAP-059 label) landed with queue-mac; transaction commands are not added.
+CSV fidelity trio is merged (done-component). CAP-084, CAP-075, CAP-087, CAP-099, CAP-014, CAP-040, CAP-054, CAP-060 and CAP-071 are done-component (component tests only; no live SQL and no native screenshot). Next open work is LIVE-WAVE disposable Linux evidence and the remaining ready rows. Retained-row filter (CAP-098) and last-batch transaction label (CAP-059 label) landed with queue-mac; transaction commands are not added.
 
 ## Inventory
 
-191 inventory rows, plus the 4 integrator rows above (CSV trio done-component; LIVE-WAVE active/partial). CAP-122 is those CSV rows, not another importer. Inventory counts: alias 1, blocked 12, done-component 76, gated-incomplete 10, partial 24, ready 71, active/partial 1.
+191 inventory rows, plus the 4 integrator rows above (CSV trio done-component; LIVE-WAVE active/partial). CAP-122 is those CSV rows, not another importer. Inventory counts: alias 1, blocked 12, done-component 80, gated-incomplete 10, partial 22, ready 69, active/partial 1.
 
 | ID | Workstream | Task | Status | Blocker |
 |---|---|---|---|---|
@@ -83,7 +83,7 @@ CSV fidelity trio is merged (done-component). CAP-084, CAP-075, CAP-087, CAP-099
 | CAP-037 | Operations | Server management object tree | ready | — |
 | CAP-038 | Explorer | Expand/collapse lazily. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-039 | Explorer | Search objects that are not loaded yet. The filter box matches loaded labels only. | partial | — |
-| CAP-040 | Explorer | Refresh individual subtree | ready | — |
+| CAP-040 | Explorer | Refresh the selected Object Explorer database or folder without reloading the rest of the tree. Full Refresh remains. Component present. | done-component | — |
 | CAP-041 | Explorer | Object Explorer Details pane. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-042 | Explorer | Context menu scripting. Further scripting or design is CAP-115 only. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-043 | Explorer | Object properties | ready | — |
@@ -97,13 +97,13 @@ CSV fidelity trio is merged (done-component). CAP-084, CAP-075, CAP-087, CAP-099
 | CAP-051 | Editor | Find and replace. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-052 | Editor | Line/column navigation. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-053 | Editor | Snippets and templates | ready | — |
-| CAP-054 | Engine | Query options such as ANSI settings. Connect-timeout UI is CAP-014 and command timeout is CAP-069; do not rebuild those. | ready | — |
+| CAP-054 | Engine | Session ANSI settings (ANSI_NULLS, ANSI_PADDING, QUOTED_IDENTIFIER, ARITHABORT) with preview and apply. Not the full SSMS Options dialog. Connect timeout stays CAP-014 and command timeout stays CAP-069. Component present. | done-component | — |
 | CAP-055 | Engine | Selected-text execution. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-056 | Engine | Full document execution. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-057 | Engine | GO batch separator handling. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-058 | Engine | SQLCMD directives where applicable. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-059 | Engine | Begin, commit and rollback commands with confirmation. The header shows last-batch XACT_STATE and does not run those commands. | partial | — |
-| CAP-060 | Engine | Choose another database on the active tab without typing the login again. Each tab already has its own session. | partial | — |
+| CAP-060 | Engine | Choose another database on the active tab from the catalog without re-entering the login. Other tabs keep their sessions. Component present. | done-component | — |
 | CAP-061 | Editor | Keyboard shortcuts. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-062 | Editor | Editor formatting | ready | — |
 | CAP-063 | Deploy,Editor | SQL project/source association | ready | — |
@@ -114,7 +114,7 @@ CSV fidelity trio is merged (done-component). CAP-084, CAP-075, CAP-087, CAP-099
 | CAP-068 | Engine | Query cancellation. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-069 | Engine | Command timeout. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-070 | Engine | Connection timeout during execution. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
-| CAP-071 | Engine | Run one chosen GO batch. Sequential GO execution already exists. | partial | — |
+| CAP-071 | Engine | Run the GO batch under the caret or selection once. Sequential GO execution remains. Component present. | done-component | — |
 | CAP-072 | Results | Multiple result sets. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-073 | Results | Informational messages. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-074 | Engine | SQL errors and line numbers. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |

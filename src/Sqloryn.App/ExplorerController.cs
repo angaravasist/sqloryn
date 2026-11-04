@@ -58,6 +58,21 @@ sealed class ExplorerController(Func<QueryTab, OperationBinding, bool> isCurrent
     static ExplorerNode Placeholder(ExplorerNode owner, string title = "…", string? info = null)
         => new(title, "placeholder", owner.Database, owner.Schema, owner.ObjectName) { Info = info };
 
+    /// <summary>
+    /// Drops the selected node's loaded descendants so the next expansion reloads that subtree only.
+    /// Parents and siblings stay loaded.
+    /// </summary>
+    public void InvalidateSubtree(ExplorerNode node)
+    {
+        ExplorerSubtree.Invalidate(node, n => n.Children, n =>
+        {
+            n.Loaded = false;
+            n.Loading = false;
+        });
+        node.Info = null;
+        SetChildren(node, [Placeholder(node)]);
+    }
+
     /// <summary>Collapses a node back to its unloaded state so the next expansion reloads it.</summary>
     public void Reset(ExplorerNode node)
     {

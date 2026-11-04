@@ -5,7 +5,7 @@ using Microsoft.Data.SqlClient;
 namespace Sqloryn.Core;
 
 /// <summary>Owns one SQL connection for a workspace tab. No pooling, no automatic replay.</summary>
-public sealed class SqlSession : IAsyncDisposable
+public sealed class SqlSession : IAsyncDisposable, IDatabaseSession
 {
     readonly SemaphoreSlim _gate = new(1, 1);
     SqlConnection? _connection;
