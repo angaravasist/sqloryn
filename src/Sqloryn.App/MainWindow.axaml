@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Sqloryn"
         x:Class="Sqloryn.MainWindow"
         Title="SQLoryn"
         Width="1180" Height="740"
@@ -54,7 +55,7 @@
       </Grid.ColumnDefinitions>
 
       <!-- Object Explorer -->
-      <Grid Name="Sidebar" Grid.Column="0" RowDefinitions="Auto,*,Auto,Auto">
+      <Grid Name="Sidebar" Grid.Column="0" RowDefinitions="Auto,Auto,*,Auto,Auto">
         <Border Grid.Row="0" Classes="sectionhead">
           <DockPanel>
             <Button DockPanel.Dock="Right" Name="RefreshTreeButton" Classes="tool" Padding="8,2" Content="Refresh"
@@ -62,11 +63,24 @@
             <TextBlock Classes="caption" Text="OBJECT EXPLORER" VerticalAlignment="Center" />
           </DockPanel>
         </Border>
-        <TreeView Grid.Row="1" Name="ObjectTree" Margin="4,4,0,0"
+        <!-- Client-side filter over the loaded tree labels (no SQL). -->
+        <DockPanel Grid.Row="1" Margin="6,6,6,0">
+          <Button DockPanel.Dock="Right" Name="ExplorerFilterClear" Classes="tool" Padding="8,2" Content="Clear"
+                  IsVisible="False" Click="OnClearExplorerFilter" AutomationProperties.Name="Clear object explorer filter" />
+          <TextBox Name="ExplorerFilterBox" PlaceholderText="Filter loaded objects"
+                   TextChanged="OnExplorerFilterChanged" AutomationProperties.Name="Filter object explorer"
+                   ToolTip.Tip="Filters the labels of nodes you have already expanded" />
+        </DockPanel>
+        <TreeView Grid.Row="2" Name="ObjectTree" Margin="4,4,0,0"
                   AutomationProperties.Name="Object explorer"
                   DoubleTapped="OnObjectDoubleTapped"
                   KeyDown="OnObjectKeyDown"
                   SelectionChanged="OnTreeSelectionChanged">
+          <TreeView.Styles>
+            <Style Selector="TreeViewItem" x:DataType="local:ExplorerNode">
+              <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+            </Style>
+          </TreeView.Styles>
           <TreeView.ContextMenu>
             <ContextMenu>
               <MenuItem Header="Expand" Click="OnExpandSelected" />
@@ -78,17 +92,20 @@
             </ContextMenu>
           </TreeView.ContextMenu>
         </TreeView>
-        <TextBlock Grid.Row="1" Name="ExplorerHint" Classes="muted" TextWrapping="Wrap" Margin="14,12"
+        <TextBlock Grid.Row="2" Name="ExplorerFilterEmpty" Classes="muted" TextWrapping="Wrap" Margin="14,12"
+                   VerticalAlignment="Top" IsVisible="False"
+                   AutomationProperties.Name="Object explorer filter has no matches" />
+        <TextBlock Grid.Row="2" Name="ExplorerHint" Classes="muted" TextWrapping="Wrap" Margin="14,12"
                    VerticalAlignment="Top"
                    Text="Not connected. Choose Connect to browse databases." />
         <!-- Properties appear only once an object is selected. -->
-        <Border Grid.Row="2" Name="PropertiesHeader" Classes="sectionhead" BorderThickness="0,1,0,1" IsVisible="False">
-          <TextBlock Classes="caption" Text="PROPERTIES" />
+        <Border Grid.Row="3" Name="PropertiesHeader" Classes="sectionhead" BorderThickness="0,1,0,1" IsVisible="False">
+          <TextBlock Name="PropertiesTitle" Classes="caption" Text="PROPERTIES" />
         </Border>
-        <TextBox Grid.Row="3" Name="PropertiesBox" Classes="mono" IsReadOnly="True" AcceptsReturn="True"
-                 TextWrapping="Wrap" Height="150" FontSize="12" BorderThickness="0" CornerRadius="0"
+        <TextBox Grid.Row="4" Name="PropertiesBox" Classes="mono" IsReadOnly="True" AcceptsReturn="True"
+                 TextWrapping="Wrap" Height="190" FontSize="12" BorderThickness="0" CornerRadius="0"
                  Background="Transparent" IsVisible="False"
-                 AutomationProperties.Name="Selected object properties" />
+                 AutomationProperties.Name="Selected object properties and overview" />
       </Grid>
 
       <GridSplitter Grid.Column="1" Name="SidebarSplitter" Width="4" Background="{DynamicResource Sq.Border}"

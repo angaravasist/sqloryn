@@ -16,7 +16,12 @@ public static class ObjectExplorerService
         Key,
         Index,
         Column,
-        Placeholder
+        Placeholder,
+        ForeignKey,
+        Constraint,
+        Trigger,
+        Sequence,
+        Synonym
     }
 
     /// <summary>A static folder under a schema. <see cref="FolderKind"/>/<see cref="ChildKind"/> are the UI tree kinds.</summary>
@@ -30,8 +35,31 @@ public static class ObjectExplorerService
         new("Keys", "keys", "key"),
         new("Indexes", "indexes", "index"),
         new("Programmability · Procedures", "procedures", "procedure"),
-        new("Programmability · Functions", "functions", "function")
+        new("Programmability · Functions", "functions", "function"),
+        new("Sequences", "sequences", "sequence"),
+        new("Synonyms", "synonyms", "synonym")
     ];
+
+    static readonly SchemaFolder[] TableFolderList =
+    [
+        new("Columns", "columns", "column"),
+        new("Foreign Keys", "foreignkeys", "foreignkey"),
+        new("Constraints (check · default)", "constraints", "constraint"),
+        new("Triggers", "triggers", "trigger")
+    ];
+
+    static readonly SchemaFolder[] ViewFolderList = [TableFolderList[0], TableFolderList[3]];
+
+    /// <summary>
+    /// Folders shown under a table (columns, foreign keys, constraints, triggers) or view (columns, triggers).
+    /// Contents load only when a folder expands. <paramref name="objectKind"/> is the UI tree kind: "table" or "view".
+    /// </summary>
+    public static IReadOnlyList<SchemaFolder> TableFolders(string objectKind) => objectKind switch
+    {
+        "table" => TableFolderList,
+        "view" => ViewFolderList,
+        _ => throw new ArgumentException("Only tables and views have object folders.", nameof(objectKind))
+    };
 
     public sealed class Node
     {

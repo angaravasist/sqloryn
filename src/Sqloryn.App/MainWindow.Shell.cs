@@ -39,7 +39,8 @@ public partial class MainWindow
         AddHandler(KeyDownEvent, OnShellKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         SizeChanged += OnShellSizeChanged;
         Opened += (_, _) => FitToWorkingArea();
-        _treeRoots.CollectionChanged += (_, _) => ExplorerHint.IsVisible = _treeRoots.Count == 0;
+        _explorer.StateChanged += UpdateExplorerHints;
+        UpdateExplorerHints();
     }
 
     // ---- Menus ----------------------------------------------------------------------------
@@ -324,6 +325,17 @@ public partial class MainWindow
     {
         PropertiesHeader.IsVisible = visible;
         PropertiesBox.IsVisible = visible;
+    }
+
+    /// <summary>Not-connected hint, or the filter's empty state when an active filter hides every loaded node.</summary>
+    void UpdateExplorerHints()
+    {
+        ExplorerHint.IsVisible = !_explorer.HasRoots;
+        var noMatches = _explorer.FilterActive && _explorer.HasRoots && _explorer.FilterMatchCount == 0;
+        ExplorerFilterEmpty.IsVisible = noMatches;
+        if (noMatches)
+            ExplorerFilterEmpty.Text = ExplorerFilter.EmptyStateText(_explorer.FilterQuery ?? "");
+        ExplorerFilterClear.IsVisible = _explorer.FilterActive;
     }
 
     // ---- Welcome --------------------------------------------------------------------------

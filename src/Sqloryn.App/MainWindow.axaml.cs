@@ -13,7 +13,7 @@ namespace Sqloryn;
 public partial class MainWindow : Window
 {
     readonly ObservableCollection<QueryTab> _tabs = [];
-    readonly ObservableCollection<TreeNode> _treeRoots = [];
+    readonly ExplorerController _explorer;
     readonly TextBox MessagesBox = new()
     {
         IsReadOnly = true,
@@ -32,30 +32,18 @@ public partial class MainWindow : Window
     bool _closePromptInFlight;
     long _treeLoadGeneration;
 
-    sealed class TreeNode(string title, string kind, string? database = null, string? schema = null, string? objectName = null)
-    {
-        public string Title { get; } = title;
-        /// <summary>database, schema, tables, views, keys, indexes, procedures, functions (folders), table, view, key, index, procedure, function, column, placeholder.</summary>
-        public string Kind { get; } = kind;
-        public string? Database { get; } = database;
-        public string? Schema { get; } = schema;
-        public string? ObjectName { get; } = objectName;
-        /// <summary>Extra read-only text shown in the properties panel.</summary>
-        public string? Info { get; set; }
-        public ObservableCollection<TreeNode> Children { get; } = [];
-        public bool Loaded { get; set; }
-        public bool Loading { get; set; }
-    }
-
     public MainWindow()
     {
         InitializeComponent();
         _settings = LoadSettings();
-        ObjectTree.ItemsSource = _treeRoots;
-        ObjectTree.ItemTemplate = new FuncTreeDataTemplate<TreeNode>(
+        _explorer = new ExplorerController(
+            (tab, binding) => BindingStillCurrent(tab, binding) && ReferenceEquals(_active, tab),
+            message => StatusBar.Text = SafeUi(message));
+        ObjectTree.ItemsSource = _explorer.ShownRoots;
+        ObjectTree.ItemTemplate = new FuncTreeDataTemplate<ExplorerNode>(
             _ => true,
             (node, _) => BuildNodeView(node),
-            node => node.Children);
+            node => node.Shown);
         ObjectTree.AddHandler(TreeViewItem.ExpandedEvent, OnTreeItemExpanded);
         Editor.LostFocus += (_, _) => CaptureSelection();
         Editor.PointerReleased += (_, _) => CaptureSelection();
@@ -85,22 +73,19 @@ public partial class MainWindow : Window
         AppServices.ApplyTheme(settings);
     }
 
-    static Control BuildNodeView(TreeNode node)
+    static Control BuildNodeView(ExplorerNode node)
     {
         var text = new TextBlock { Text = node.Title, VerticalAlignment = VerticalAlignment.Center };
-        switch (node.Kind)
+        if (node.Kind == "database")
+            text.FontWeight = FontWeight.SemiBold;
+        else if (node.IsFolder)
+            text.Classes.Add("muted");
+        else if (node.Kind is "column" or "placeholder")
         {
-            case "database":
-                text.FontWeight = FontWeight.SemiBold;
-                break;
-            case "tables" or "views" or "keys" or "indexes" or "procedures" or "functions":
-                text.Classes.Add("muted");
-                break;
-            case "column" or "placeholder":
-                text.Classes.Add("muted");
-                text.FontSize = 12;
-                break;
+            text.Classes.Add("muted");
+            text.FontSize = 12;
         }
+        ToolTip.SetTip(text, node.Info is { Length: > 0 } info && node.Kind == "placeholder" ? info : null);
         return text;
     }
 
@@ -393,7 +378,7 @@ public partial class MainWindow : Window
         tab.BumpGeneration();
         if (ReferenceEquals(_active, tab))
         {
-            _treeRoots.Clear();
+            _explorer.Clear();
             UpdateStatus();
         }
     }
@@ -923,7 +908,7 @@ public partial class MainWindow : Window
         var binding = tab.CaptureBinding();
         if (!ReferenceEquals(_active, tab))
             return;
-        _treeRoots.Clear();
+        _explorer.Clear();
         PropertiesBox.Text = "";
         SetPropertiesVisible(false);
         if (!tab.Session.IsConnected)
@@ -934,12 +919,7 @@ public partial class MainWindow : Window
             if (loadId != Volatile.Read(ref _treeLoadGeneration) || !ReferenceEquals(_active, tab) ||
                 !ReferenceEquals(tab.Session, binding.SessionKey))
                 return;
-            foreach (var n in names)
-            {
-                var node = new TreeNode(n, "database", database: n);
-                node.Children.Add(new TreeNode("…", "placeholder", database: n));
-                _treeRoots.Add(node);
-            }
+            _explorer.SetRoots(names.Select(n => ExplorerController.WithPlaceholder(new ExplorerNode(n, "database", database: n))));
             if (names.Count == 0)
                 StatusBar.Text = "Object explorer: no accessible databases.";
         }
@@ -950,7 +930,7 @@ public partial class MainWindow : Window
         }
     }
 
-    TreeNode? SelectedNode => ObjectTree.SelectedItem as TreeNode;
+    ExplorerNode? SelectedNode => ObjectTree.SelectedItem as ExplorerNode;
 
     async void OnExpandSelected(object? sender, RoutedEventArgs e)
     {
@@ -960,7 +940,7 @@ public partial class MainWindow : Window
 
     async void OnTreeItemExpanded(object? sender, RoutedEventArgs e)
     {
-        if (e.Source is TreeViewItem { DataContext: TreeNode node })
+        if (e.Source is TreeViewItem { DataContext: ExplorerNode node })
             await ExpandNodeAsync(node);
     }
 
@@ -987,57 +967,40 @@ public partial class MainWindow : Window
     }
 
     void OnTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)
+        => RefreshInspector();
+
+    long _overviewGeneration;
+
+    /// <summary>
+    /// Shows the selected node in the inspector; a table or view also gets a compact overview (columns summary and
+    /// key counts) loaded read-only. Hidden when nothing is selected.
+    /// </summary>
+    void RefreshInspector()
     {
         var node = SelectedNode;
-        PropertiesBox.Text = DescribeNode(node);
+        var generation = Interlocked.Increment(ref _overviewGeneration);
+        PropertiesTitle.Text = node?.Kind is "table" or "view" ? "OVERVIEW" : "PROPERTIES";
+        PropertiesBox.Text = ExplorerController.Describe(node, _active?.Session.ServerDisplay);
         SetPropertiesVisible(node is not null);
+        if (node is null || _active is null || node.Kind is not ("table" or "view"))
+            return;
+        PropertiesBox.Text += "\n\nLoading overview…";
+        _ = ShowOverviewAsync(node, _active, generation);
     }
 
-    string DescribeNode(TreeNode? node)
+    async Task ShowOverviewAsync(ExplorerNode node, QueryTab tab, long generation)
     {
-        if (node is null)
-            return "Select an object to see its properties.";
-        var sb = new System.Text.StringBuilder();
-        void Line(string label, string? value)
-        {
-            if (!string.IsNullOrEmpty(value))
-                sb.Append(label.PadRight(10)).Append(value).Append('\n');
-        }
-        var kind = node.Kind switch
-        {
-            "database" => "Database",
-            "schema" => "Schema",
-            "tables" => "Tables folder",
-            "views" => "Views folder",
-            "keys" => "Keys folder",
-            "indexes" => "Indexes folder",
-            "procedures" => "Procedures folder",
-            "functions" => "Functions folder",
-            "table" => "Table",
-            "view" => "View",
-            "key" => "Key",
-            "index" => "Index",
-            "procedure" => "Stored procedure",
-            "function" => "Function",
-            "column" => "Column",
-            _ => "Item"
-        };
-        Line("Kind", kind);
-        Line("Server", _active?.Session.ServerDisplay);
-        Line("Database", node.Database);
-        Line("Schema", node.Schema);
-        Line(node.Kind == "column" ? "Table" : "Name", node.Kind == "column" || node.Kind is "table" or "view" or "procedure" or "key" or "index" or "function" ? node.ObjectName : null);
-        if (node.Kind is "table" or "view" && node.Database is not null && node.Schema is not null && node.ObjectName is not null)
-            Line("Qualified", SqlIdentity.Qualify3(node.Database, node.Schema, node.ObjectName));
-        var loadedCount = node.Children.Count(c => c.Kind != "placeholder").ToString(System.Globalization.CultureInfo.InvariantCulture);
-        if (node.Kind is "table" or "view" && node.Loaded)
-            Line("Columns", loadedCount);
-        if (node.Kind is "tables" or "views" or "keys" or "indexes" or "procedures" or "functions" && node.Loaded)
-            Line("Items", loadedCount);
-        if (!string.IsNullOrEmpty(node.Info))
-            sb.Append('\n').Append(node.Info).Append('\n');
-        return sb.ToString().TrimEnd();
+        var text = await _explorer.LoadOverviewAsync(
+            node, tab, () => generation == Volatile.Read(ref _overviewGeneration) && ReferenceEquals(SelectedNode, node));
+        if (text is not null)
+            PropertiesBox.Text = text;
     }
+
+    void OnExplorerFilterChanged(object? sender, TextChangedEventArgs e)
+        => _explorer.SetFilter(ExplorerFilterBox.Text);
+
+    void OnClearExplorerFilter(object? sender, RoutedEventArgs e)
+        => ExplorerFilterBox.Text = "";
 
     async void OnScriptSelect(object? sender, RoutedEventArgs e)
     {
@@ -1057,7 +1020,7 @@ public partial class MainWindow : Window
     /// Opens a NEW tab holding only the generated SELECT. The originating tab's document, dirty state and
     /// selection are not touched. The new tab gets its own session, bound to the object's database.
     /// </summary>
-    async Task ScriptSelectInNewTabAsync(TreeNode node)
+    async Task ScriptSelectInNewTabAsync(ExplorerNode node)
     {
         if (_active is null || _scriptTabInFlight)
             return;
@@ -1119,166 +1082,14 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Fetches children off the UI-thread-bound tree, then rejects the result if the tab, session,
-    /// database or generation changed while the query was in flight.
-    /// </summary>
-    async Task LoadChildrenAsync(TreeNode node, QueryTab tab, OperationBinding binding, Func<Task<(List<TreeNode> Children, string? TruncationNote)>> fetch)
+    async Task ExpandNodeAsync(ExplorerNode node)
     {
-        if (node.Loading)
+        if (_active is null)
             return;
-        node.Loading = true;
-        node.Children.Clear();
-        node.Children.Add(new TreeNode("Loading…", "placeholder", node.Database, node.Schema, node.ObjectName));
-        List<TreeNode> children;
-        string? truncationNote;
-        try
-        {
-            (children, truncationNote) = await fetch();
-        }
-        catch
-        {
-            ResetNode(node);
-            throw;
-        }
-        finally
-        {
-            node.Loading = false;
-        }
-
-        if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
-        {
-            ResetNode(node);
-            StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
-            return;
-        }
-        node.Children.Clear();
-        foreach (var child in children)
-            node.Children.Add(child);
-        node.Info = truncationNote;
-        if (truncationNote is not null)
-        {
-            // Never present a capped catalog read as the complete list.
-            node.Children.Add(new TreeNode("… (truncated)", "placeholder", node.Database, node.Schema, node.ObjectName) { Info = truncationNote });
-            StatusBar.Text = "Object explorer: " + truncationNote;
-        }
-        node.Loaded = true;
-        if (ReferenceEquals(SelectedNode, node))
-            PropertiesBox.Text = DescribeNode(node);
-    }
-
-    static void ResetNode(TreeNode node)
-    {
-        node.Children.Clear();
-        node.Children.Add(new TreeNode("…", "placeholder", node.Database, node.Schema, node.ObjectName));
-        node.Loaded = false;
-    }
-
-    static TreeNode WithPlaceholder(TreeNode node)
-    {
-        node.Children.Add(new TreeNode("…", "placeholder", node.Database, node.Schema, node.ObjectName));
-        return node;
-    }
-
-    async Task ExpandNodeAsync(TreeNode node)
-    {
-        if (_active is null || node.Loaded || node.Loading || node.Kind is "placeholder" or "column" or "procedure" or "function" or "key" or "index")
-            return;
-        var tab = _active;
-        var session = tab.Session;
-        var binding = tab.CaptureBinding();
-        var db = node.Database;
-        try
-        {
-            switch (node.Kind)
-            {
-                case "database" when db is not null:
-                    await LoadChildrenAsync(node, tab, binding, async () =>
-                    {
-                        var schemas = await CatalogClient.ListSchemasAsync(session, db);
-                        return (schemas.Items.Select(s => WithPlaceholder(new TreeNode(s, "schema", db, s))).ToList(), schemas.TruncationNote);
-                    });
-                    break;
-
-                case "schema" when db is not null && node.Schema is not null:
-                {
-                    // Folders are static; the catalog query runs when a folder expands.
-                    var schema = node.Schema;
-                    await LoadChildrenAsync(node, tab, binding, () => Task.FromResult((
-                        ObjectExplorerService.SchemaFolders
-                            .Select(f => WithPlaceholder(new TreeNode(f.Title, f.FolderKind, db, schema)))
-                            .ToList(), (string?)null)));
-                    break;
-                }
-
-                case "tables" or "views" or "procedures" when db is not null && node.Schema is not null:
-                {
-                    var schema = node.Schema;
-                    var kind = node.Kind;
-                    await LoadChildrenAsync(node, tab, binding, async () =>
-                    {
-                        var names = kind switch
-                        {
-                            "tables" => await CatalogClient.ListTablesAsync(session, db, schema),
-                            "views" => await CatalogClient.ListViewsAsync(session, db, schema),
-                            _ => await CatalogClient.ListProceduresAsync(session, db, schema)
-                        };
-                        var childKind = kind switch { "tables" => "table", "views" => "view", _ => "procedure" };
-                        return (names.Items.Select(n =>
-                        {
-                            var child = new TreeNode(n, childKind, db, schema, n);
-                            return childKind == "procedure" ? child : WithPlaceholder(child);
-                        }).ToList(), names.TruncationNote);
-                    });
-                    break;
-                }
-
-                case "keys" or "indexes" or "functions" when db is not null && node.Schema is not null:
-                {
-                    var schema = node.Schema;
-                    var kind = node.Kind;
-                    await LoadChildrenAsync(node, tab, binding, async () =>
-                    {
-                        var items = kind switch
-                        {
-                            "keys" => await CatalogClient.ListKeysAsync(session, db, schema),
-                            "indexes" => await CatalogClient.ListIndexesAsync(session, db, schema),
-                            _ => await CatalogClient.ListFunctionsAsync(session, db, schema)
-                        };
-                        var childKind = kind switch { "keys" => "key", "indexes" => "index", _ => "function" };
-                        return (items.Items.Select(o => new TreeNode(SchemaObjectCatalog.Title(childKind, o), childKind, db, schema, o.Name)
-                        {
-                            Info = o.Parent is null
-                                ? $"Name     {o.Name}\nType     {o.TypeDescription}"
-                                : $"Name     {o.Name}\nTable    {o.Parent}\nType     {o.TypeDescription}{(o.IsUnique ? "\nUnique   yes" : "")}"
-                        }).ToList(), items.TruncationNote);
-                    });
-                    break;
-                }
-
-                case "table" or "view" when db is not null && node.Schema is not null && node.ObjectName is not null:
-                {
-                    var schema = node.Schema;
-                    var table = node.ObjectName;
-                    await LoadChildrenAsync(node, tab, binding, async () =>
-                    {
-                        var columns = await CatalogClient.ListColumnsPageAsync(session, db, schema, table);
-                        return (columns.Items.Select(c => new TreeNode(
-                            $"{c.Name} : {c.TypeDisplay}{(c.IsNullable ? "" : " · NOT NULL")}{(c.IsIdentity ? " · identity" : "")}",
-                            "column", db, schema, table)
-                        {
-                            Info = $"Column   {c.Name}\nType     {c.TypeDisplay}\nNullable {(c.IsNullable ? "yes" : "no")}\nIdentity {(c.IsIdentity ? "yes" : "no")}"
-                        }).ToList(), columns.TruncationNote);
-                    });
-                    break;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            if (ReferenceEquals(_active, tab))
-                ReportError(ex.Message);
-        }
+        await _explorer.ExpandAsync(node, _active);
+        // Folder counts and truncation notes appear in the inspector once the load finishes.
+        if (ReferenceEquals(SelectedNode, node) && node.Kind is not ("table" or "view"))
+            PropertiesBox.Text = ExplorerController.Describe(node, _active?.Session.ServerDisplay);
     }
 
     /// <summary>Resolves the selected table node for design/edit actions, or reports why it cannot.</summary>
@@ -1316,7 +1127,7 @@ public partial class MainWindow : Window
         await window.ShowDialog(this);
         if (window.Applied && node is not null && node.Loaded && ReferenceEquals(_active, tab))
         {
-            ResetNode(node);
+            _explorer.Reset(node);
             StatusBar.Text = "Table changed; collapse and expand it to reload columns.";
         }
     }
@@ -1345,20 +1156,11 @@ public partial class MainWindow : Window
         await window.ShowDialog(this);
         if (window.Applied && ReferenceEquals(_active, tab))
         {
-            var tables = FindTablesFolder(node);
+            var tables = _explorer.FindTablesFolder(node);
             if (tables is { Loaded: true })
-                ResetNode(tables);
+                _explorer.Reset(tables);
             StatusBar.Text = "Table created; expand Tables again (or Refresh) to see it.";
         }
-    }
-
-    /// <summary>The Tables folder for the node's schema, searched among the tree's loaded nodes.</summary>
-    TreeNode? FindTablesFolder(TreeNode from)
-    {
-        IEnumerable<TreeNode> All(IEnumerable<TreeNode> nodes) => nodes.SelectMany(n => new[] { n }.Concat(All(n.Children)));
-        return All(_treeRoots).FirstOrDefault(n => n.Kind == "tables" &&
-            string.Equals(n.Database, from.Database, StringComparison.Ordinal) &&
-            string.Equals(n.Schema, from.Schema, StringComparison.Ordinal));
     }
 
     async void OnEditRows(object? sender, RoutedEventArgs e)
