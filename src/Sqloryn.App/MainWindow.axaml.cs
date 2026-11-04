@@ -1235,6 +1235,28 @@ public partial class MainWindow : Window
             StatusBar.Text = "Permissions were changed; Object Explorer metadata may need a refresh.";
     }
 
+    async void OnOperations(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect first.";
+            return;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return;
+        }
+        var database = SelectedNode?.Database ?? tab.Session.Database;
+        var window = new OperationsWindow(tab.Session, database);
+        await window.ShowDialog(this);
+        if (window.Applied)
+            StatusBar.Text = "Operation finished or its outcome is unknown; Refresh Object Explorer to see database changes.";
+    }
+
     async void OnEditRows(object? sender, RoutedEventArgs e)
     {
         if (RequireSelectedTable(tablesOnly: true) is not { } selected)

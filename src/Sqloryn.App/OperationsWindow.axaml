@@ -1,0 +1,114 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.OperationsWindow"
+        Title="Operations — SQLoryn"
+        Width="860" Height="760"
+        MinWidth="720" MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <DockPanel Margin="14">
+    <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,10">
+      <TextBlock FontSize="18" FontWeight="SemiBold" Text="Backup, restore and integrity check" />
+      <TextBlock Classes="muted" TextWrapping="Wrap"
+                 Text="Fill in the form and preview the SQL. Previewing never runs anything. Paths are on the SQL Server host, not on this Mac, unless you say the server runs here. Nothing executes until you confirm." />
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Bottom" Spacing="8" Margin="0,10,0,0">
+      <ProgressBar Name="RunProgress" IsIndeterminate="True" IsVisible="False" />
+      <TextBlock Name="IssuesText" TextWrapping="Wrap" IsVisible="False" AutomationProperties.Name="Plan problems" />
+      <TextBlock Name="StatusText" TextWrapping="Wrap" Classes="muted" AutomationProperties.Name="Operation status" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <Button Name="PreviewButton" Content="Preview SQL" Click="OnPreview" />
+        <Button Name="ConfirmButton" Content="Confirm and Run…" Classes="primary" Click="OnConfirm" IsEnabled="False" />
+        <Button Name="CopyProbeButton" Content="Copy progress query" Click="OnCopyProgressQuery" />
+        <Button Name="CancelRunButton" Content="Cancel" Click="OnCancelRun" IsVisible="False" />
+        <Button Name="CloseButton" Content="Close" Click="OnClose" />
+      </StackPanel>
+    </StackPanel>
+
+    <Grid RowDefinitions="Auto,*" RowSpacing="8">
+      <TabControl Name="Tabs" Grid.Row="0" SelectionChanged="OnTabChanged">
+        <TabItem Header="Backup">
+          <StackPanel Spacing="8" Margin="0,10,0,0">
+            <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="8">
+              <TextBlock Grid.Row="0" VerticalAlignment="Center" Text="Database" />
+              <TextBox Grid.Row="0" Grid.Column="1" Name="BackupDatabase" AutomationProperties.Name="Database to back up" />
+              <TextBlock Grid.Row="1" VerticalAlignment="Center" Text="Path is on" />
+              <ComboBox Grid.Row="1" Grid.Column="1" Name="BackupLocation" SelectedIndex="0" AutomationProperties.Name="Backup path location">
+                <ComboBoxItem Content="Server-side path (SQL Server host filesystem)" />
+                <ComboBoxItem Content="Local Mac path (only if the server runs on this Mac)" />
+              </ComboBox>
+              <TextBlock Grid.Row="2" VerticalAlignment="Center" Text="Backup file" />
+              <TextBox Grid.Row="2" Grid.Column="1" Name="BackupPath" PlaceholderText="/var/opt/mssql/backup/MyDb.bak (on the SQL Server host)"
+                       AutomationProperties.Name="Backup file path" />
+              <TextBlock Grid.Row="3" VerticalAlignment="Center" Text="Type" />
+              <ComboBox Grid.Row="3" Grid.Column="1" Name="BackupType" SelectedIndex="0" AutomationProperties.Name="Backup type">
+                <ComboBoxItem Content="Full" />
+                <ComboBoxItem Content="Differential" />
+                <ComboBoxItem Content="Transaction log" />
+              </ComboBox>
+            </Grid>
+            <WrapPanel>
+              <CheckBox Name="BackupOverwrite" Content="Overwrite existing backup sets in the file (INIT)" Margin="0,0,16,0" />
+              <CheckBox Name="BackupCopyOnly" Content="Copy only" Margin="0,0,16,0" />
+              <CheckBox Name="BackupCompression" Content="Compression" Margin="0,0,16,0" />
+              <CheckBox Name="BackupChecksum" Content="Checksum" IsChecked="True" Margin="0,0,16,0" />
+              <CheckBox Name="BackupServerOnMac" Content="The SQL Server runs on this Mac" />
+            </WrapPanel>
+          </StackPanel>
+        </TabItem>
+
+        <TabItem Header="Restore">
+          <StackPanel Spacing="8" Margin="0,10,0,0">
+            <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="8">
+              <TextBlock Grid.Row="0" VerticalAlignment="Center" Text="Destination database" />
+              <TextBox Grid.Row="0" Grid.Column="1" Name="RestoreDatabase" AutomationProperties.Name="Database to restore into" />
+              <TextBlock Grid.Row="1" VerticalAlignment="Center" Text="Path is on" />
+              <ComboBox Grid.Row="1" Grid.Column="1" Name="RestoreLocation" SelectedIndex="0" AutomationProperties.Name="Restore path location">
+                <ComboBoxItem Content="Server-side path (SQL Server host filesystem)" />
+                <ComboBoxItem Content="Local Mac path (only if the server runs on this Mac)" />
+              </ComboBox>
+              <TextBlock Grid.Row="2" VerticalAlignment="Center" Text="Backup file" />
+              <TextBox Grid.Row="2" Grid.Column="1" Name="RestorePath" PlaceholderText="/var/opt/mssql/backup/MyDb.bak (on the SQL Server host)"
+                       AutomationProperties.Name="Backup file to restore" />
+              <TextBlock Grid.Row="3" VerticalAlignment="Center" Text="Recovery" />
+              <ComboBox Grid.Row="3" Grid.Column="1" Name="RestoreRecovery" SelectedIndex="0" AutomationProperties.Name="Recovery option">
+                <ComboBoxItem Content="RECOVERY — bring online" />
+                <ComboBoxItem Content="NORECOVERY — keep restoring (more backups to apply)" />
+                <ComboBoxItem Content="STANDBY — read-only between log restores" />
+              </ComboBox>
+              <TextBlock Grid.Row="4" VerticalAlignment="Center" Text="Standby undo file" />
+              <TextBox Grid.Row="4" Grid.Column="1" Name="RestoreStandbyPath" PlaceholderText="Server-side path; only for STANDBY"
+                       AutomationProperties.Name="Standby undo file path" />
+            </Grid>
+            <TextBlock Classes="muted" Text="Relocate files (optional): one per line, LogicalName = /server/side/target/path" />
+            <TextBox Name="RestoreMoves" AcceptsReturn="True" Height="70" Classes="mono" TextWrapping="NoWrap"
+                     AutomationProperties.Name="File relocation list" />
+            <WrapPanel>
+              <CheckBox Name="RestoreOverwrite" Content="Overwrite the existing database (REPLACE) — its data is lost" Margin="0,0,16,0" />
+              <CheckBox Name="RestoreLog" Content="Restore a transaction log" Margin="0,0,16,0" />
+              <CheckBox Name="RestoreChecksum" Content="Checksum" IsChecked="True" Margin="0,0,16,0" />
+              <CheckBox Name="RestoreServerOnMac" Content="The SQL Server runs on this Mac" />
+            </WrapPanel>
+          </StackPanel>
+        </TabItem>
+
+        <TabItem Header="Check">
+          <StackPanel Spacing="8" Margin="0,10,0,0">
+            <Grid ColumnDefinitions="140,*" ColumnSpacing="8">
+              <TextBlock VerticalAlignment="Center" Text="Database" />
+              <TextBox Grid.Column="1" Name="CheckDatabase" AutomationProperties.Name="Database to check" />
+            </Grid>
+            <CheckBox Name="CheckPhysicalOnly" Content="Physical checks only (faster, less thorough)" />
+            <TextBlock Classes="muted" TextWrapping="Wrap"
+                       Text="DBCC CHECKDB is read-only here: no repair option is offered. It can load the server heavily on a large database." />
+          </StackPanel>
+        </TabItem>
+      </TabControl>
+
+      <TextBox Name="SqlBox" Grid.Row="1" Classes="mono" IsReadOnly="True" AcceptsReturn="True"
+               TextWrapping="NoWrap" PlaceholderText="Generated SQL appears here. Nothing runs until you confirm."
+               AutomationProperties.Name="SQL preview" />
+    </Grid>
+  </DockPanel>
+</Window>
