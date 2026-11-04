@@ -786,6 +786,100 @@ public sealed class SqlSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Reads the catalog fingerprint of <paramref name="table"/> (see <see cref="TableDesignFingerprint"/>). Capture it when a
+    /// design is loaded and pass it to <see cref="ApplyTableDesignAsync"/>. A table that does not exist yields
+    /// <see cref="TableDesignFingerprint.Absent"/>.
+    /// </summary>
+    public async Task<string> ReadTableFingerprintAsync(TableRef table, CancellationToken cancellationToken = default)
+    {
+        var query = TableDesignFingerprint.BuildQuery(table);
+        var rows = await QueryRawAsync(query.CommandText, query.Parameters, 5_000, cancellationToken).ConfigureAwait(false);
+        if (rows.Truncated || rows.HasOmittedCells)
+            throw new InvalidOperationException("The table definition was too large to fingerprint safely.");
+        return TableDesignFingerprint.FromRows(rows);
+    }
+
+    /// <summary>
+    /// Applies reviewed DDL (<see cref="TableDesignPreview.Statements"/>) in ONE owned SqlTransaction, after re-reading the
+    /// table fingerprint inside it and refusing when it differs from <paramref name="expectedFingerprint"/>. Any failing
+    /// statement rolls the whole set back. Mixed/non-transactional batches are refused before anything runs. Refuses to run
+    /// when the session already has an open transaction. If the outcome is
+    /// <see cref="TableDesignApplyOutcome.OutcomeUnknown"/> the connection is closed so no transaction or lock survives.
+    /// </summary>
+    public async Task<TableDesignApplyResult> ApplyTableDesignAsync(
+        TableRef table,
+        IReadOnlyList<TableDesignStatement> statements,
+        string expectedFingerprint,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(statements);
+        if (statements.Count == 0)
+            throw new ArgumentException("No statements to apply.", nameof(statements));
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? linked = null;
+        try
+        {
+            EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before changing the schema.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _activeCts = linked;
+            Interlocked.Increment(ref _inFlight);
+
+            var connection = _connection!;
+            var timeout = _options!.CommandTimeoutSeconds;
+
+            await using (var state = connection.CreateCommand())
+            {
+                state.CommandText = "SELECT CONVERT(int, XACT_STATE());";
+                state.CommandTimeout = timeout;
+                var xact = (int)(await state.ExecuteScalarAsync(linked.Token).ConfigureAwait(false) ?? 0);
+                if (xact != 0)
+                    return new TableDesignApplyResult(TableDesignApplyOutcome.RolledBackError, 0, null,
+                        "A transaction is already open on this session; refusing to change the schema inside it. Nothing was changed.");
+            }
+
+            var factory = new SqlSchemaTransactionFactory(this, connection, timeout);
+            TableDesignApplyResult result;
+            try
+            {
+                result = await TableDesignApply.ApplyAsync(factory, table, statements, expectedFingerprint, linked.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not ArgumentException)
+            {
+                result = new TableDesignApplyResult(TableDesignApplyOutcome.OutcomeUnknown, 0, null,
+                    $"The schema change ended unexpectedly ({ex.Message.Replace('\r', ' ').Replace('\n', ' ')}). It may or may not have been applied.");
+            }
+
+            if (result.Outcome == TableDesignApplyOutcome.OutcomeUnknown)
+            {
+                // Closing the connection ends any transaction the server may still hold for us.
+                _targetUnknown = true;
+                await DisposeConnectionAsync().ConfigureAwait(false);
+                result = result with { Message = result.Message + " The session was disconnected; reconnect and reload." };
+            }
+            return result;
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCts, linked))
+                _activeCts = null;
+            _activeSqlCommand = null;
+            linked?.Dispose();
+            if (linked is not null)
+                Interlocked.Decrement(ref _inFlight);
+            _gate.Release();
+        }
+    }
+
     /// <summary>Test seam: supplies the plan command runner instead of the live connection. Never set in production code.</summary>
     internal Func<IPlanCommandRunner>? PlanRunnerForTests { get; init; }
 
@@ -956,6 +1050,68 @@ public sealed class SqlSession : IAsyncDisposable
             {
                 await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                 return await EditRowsSql.ReadAffectedCountAsync(reader, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public Task CommitAsync(CancellationToken cancellationToken) => transaction.CommitAsync(cancellationToken);
+        public Task RollbackAsync(CancellationToken cancellationToken) => transaction.RollbackAsync(cancellationToken);
+        public ValueTask DisposeAsync() => transaction.DisposeAsync();
+    }
+
+    sealed class SqlSchemaTransactionFactory(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds)
+        : ISchemaTransactionFactory
+    {
+        public async Task<ISchemaTransaction> BeginAsync(CancellationToken cancellationToken)
+        {
+            var tx = (SqlTransaction)await connection.BeginTransactionAsync(
+                IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+            return new SqlSchemaTransaction(owner, connection, tx, commandTimeoutSeconds);
+        }
+    }
+
+    sealed class SqlSchemaTransaction(SqlSession owner, SqlConnection connection, SqlTransaction transaction, int commandTimeoutSeconds)
+        : ISchemaTransaction
+    {
+        public async Task<string> ReadFingerprintAsync(TableRef table, CancellationToken cancellationToken)
+        {
+            var query = TableDesignFingerprint.BuildQuery(table);
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = query.CommandText;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            AddParameters(cmd, query.Parameters);
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await using var reader = await cmd.ExecuteReaderAsync(
+                    CommandBehavior.SequentialAccess, cancellationToken).ConfigureAwait(false);
+                var rows = await RawRowReader.ReadAsync(reader, 5_000, RawReadBudget.Default, cancellationToken).ConfigureAwait(false);
+                if (rows.Truncated || rows.HasOmittedCells)
+                    throw new InvalidOperationException("The table definition was too large to fingerprint safely.");
+                return TableDesignFingerprint.FromRows(rows);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public async Task ExecuteAsync(string sql, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {

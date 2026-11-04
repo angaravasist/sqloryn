@@ -22,17 +22,23 @@ public partial class EditRowsWindow : Window
         public object?[] OriginalValues { get; set; } = originalValues;
         public string?[] OriginalDisplay { get; set; } = (string?[])display.Clone();
         public ObservableCollection<string?> Cells { get; } = new(display);
+        /// <summary>A row added in this window and not yet on the server: it has no baseline and is written with INSERT.</summary>
+        public bool IsNew { get; init; }
     }
 
     readonly SqlSession _session;
     readonly TableRef _table;
     readonly ObservableCollection<EditRowItem> _items = [];
+    // Loaded rows the user removed from the grid; they are DELETEd (after confirmation) on Save and restored by Reload.
+    readonly List<EditRowItem> _deleted = [];
     readonly Dictionary<DataGridColumn, int> _columnIndex = [];
     IReadOnlyList<string> _columnNames = [];
     IReadOnlyList<string> _sqlTypes = [];
     IReadOnlyList<string> _keyColumns = [];
     Dictionary<string, bool> _nullable = new(StringComparer.OrdinalIgnoreCase);
     EditSupport _support = EditSupport.Refuse("Not loaded.");
+    EditOperationSupport _insertSupport = EditOperationSupport.Refuse("Not loaded.");
+    EditOperationSupport _deleteSupport = EditOperationSupport.Refuse("Not loaded.");
     bool _busy;
     // Set when a save outcome is unknown: edits stay disabled until a successful reload.
     bool _needsReload;
@@ -77,10 +83,13 @@ public partial class EditRowsWindow : Window
                     n, _sqlTypes[i], _nullable.TryGetValue(n, out var nl) && nl, identity.Contains(n), computed.Contains(n)))
                 .ToList();
             _support = EditRowsPolicy.Evaluate(key, infos, insteadOf);
+            _insertSupport = EditRowsPolicy.EvaluateInsert(_support, infos);
+            _deleteSupport = EditRowsPolicy.EvaluateDelete(_support);
             _computed = computed;
 
             BuildColumns(identity);
             _items.Clear();
+            _deleted.Clear();
             foreach (var row in data.Rows)
             {
                 var display = new string?[row.Length];
@@ -90,7 +99,8 @@ public partial class EditRowsWindow : Window
             }
 
             HintText.Text = _support.IsSupported
-                ? $"Key: {string.Join(", ", key)}. Edit cells, then Save. All changed rows are written in one transaction: if any row changed on the server ({(_support.UsesRowVersion ? "rowversion check" : "every non-key column is compared")}), nothing is saved. Rows with an oversized cell that was not fully loaded cannot be edited. Empty text in a non-text column means NULL; use “Set cell to NULL” for text columns."
+                ? $"Key: {string.Join(", ", key)}. Edit cells, Add row or Delete row, then Save. All changes are written in one transaction: if any row changed on the server ({(_support.UsesRowVersion ? "rowversion check" : "every non-key column is compared")}), nothing is saved. Rows with an oversized cell that was not fully loaded cannot be edited. Empty text in a non-text column means NULL; use “Set cell to NULL” for text columns. On a new row, a blank cell is left out of the INSERT so the server default (or NULL) applies; identity, computed and rowversion columns are always server-generated." +
+                  (_insertSupport.IsSupported ? "" : " Add row is unavailable: " + _insertSupport.RefusalReason)
                 : "Editing is disabled (read-only view): " + _support.RefusalReason;
             var omitted = data.Rows.Count(r => r.Any(RawCellOmitted.IsOmitted));
             StatusText.Text = (statusPrefix is null ? "" : statusPrefix + " ") +
@@ -120,8 +130,10 @@ public partial class EditRowsWindow : Window
         {
             var name = _columnNames[i];
             var type = i < _sqlTypes.Count ? _sqlTypes[i] : "";
+            // Key columns are typed on new rows (unless identity) but never changed on loaded rows; BuildPending enforces that.
+            var keyLocked = _keyColumns.Contains(name, StringComparer.OrdinalIgnoreCase) && !_insertSupport.IsSupported;
             var readOnly = !_support.IsSupported
-                           || _keyColumns.Contains(name, StringComparer.OrdinalIgnoreCase)
+                           || keyLocked
                            || identity.Contains(name)
                            || _computed.Contains(name)
                            || !EditRowsPolicy.IsEditableType(type);
@@ -144,7 +156,13 @@ public partial class EditRowsWindow : Window
         return header;
     }
 
-    void RefreshSaveEnabled() => SaveButton.IsEnabled = !_busy && !_needsReload && _support.IsSupported && _items.Count > 0;
+    void RefreshSaveEnabled()
+    {
+        var idle = !_busy && !_needsReload;
+        SaveButton.IsEnabled = idle && _support.IsSupported && (_items.Count > 0 || _deleted.Count > 0);
+        AddButton.IsEnabled = idle && _insertSupport.IsSupported;
+        DeleteButton.IsEnabled = idle && _deleteSupport.IsSupported && _items.Count > 0;
+    }
 
     static string? FormatValue(object? value) => value switch
     {
@@ -208,14 +226,12 @@ public partial class EditRowsWindow : Window
         }
     }
 
-    sealed record PendingUpdate(EditRowItem Item, EditCommand Command, Dictionary<int, object?> NewValues, string Description);
+    enum EditKind { Delete, Update, Insert }
 
-    List<PendingUpdate> BuildPending()
+    sealed record PendingEdit(EditKind Kind, EditCommand Command, string Description);
+
+    (HashSet<string> Excluded, HashSet<string> Characters) ConcurrencySets()
     {
-        var table = _table;
-        var pending = new List<PendingUpdate>();
-        if (!_support.IsSupported)
-            throw new InvalidOperationException(_support.RefusalReason ?? "Editing is not supported for this table.");
         // Only the columns the policy trusts take part in the optimistic predicate (rowversion, or every comparable column).
         var concurrency = new HashSet<string>(_support.ConcurrencyColumns, StringComparer.OrdinalIgnoreCase);
         var characterColumns = new HashSet<string>(_support.CharacterConcurrencyColumns ?? [], StringComparer.OrdinalIgnoreCase);
@@ -225,15 +241,61 @@ public partial class EditRowsWindow : Window
             if (!concurrency.Contains(name))
                 excluded.Add(name);
         }
+        return (excluded, characterColumns);
+    }
+
+    string Describe(string heading, EditCommand command)
+    {
+        var description = new StringBuilder();
+        description.Append(heading).Append('\n');
+        description.Append(command.CommandText.TrimEnd()).Append('\n');
+        foreach (var p in command.Parameters)
+            description.Append("--   ").Append(p.Name).Append(" = ").Append(p.Value is null ? "NULL" : FormatValue(p.Value)).Append('\n');
+        return description.ToString();
+    }
+
+    RowKey KeyOf(EditRowItem item) => new(_keyColumns, _keyColumns.Select(k => item.OriginalValues[IndexOf(k)]).ToList());
+
+    Dictionary<string, object?> OriginalsOf(EditRowItem item)
+    {
+        var originals = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < _columnNames.Count; i++)
+            originals[_columnNames[i]] = item.OriginalValues[i];
+        return originals;
+    }
+
+    /// <summary>Builds deletes, then updates, then inserts (so a key freed by a delete can be reused by an insert).</summary>
+    List<PendingEdit> BuildPending()
+    {
+        var table = _table;
+        var pending = new List<PendingEdit>();
+        if (!_support.IsSupported)
+            throw new InvalidOperationException(_support.RefusalReason ?? "Editing is not supported for this table.");
+        var (excluded, characterColumns) = ConcurrencySets();
+
+        if (_deleted.Count > 0 && !_deleteSupport.IsSupported)
+            throw new InvalidOperationException(_deleteSupport.RefusalReason ?? "Deleting rows is not supported for this table.");
+        foreach (var item in _deleted)
+        {
+            var key = KeyOf(item);
+            var command = EditRowsSql.BuildDelete(table, key, OriginalsOf(item), excluded, characterColumns);
+            pending.Add(new PendingEdit(EditKind.Delete, command,
+                Describe("-- DELETE row, key " + KeyText(key), command)));
+        }
 
         for (var r = 0; r < _items.Count; r++)
         {
             var item = _items[r];
+            if (item.IsNew)
+                continue;
             var changed = new Dictionary<int, object?>();
             for (var i = 0; i < _columnNames.Count; i++)
             {
                 if (string.Equals(item.Cells[i], item.OriginalDisplay[i], StringComparison.Ordinal))
                     continue;
+                if (_keyColumns.Contains(_columnNames[i], StringComparer.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"Row {r + 1}: key column '{_columnNames[i]}' cannot be changed on an existing row. Delete the row and add a new one instead.");
                 var column = RowGrid.Columns.FirstOrDefault(c => _columnIndex.TryGetValue(c, out var idx) && idx == i);
                 if (column is null || column.IsReadOnly)
                     continue;
@@ -245,28 +307,41 @@ public partial class EditRowsWindow : Window
             if (changed.Count == 0)
                 continue;
 
-            var keyValues = _keyColumns
-                .Select(k => item.OriginalValues[IndexOf(k)])
-                .ToList();
-            var key = new RowKey(_keyColumns, keyValues);
+            var key = KeyOf(item);
             var newValues = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
             foreach (var (index, value) in changed)
                 newValues[_columnNames[index]] = value;
-            var originals = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            for (var i = 0; i < _columnNames.Count; i++)
-                originals[_columnNames[i]] = item.OriginalValues[i];
 
-            var command = EditRowsSql.BuildUpdate(table, key, newValues, originals, excluded, characterColumns);
-            var description = new StringBuilder();
-            description.Append("-- row ").Append(r + 1).Append(", key ")
-                .Append(string.Join(", ", _keyColumns.Select((k, n) => $"{k}={FormatValue(keyValues[n])}"))).Append('\n');
-            description.Append(command.CommandText.TrimEnd()).Append('\n');
-            foreach (var p in command.Parameters)
-                description.Append("--   ").Append(p.Name).Append(" = ").Append(p.Value is null ? "NULL" : FormatValue(p.Value)).Append('\n');
-            pending.Add(new PendingUpdate(item, command, changed, description.ToString()));
+            var command = EditRowsSql.BuildUpdate(table, key, newValues, OriginalsOf(item), excluded, characterColumns);
+            pending.Add(new PendingEdit(EditKind.Update, command, Describe($"-- UPDATE row {r + 1}, key " + KeyText(key), command)));
+        }
+
+        var writable = new HashSet<string>(_insertSupport.WritableColumns, StringComparer.OrdinalIgnoreCase);
+        for (var r = 0; r < _items.Count; r++)
+        {
+            var item = _items[r];
+            if (!item.IsNew)
+                continue;
+            if (!_insertSupport.IsSupported)
+                throw new InvalidOperationException(_insertSupport.RefusalReason ?? "Inserting rows is not supported for this table.");
+            var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < _columnNames.Count; i++)
+            {
+                var text = item.Cells[i];
+                var supplied = text is not null && (CharTypes.Contains(_sqlTypes[i]) || text.Trim().Length > 0);
+                if (!supplied)
+                    continue; // blank: the server default (or NULL) applies
+                if (!writable.Contains(_columnNames[i]))
+                    throw new InvalidOperationException($"New row {r + 1}: column '{_columnNames[i]}' is generated by the server and cannot be set.");
+                values[_columnNames[i]] = Parse(i, text);
+            }
+            var command = EditRowsSql.BuildInsert(table, values);
+            pending.Add(new PendingEdit(EditKind.Insert, command, Describe($"-- INSERT new row {r + 1}", command)));
         }
         return pending;
     }
+
+    string KeyText(RowKey key) => string.Join(", ", key.Columns.Select((k, n) => $"{k}={FormatValue(key.Values[n])}"));
 
     int IndexOf(string column)
     {
@@ -288,7 +363,7 @@ public partial class EditRowsWindow : Window
         try
         {
             RowGrid.CommitEdit();
-            List<PendingUpdate> pending;
+            List<PendingEdit> pending;
             try
             {
                 pending = BuildPending();
@@ -305,13 +380,21 @@ public partial class EditRowsWindow : Window
             }
 
             var detail = string.Join("\n", pending.Select(p => p.Description));
+            var deletes = pending.Count(p => p.Kind == EditKind.Delete);
+            var updates = pending.Count(p => p.Kind == EditKind.Update);
+            var inserts = pending.Count(p => p.Kind == EditKind.Insert);
+            var summary =
+                $"In {_table.Qualified}: {deletes} row(s) will be DELETED, {updates} updated and {inserts} inserted, in ONE transaction: all changes are saved, or none. " +
+                "Every update and delete must still match the row you loaded and affect exactly one row, otherwise the whole set is rolled back.";
+            if (deletes > 0)
+                summary += "\n\nDELETE permanently removes rows. Foreign keys with ON DELETE CASCADE (or triggers) can remove or change further rows that are not listed here.";
             var ok = await Dialogs.ConfirmAsync(
                 this,
-                "Confirm row updates",
-                $"{pending.Count} row(s) in {_table.Qualified} will be updated in ONE transaction: all rows are saved, or none. " +
-                "Every statement must still match the row you loaded and affect exactly one row, otherwise the whole set is rolled back.",
+                deletes > 0 ? "Confirm row changes (includes DELETE)" : "Confirm row changes",
+                summary,
                 detail,
-                "Update rows");
+                deletes > 0 ? "Delete and save" : "Save rows",
+                destructive: deletes > 0);
             if (!ok)
             {
                 StatusText.Text = "Save cancelled. Nothing was written.";
@@ -324,6 +407,7 @@ public partial class EditRowsWindow : Window
                 case EditBatchOutcome.Committed:
                     // Reload: server-side values (rowversion, defaults, triggers) may differ from what was typed.
                     reload = result.Message;
+                    _deleted.Clear();
                     break;
                 case EditBatchOutcome.RolledBackConflict:
                     StatusText.Text = "Edit conflict; nothing was saved. " + Safe(result.Message);
@@ -333,6 +417,7 @@ public partial class EditRowsWindow : Window
                 case EditBatchOutcome.OutcomeUnknown:
                     _needsReload = true;
                     _items.Clear();
+                    _deleted.Clear();
                     StatusText.Text = "Save outcome unknown: " + Safe(result.Message);
                     await Dialogs.ShowMessageAsync(this, "Save outcome unknown",
                         result.Message + "\n\nEditing is disabled until the data is reloaded. Reconnect if the session was closed.");
@@ -353,6 +438,52 @@ public partial class EditRowsWindow : Window
         }
         if (reload is not null)
             await LoadAsync(reload);
+    }
+
+    void OnAddRow(object? sender, RoutedEventArgs e)
+    {
+        if (_busy || _needsReload)
+            return;
+        if (!_insertSupport.IsSupported)
+        {
+            StatusText.Text = "Add row is unavailable: " + _insertSupport.RefusalReason;
+            return;
+        }
+        RowGrid.CommitEdit();
+        var item = new EditRowItem(new object?[_columnNames.Count], new string?[_columnNames.Count]) { IsNew = true };
+        _items.Add(item);
+        RowGrid.SelectedItem = item;
+        RowGrid.ScrollIntoView(item, null);
+        StatusText.Text = "New row added (not saved). Fill in the cells, leave blanks for server defaults, then Save changes.";
+        RefreshSaveEnabled();
+    }
+
+    void OnDeleteRow(object? sender, RoutedEventArgs e)
+    {
+        if (_busy || _needsReload)
+            return;
+        if (!_deleteSupport.IsSupported)
+        {
+            StatusText.Text = "Delete is unavailable: " + _deleteSupport.RefusalReason;
+            return;
+        }
+        if (RowGrid.SelectedItem is not EditRowItem item)
+        {
+            StatusText.Text = "Select a row first.";
+            return;
+        }
+        RowGrid.CommitEdit();
+        _items.Remove(item);
+        if (item.IsNew)
+        {
+            StatusText.Text = "New row discarded.";
+        }
+        else
+        {
+            _deleted.Add(item);
+            StatusText.Text = $"Row marked for deletion ({_deleted.Count} pending). Nothing is deleted until you confirm in Save changes; Reload discards this.";
+        }
+        RefreshSaveEnabled();
     }
 
     void OnSetNull(object? sender, RoutedEventArgs e)

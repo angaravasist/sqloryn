@@ -21,8 +21,8 @@ Counts are unequal statuses, not a percentage. Update this file when assigning o
 |---|---|---|---|---|---|
 | WS4-T1 | Query fidelity | `time` + `uniqueidentifier` typed cells, CSV/JSON, Core acceptance | `ResultMaterializer`, `ResultExport`, SqlAcceptance | ready | Live SQL for CORE |
 | WS4-T2 | Query fidelity | Retained-row grid sort/filter + NULL/type labels in Results UI | `MainWindow.Results`, ResultSetView | ready | — |
-| WS5-T1 | Schema/edit | Transactional ALTER when SQL Server allows; freshness check; independent verify path | `TableDesign*`, TableDesignWindow | ready | Live SQL |
-| WS5-T2 | Schema/edit | Safe insert/delete Edit Rows with confirm + conflict | `EditRows*` | ready | Live SQL |
+| WS5-T1 | Schema/edit | Transactional ALTER when SQL Server allows; freshness check; independent verify path | `TableDesign*`, TableDesignWindow | component-done (fakes); live SQL pending | Live SQL |
+| WS5-T2 | Schema/edit | Safe insert/delete Edit Rows with confirm + conflict | `EditRows*` | component-done (fakes); live SQL pending | Live SQL |
 | WS2-T1 | Explorer | FK/check/default/trigger/sequence/synonym folders + honest denial | `CatalogClient`, SchemaObjectCatalog, MainWindow OE | ready | Live expand |
 | WS2-T2 | Explorer | Search/filter + object overview workspace pane | App OE UI | ready | — |
 | WS12-U1 | Mac UI | Semantic theme resources; welcome/connected density; toolbar grouping | `App.axaml`, MainWindow.Shell | ready | Screenshots |
