@@ -40,7 +40,12 @@ Counts are unequal statuses, not a percentage. Update this file when assigning o
 
 ## Active writers
 
-(none yet — integrator checkpoints handoffs then assigns)
+| Worktree | Branch | Tasks |
+|---|---|---|
+| `.worktrees/ws4-types` | `wt/ws4-types` | WS4-T1, WS4-T2 |
+| `.worktrees/ws5-schema` | `wt/ws5-schema` | WS5-T1, WS5-T2 |
+| `.worktrees/ws2-explorer` | `wt/ws2-explorer` | WS2-T1, WS2-T2 |
+| `.worktrees/ws12-mac` | `wt/ws12-mac` | WS12-U1, WS12-U2, WS12-P1 |
 
 ## Next after current wave
 
