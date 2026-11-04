@@ -5,18 +5,19 @@ Owner: SQLoryn maintainer. Reviewed: 2026-11-04. Experimental; no release suppor
 ## Work under review
 
 Branch `codex/macos-database-studio` — Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
-Prior tip with hosted green checks: `78fba00`. Integrated tip under push includes S-2, plan budget/SHOWPLAN discard, Core acceptance harness, offline journeys and catalogue realignment.
+Prior tip with hosted green checks: `78fba00`. Integrated tip `5757f72` includes S-2, plan budget/SHOWPLAN discard, Core acceptance harness, offline journeys and catalogue realignment.
 
-## Hosted checks on `78fba00`
+## Hosted checks on `5757f72`
 
 | Check | Result |
 |---|---|
-| probe-components (ubuntu / macos-15 / macos-15-intel) | PASS |
-| repo-safeguards · CodeQL · Analyze (csharp/python/actions) | PASS |
+| probe-components (ubuntu-24.04) | PASS |
+| probe-components (macos-15) | PASS |
+| probe-components (macos-15-intel) | PASS |
+| repo-safeguards | PASS |
+| CodeQL · Analyze (actions/csharp/python) | PASS |
 | sql-integration | **SKIPPED** |
-| Runs | [components](https://github.com/angaravasist/sqloryn/actions/runs/41739385983) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41739380738) |
-
-Hosted checks for the post-merge tip are pending after push.
+| Runs | [components](https://github.com/angaravasist/sqloryn/actions/runs/41749584482) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41749579718) |
 
 ## PR #7 finding dispositions
 
