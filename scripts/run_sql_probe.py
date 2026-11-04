@@ -23,10 +23,17 @@ CORE_ACCEPTANCE_REQUIRED_PASSES = (
     "CORE-DESIGN-PK",
     "CORE-EDIT-CONFLICT",
     "CORE-PLAN-INSERT",
+    "CORE-TIME-GUID",
+    "CORE-DESIGN-APPLY",
+    "CORE-EDIT-INSERT-DELETE",
+    "CORE-CSV-IMPORT",
 )
 CORE_ACCEPTANCE_MIN_PASS = len(CORE_ACCEPTANCE_REQUIRED_PASSES)
-# The only case that may SKIP (server refuses to create a restricted login); anything else is a failure.
-CORE_ACCEPTANCE_ALLOWED_SKIPS = {"CORE-PLAN-DENIED"}
+# Skips that are an explicit environment limit, not a missing check. Anything else is a failure.
+# CORE-PLAN-DENIED: server refuses to create a restricted login.
+# CORE-BACKUP: server has no writable data path or refuses the backup.
+# CORE-SECURITY: server refuses to create a login-less user for the preview check.
+CORE_ACCEPTANCE_ALLOWED_SKIPS = {"CORE-PLAN-DENIED", "CORE-BACKUP", "CORE-SECURITY"}
 CORE_ACCEPTANCE_COMPLETE_RE = re.compile(r"\ACORE-ACCEPTANCE COMPLETE pass=(\d+) skip=(\d+) fail=(\d+)\Z")
 CORE_ACCEPTANCE_PASS_RE = re.compile(r"\APASS (CORE-[A-Z0-9-]+) ")
 REMOTE_HELPER = Path(__file__).resolve().parent / "sql_probe_remote_helper.py"

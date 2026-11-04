@@ -17,7 +17,7 @@ The same workflow completed successfully for Linux, Mac arm64 and Mac Intel comp
 | CORE-PLAN-INSERT | Estimated INSERT returned a plan and inserted no row |
 | CORE-PLAN-DENIED | Restricted-principal estimate denied and inserted no row |
 
-This supersedes older statements that no live Core run exists, for these scenarios on this Linux target only. New CSV import, transactional designer alteration, insert/delete, security changes, backup/restore, Agent, time/GUID and native Mac paths require additional scenarios/evidence. No native Mac SQL qualification or full-workflow acceptance is implied.
+This supersedes older statements that no live Core run exists, for these scenarios on this Linux target only. The harness now also names `CORE-TIME-GUID`, `CORE-DESIGN-APPLY`, `CORE-EDIT-INSERT-DELETE`, `CORE-CSV-IMPORT`, `CORE-SECURITY` and `CORE-BACKUP`. Those six were not executed against SQL Server in the change that added them, so they are not live evidence. Agent and native Mac paths still need their own evidence. No native Mac SQL qualification or full-workflow acceptance is implied.
 
 ## Active assignment
 
@@ -66,7 +66,7 @@ Full delivery contract active on tip after WS1–WS12 merges. **Not product-comp
 | `repo_preflight.py` | PASS |
 | `bash scripts/build_macos_app.sh` | arm64 FD `.app` + [provenance](evidence/package-arm64.md) |
 | Launch / screenshots | Screen Recording **denied** (rechecked); Accessibility **available**. Agent-shell Avalonia RenderTimer `-6661` on direct exec; prefer `open` + AX tree over claiming universal screenshot block |
-| Live disposable SQL (Linux) | **PASS on 0af9108** for the six scenarios listed above — [run 41793052872](https://github.com/angaravasist/sqloryn/actions/runs/41793052872). Expanded scenarios for this wave (CSV fidelity, design apply, insert/delete, security, backup, time/GUID) are in progress. Offline journey ledger: [JOURNEY_EVIDENCE](ssms/JOURNEY_EVIDENCE.md) |
+| Live disposable SQL (Linux) | **PASS on 0af9108** for the six scenarios listed above — [run 41793052872](https://github.com/angaravasist/sqloryn/actions/runs/41793052872). This wave's six extra scenario IDs are in the harness and are **not** a live pass until that job runs again. Offline journey ledger: [JOURNEY_EVIDENCE](ssms/JOURNEY_EVIDENCE.md) |
 | Native Mac SQL / screenshots | **Not accepted** — Screen Recording still denied; AX available. Linux live evidence ≠ Mac native |
 | Windows SSH product path | **Closed** |
 
@@ -75,9 +75,10 @@ Full delivery contract active on tip after WS1–WS12 merges. **Not product-comp
 `tests/Sqloryn.Core.SqlAcceptance` runs after a passing `SqlClientProbe` inside
 `scripts/run_sql_probe.py` (same licence gate, same disposable instance). **A green
 probe alone is not Core acceptance.** Linux evidence on `0af9108` closed the six
-named scenarios in the table above only. Expand the harness for CSV fidelity,
-transactional schema apply, insert/delete, security, backup/restore, time/GUID
-and Agent before treating those as live-verified.
+named scenarios in the table above only. The harness now also runs
+`CORE-TIME-GUID`, `CORE-DESIGN-APPLY`, `CORE-EDIT-INSERT-DELETE`, `CORE-CSV-IMPORT`
+(required), and `CORE-SECURITY` / `CORE-BACKUP` (pass or an explicit skip). That
+wiring is not itself a live pass. Agent remains without a live scenario.
 
 ## Independent review on 4 November 2026
 
@@ -98,8 +99,9 @@ open artifacts/macos/osx-arm64/SQLoryn.app
 
 `date` (ISO `yyyy-MM-dd`), `money` and `smallmoney` (four fractional digits via `SqlMoney`, invariant, sign preserved)
 are materialised by `ResultMaterializer` and covered by fixtures (`s2-date-money-types`) **and** live Linux
-`CORE-MATERIALISE` / `CORE-EXPORT` on `0af9108`. `time` and `uniqueidentifier` have component fixtures (`ws4-*`);
-live reader evidence for those types is still pending. `sql_variant` and other unhandled types still throw
+`CORE-MATERIALISE` / `CORE-EXPORT` on `0af9108`. `time` and `uniqueidentifier` have component fixtures (`ws4-*`)
+and a harness scenario `CORE-TIME-GUID`; live reader evidence for those types is still pending a disposable run.
+`sql_variant` and other unhandled types still throw
 `NotSupportedException`.
 
 ## WS1-T1 connections (component-verified only)

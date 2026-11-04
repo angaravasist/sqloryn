@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Sqloryn.Core.SqlAcceptance;
@@ -20,6 +21,8 @@ sealed class AcceptanceRun
     readonly TextWriter _out;
     readonly string _schema = "acc_" + Guid.NewGuid().ToString("N")[..16];
     readonly List<string> _tables = [];
+    readonly List<string> _users = [];
+    readonly List<string> _databases = [];
     int _pass, _skip, _fail;
     string _database = "";
 
@@ -64,6 +67,18 @@ sealed class AcceptanceRun
                     () => EstimatePlanAsync(admin, ct));
                 await CheckAsync("CORE-PLAN-DENIED", "EstimatePlanAsync INSERT without SHOWPLAN is denied and writes no row",
                     () => EstimatePlanDeniedAsync(admin, ct));
+                await CheckAsync("CORE-TIME-GUID", "time and uniqueidentifier materialise from a second session",
+                    () => TimeGuidAsync(admin, ct));
+                await CheckAsync("CORE-DESIGN-APPLY", "ApplyTableDesignAsync creates, adds a column, rolls a failed batch back, and refuses a stale fingerprint",
+                    () => DesignApplyAsync(admin, ct));
+                await CheckAsync("CORE-EDIT-INSERT-DELETE", "EditRows insert and delete: conflict rolls back; a fresh delete commits; second session verifies",
+                    () => EditInsertDeleteAsync(admin, ct));
+                await CheckAsync("CORE-CSV-IMPORT", "CSV Create and Append store exact values, including rows past the preview sample",
+                    () => CsvImportAsync(admin, ct));
+                await CheckAsync("CORE-SECURITY", "GRANT preview is not executed; a second session sees the same permissions",
+                    () => SecurityPreviewAsync(admin, ct));
+                await CheckAsync("CORE-BACKUP", "COPY_ONLY backup of a disposable database is recorded in msdb, or the server refuses it",
+                    () => BackupAsync(admin, ct));
             }
         }
         finally
@@ -569,6 +584,460 @@ sealed class AcceptanceRun
         }
     }
 
+    // ---- 6. time + uniqueidentifier --------------------------------------------------------------------------
+
+    async Task TimeGuidAsync(SqlSession session, CancellationToken ct)
+    {
+        var table = Table("t_tg");
+        await ExecAsync(session, $"CREATE TABLE {table} (id int NOT NULL PRIMARY KEY, t time(7) NULL, g uniqueidentifier NULL);", ct);
+        _tables.Add("t_tg");
+        await ExecAsync(session, $"""
+            INSERT INTO {table} (id, t, g) VALUES
+            (1, CAST('13:45:30' AS time(7)), CAST('6F9619FF-8B86-D011-B42D-00C04FC964FF' AS uniqueidentifier)),
+            (2, CAST('00:00:00.1234567' AS time(7)), CAST('00000000-0000-0000-0000-000000000000' AS uniqueidentifier)),
+            (3, NULL, NULL),
+            (4, CAST('23:59:59.9999999' AS time(7)), CAST('FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF' AS uniqueidentifier)),
+            (5, CAST('01:02:03.4500000' AS time(7)), CAST('AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE' AS uniqueidentifier));
+            """, ct);
+
+        await using var other = await ConnectAsync(ct);
+        var result = await other.ExecuteAsync($"SELECT id, t, g FROM {table} ORDER BY id;", ct);
+        Require(result.Completion == QueryCompletionKind.Succeeded, $"SELECT did not succeed ({result.Completion}): {result.ErrorSummary}");
+        RequireEqual(1, result.ResultSets.Count, "time/guid result sets");
+        var set = result.ResultSets[0];
+        Require(!set.Truncated && !set.BudgetExceeded && !result.PartialResults, "time/guid result was truncated.");
+        RequireEqual(5, set.Rows.Count, "time/guid row count");
+        RequireEqual("time", set.SqlTypes[1].ToLowerInvariant(), "time SQL type");
+        RequireEqual("uniqueidentifier", set.SqlTypes[2].ToLowerInvariant(), "uniqueidentifier SQL type");
+
+        void Cell(int row, int column, string? display, string kind)
+        {
+            var cell = set.Rows[row][column];
+            if (display is null)
+            {
+                Require(cell.IsNull, $"row {row + 1} col {column}: expected NULL.");
+                return;
+            }
+            Require(!cell.IsNull, $"row {row + 1} col {column}: unexpected NULL.");
+            RequireEqual(kind, cell.Kind, $"row {row + 1} col {column} kind");
+            RequireEqual(display, cell.Display, $"row {row + 1} col {column} display");
+        }
+
+        Cell(0, 0, "1", set.Rows[0][0].Kind);
+        Cell(0, 1, "13:45:30", "time");
+        Cell(0, 2, "6f9619ff-8b86-d011-b42d-00c04fc964ff", "uniqueidentifier");
+        Cell(1, 1, "00:00:00.1234567", "time");
+        Cell(1, 2, "00000000-0000-0000-0000-000000000000", "uniqueidentifier");
+        Cell(2, 1, null, "time");
+        Cell(2, 2, null, "uniqueidentifier");
+        Cell(3, 1, "23:59:59.9999999", "time");
+        Cell(3, 2, "ffffffff-ffff-ffff-ffff-ffffffffffff", "uniqueidentifier");
+        Cell(4, 1, "01:02:03.45", "time");
+        Cell(4, 2, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "uniqueidentifier");
+    }
+
+    // ---- 7. transactional table design ----------------------------------------------------------------------
+
+    TableDesignDraft ApplyDraft(string table, params ColumnDefinition[] columns) => new()
+    {
+        Database = _database,
+        Schema = _schema,
+        TableName = table,
+        Columns = columns,
+        PrimaryKeyColumns = ["id"]
+    };
+
+    static ColumnDefinition Col(string name, string type, bool nullable, int? length = null)
+        => new() { Name = name, DataType = type, IsNullable = nullable, MaxLength = length };
+
+    async Task DesignApplyAsync(SqlSession session, CancellationToken ct)
+    {
+        const string name = "t_apply";
+        var tableRef = new TableRef(_database, _schema, name);
+        var created = ApplyDraft(name,
+            Col("id", "int", nullable: false),
+            Col("code", "nvarchar", nullable: false, length: 20));
+        var create = TableDesignSql.PreviewCreate(created);
+        Require(create.Statements.Count == 1 && create.Statements[0].Sql.StartsWith("CREATE TABLE ", StringComparison.Ordinal),
+            "Create preview is not one CREATE TABLE statement.");
+        var applied = await session.ApplyTableDesignAsync(tableRef, create.Statements, TableDesignFingerprint.Absent, ct);
+        RequireEqual(TableDesignApplyOutcome.Committed, applied.Outcome, "create outcome (" + applied.Message + ")");
+        _tables.Add(name);
+
+        await using var other = await ConnectAsync(ct);
+        var columns = await other.ListColumnsAsync(_database, _schema, name, ct);
+        Require(columns.Select(c => c.Name).SequenceEqual(["id", "code"]), "Second connection does not see the created columns.");
+        await ExecAsync(session, $"INSERT INTO {Table(name)} (id, code) VALUES (1, N'keep');", ct);
+
+        var withNote = ApplyDraft(name,
+            Col("id", "int", nullable: false),
+            Col("code", "nvarchar", nullable: false, length: 20),
+            Col("note", "nvarchar", nullable: true, length: 40));
+        var fingerprint = await session.ReadTableFingerprintAsync(tableRef, ct);
+        var additive = TableDesignSql.PreviewAlter(created, withNote);
+        Require(additive.Statements.Count == 1 && additive.Statements[0].Sql.Contains(" ADD ", StringComparison.Ordinal),
+            "Additive preview did not emit a single ADD.");
+        var added = await session.ApplyTableDesignAsync(tableRef, additive.Statements, fingerprint, ct);
+        RequireEqual(TableDesignApplyOutcome.Committed, added.Outcome, "additive outcome (" + added.Message + ")");
+        columns = await other.ListColumnsAsync(_database, _schema, name, ct);
+        Require(columns.Select(c => c.Name).SequenceEqual(["id", "code", "note"]), "Second connection does not see the added column.");
+        RequireEqual("keep", (string?)(await ScalarAsync(other, $"SELECT code FROM {Table(name)} WHERE id = 1;", ct))!,
+            "row survived the additive alter");
+
+        var breaking = ApplyDraft(name,
+            Col("id", "int", nullable: false),
+            Col("extra", "int", nullable: true),
+            Col("code", "int", nullable: false),
+            Col("note", "nvarchar", nullable: true, length: 40));
+        var batchPreview = TableDesignSql.PreviewAlter(withNote, breaking);
+        Require(batchPreview.Statements.Count >= 2, "Rollback batch did not contain two statements.");
+        Require(batchPreview.Statements[0].Sql.Contains(" ADD ", StringComparison.Ordinal), "First batch statement is not an ADD.");
+        var fresh = await session.ReadTableFingerprintAsync(tableRef, ct);
+        var rolled = await session.ApplyTableDesignAsync(tableRef, batchPreview.Statements, fresh, ct);
+        RequireEqual(TableDesignApplyOutcome.RolledBackError, rolled.Outcome, "batch outcome (" + rolled.Message + ")");
+        RequireEqual(1, rolled.StatementsExecuted, "statements completed before the failing alter");
+        RequireEqual(1, rolled.FailedIndex ?? -1, "failing statement index");
+        columns = await other.ListColumnsAsync(_database, _schema, name, ct);
+        Require(columns.Select(c => c.Name).SequenceEqual(["id", "code", "note"]), "Rolled-back ADD is still visible.");
+        Require(columns.Any(c => c.Name == "code" && c.TypeName.Equals("nvarchar", StringComparison.OrdinalIgnoreCase)),
+            "code column type changed despite rollback.");
+        RequireEqual("keep", (string?)(await ScalarAsync(other, $"SELECT code FROM {Table(name)} WHERE id = 1;", ct))!,
+            "row after rolled-back batch");
+
+        var staleFingerprint = await session.ReadTableFingerprintAsync(tableRef, ct);
+        await ExecAsync(other, $"ALTER TABLE {Table(name)} ADD stale_probe int NULL;", ct);
+        var ghost = TableDesignSql.PreviewAlter(withNote, ApplyDraft(name,
+            Col("id", "int", nullable: false),
+            Col("code", "nvarchar", nullable: false, length: 20),
+            Col("note", "nvarchar", nullable: true, length: 40),
+            Col("ghost", "int", nullable: true)));
+        var refused = await session.ApplyTableDesignAsync(tableRef, ghost.Statements, staleFingerprint, ct);
+        RequireEqual(TableDesignApplyOutcome.RefusedStale, refused.Outcome, "stale outcome (" + refused.Message + ")");
+        RequireEqual(0, refused.StatementsExecuted, "stale apply executed a statement");
+        columns = await other.ListColumnsAsync(_database, _schema, name, ct);
+        Require(columns.Any(c => c.Name == "stale_probe"), "The interfering column is missing, so the fingerprint may not have changed.");
+        Require(!columns.Any(c => c.Name == "ghost"), "A stale design still added a column.");
+        RequireEqual("keep", (string?)(await ScalarAsync(other, $"SELECT code FROM {Table(name)} WHERE id = 1;", ct))!,
+            "row after refused stale apply");
+        Require(session.IsConnected, "Design session dropped after a refused apply.");
+    }
+
+    // ---- 8. insert / delete ---------------------------------------------------------------------------------
+
+    async Task EditInsertDeleteAsync(SqlSession editor, CancellationToken ct)
+    {
+        const string name = "t_row";
+        var table = Table(name);
+        var tableRef = new TableRef(_database, _schema, name);
+        await ExecAsync(editor, $"""
+            CREATE TABLE {table} (
+                id int NOT NULL PRIMARY KEY,
+                label nvarchar(50) COLLATE Latin1_General_CI_AS NOT NULL,
+                qty int NULL);
+            """, ct);
+        _tables.Add(name);
+        var characterColumns = new HashSet<string>(StringComparer.Ordinal) { "label" };
+        var select = $"SELECT id, label, qty FROM {table} ORDER BY id;";
+
+        async Task<EditBatchResult> ApplyAsync(params EditCommand[] commands) => await editor.ApplyEditsAsync(commands, ct);
+
+        var inserted = await ApplyAsync(EditRowsSql.BuildInsert(tableRef, new Dictionary<string, object?>
+        {
+            ["id"] = 1, ["label"] = "Alpha", ["qty"] = 10
+        }));
+        RequireEqual(EditBatchOutcome.Committed, inserted.Outcome, "insert outcome (" + inserted.Message + ")");
+        var second = await ApplyAsync(EditRowsSql.BuildInsert(tableRef, new Dictionary<string, object?>
+        {
+            ["id"] = 2, ["label"] = "Beta", ["qty"] = 20
+        }));
+        RequireEqual(EditBatchOutcome.Committed, second.Outcome, "second insert outcome (" + second.Message + ")");
+
+        await using var other = await ConnectAsync(ct);
+        RequireEqual(2, (int)(await ScalarAsync(other, $"SELECT COUNT(*) FROM {table};", ct))!, "rows after inserts");
+        RequireEqual("Alpha", (string?)(await ScalarAsync(other, $"SELECT label FROM {table} WHERE id = 1;", ct))!, "inserted label");
+
+        var baseline = await editor.QueryRawAsync(select, null, 10, ct);
+        await ExecAsync(other, $"UPDATE {table} SET label = N'ALPHA' WHERE id = 1;", ct);
+        var staleDelete = await ApplyAsync(EditRowsSql.BuildDelete(
+            tableRef, new RowKey(["id"], [1]), Snapshot(baseline, 0), characterColumns: characterColumns));
+        RequireEqual(EditBatchOutcome.RolledBackConflict, staleDelete.Outcome, "stale delete outcome (" + staleDelete.Message + ")");
+        RequireEqual(1, (int)(await ScalarAsync(other,
+            $"SELECT COUNT(*) FROM {table} WHERE id = 1 AND label COLLATE Latin1_General_BIN2 = N'ALPHA' AND qty = 10;", ct))!,
+            "row 1 after conflicting delete");
+
+        var beforeBatch = await editor.QueryRawAsync(select, null, 10, ct);
+        var row2 = beforeBatch.Rows.Select((row, index) => (row, index)).Single(p => (int)p.row[0]! == 2).index;
+        await ExecAsync(other, $"UPDATE {table} SET qty = 21 WHERE id = 2;", ct);
+        var batch = await ApplyAsync(
+            EditRowsSql.BuildInsert(tableRef, new Dictionary<string, object?> { ["id"] = 3, ["label"] = "Gamma", ["qty"] = 30 }),
+            EditRowsSql.BuildDelete(tableRef, new RowKey(["id"], [2]), Snapshot(beforeBatch, row2), characterColumns: characterColumns));
+        RequireEqual(EditBatchOutcome.RolledBackConflict, batch.Outcome, "insert+delete batch outcome (" + batch.Message + ")");
+        RequireEqual(1, batch.FailedIndex ?? -1, "insert+delete failed index");
+        RequireEqual(0, (int)(await ScalarAsync(other, $"SELECT COUNT(*) FROM {table} WHERE id = 3;", ct))!, "rolled-back insert is visible");
+        RequireEqual(21, (int)(await ScalarAsync(other, $"SELECT qty FROM {table} WHERE id = 2;", ct))!, "row 2 after conflicting batch");
+
+        var current = await editor.QueryRawAsync(select, null, 10, ct);
+        var current2 = current.Rows.Select((row, index) => (row, index)).Single(p => (int)p.row[0]! == 2).index;
+        var removed = await ApplyAsync(EditRowsSql.BuildDelete(
+            tableRef, new RowKey(["id"], [2]), Snapshot(current, current2), characterColumns: characterColumns));
+        RequireEqual(EditBatchOutcome.Committed, removed.Outcome, "fresh delete outcome (" + removed.Message + ")");
+        RequireEqual(0, (int)(await ScalarAsync(other, $"SELECT COUNT(*) FROM {table} WHERE id = 2;", ct))!, "row 2 after fresh delete");
+        RequireEqual(1, (int)(await ScalarAsync(other, $"SELECT COUNT(*) FROM {table} WHERE id = 1;", ct))!, "row 1 remains");
+
+        var duplicate = await ApplyAsync(EditRowsSql.BuildInsert(tableRef, new Dictionary<string, object?>
+        {
+            ["id"] = 1, ["label"] = "Other", ["qty"] = 99
+        }));
+        RequireEqual(EditBatchOutcome.RolledBackError, duplicate.Outcome, "duplicate insert outcome (" + duplicate.Message + ")");
+        RequireEqual(1, (int)(await ScalarAsync(other, $"SELECT COUNT(*) FROM {table} WHERE id = 1 AND qty = 10;", ct))!,
+            "duplicate insert changed the existing row");
+        Require(editor.IsConnected, "Editor session dropped after a rolled-back insert.");
+    }
+
+    // ---- 9. CSV import --------------------------------------------------------------------------------------
+
+    async Task CsvImportAsync(SqlSession session, CancellationToken ct)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "sqloryn-acc-" + Guid.NewGuid().ToString("N") + ".csv");
+        const string beyond = "beyond-sample";
+        var csv = "id,label,amount,when_utc,token\n"
+            + "1,alpha,10.50,2024-02-29T13:45:30.1234567,6f9619ff-8b86-d011-b42d-00c04fc964ff\n"
+            + "2,\"a,b \"\"q\"\"\",-0.0001,1999-12-31,00000000-0000-0000-0000-000000000000\n"
+            + "3," + beyond + ",1234567890.123456789,2020-01-02T00:00:00.0000000,11111111-2222-3333-4444-555555555555\n";
+        await File.WriteAllTextAsync(path, csv, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct);
+        try
+        {
+            var options = new CsvImportOptions { HasHeader = true, SampleRowCount = 1, ScanRowLimit = 100 };
+            var preview = CsvImportPreview.Parse(path, options);
+            Require(!preview.HasErrors, "CSV preview reported errors.");
+            RequireEqual(1, preview.SampleRows.Count, "preview sample row count");
+            Require(!preview.SampleRows.Any(row => row.Any(cell => cell.Contains(beyond, StringComparison.Ordinal))),
+                "The preview sample includes the tail row.");
+            var amount = preview.Columns.Single(c => c.Name == "amount");
+            RequireEqual(CsvSqlType.Decimal, amount.GuessedType, "amount guessed type");
+            RequireEqual(9, amount.MaxScale, "amount scale must come from the row past the sample");
+
+            const string createdName = "t_csv_new";
+            var createdRef = new TableRef(_database, _schema, createdName);
+            var createPlan = CsvImportPlan.FromPreview(preview, createdRef, CsvImportMode.Create);
+            var amountMap = createPlan.Mappings.Single(m => m.TargetColumn == "amount");
+            RequireEqual(CsvSqlType.Decimal, amountMap.Type, "create amount type");
+            RequireEqual(9, amountMap.Scale ?? -1, "create amount scale");
+            _tables.Add(createdName);
+            var created = await session.ApplyCsvImportAsync(createPlan, CsvImportSource.FromFile(path, options), null, ct);
+            RequireEqual(CsvImportOutcome.Committed, created.Outcome, "create import outcome (" + created.Message + ")");
+            RequireEqual(3L, created.RowsInserted, "create rows inserted");
+
+            await using var other = await ConnectAsync(ct);
+            await RequireCsvRowsAsync(other, Table(createdName), includeSentinel: false, ct);
+
+            const string appendName = "t_csv_app";
+            var appendRef = new TableRef(_database, _schema, appendName);
+            var ddl = CsvImportPlan.FromPreview(preview, appendRef, CsvImportMode.Create);
+            await ExecAsync(session, ddl.GetPrepareStatements()[0], ct);
+            _tables.Add(appendName);
+            await ExecAsync(session, $"""
+                INSERT INTO {Table(appendName)} (id, label, amount, when_utc, token) VALUES
+                (9, N'sentinel-keep', CONVERT(decimal(38, 9), '7.125'), CONVERT(datetime2(7), '2019-03-04T05:06:07.0000001', 126),
+                 CONVERT(uniqueidentifier, 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'));
+                """, ct);
+            var appendPlan = CsvImportPlan.FromPreview(preview, appendRef, CsvImportMode.Append);
+            var appended = await session.ApplyCsvImportAsync(appendPlan, CsvImportSource.FromFile(path, options), null, ct);
+            RequireEqual(CsvImportOutcome.Committed, appended.Outcome, "append import outcome (" + appended.Message + ")");
+            RequireEqual(3L, appended.RowsInserted, "append rows inserted");
+            await RequireCsvRowsAsync(other, Table(appendName), includeSentinel: true, ct);
+            Require(session.IsConnected, "Import session dropped after a committed import.");
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { /* the temp file holds only synthetic rows */ }
+        }
+    }
+
+    async Task RequireCsvRowsAsync(SqlSession other, string table, bool includeSentinel, CancellationToken ct)
+    {
+        var rows = await other.QueryRawAsync($"""
+            SELECT id,
+                   label,
+                   CONVERT(varchar(50), amount) AS amount_text,
+                   CONVERT(varchar(30), when_utc, 121) AS when_text,
+                   LOWER(CONVERT(varchar(36), token)) AS token_text
+            FROM {table}
+            ORDER BY id;
+            """, null, 20, ct);
+        Require(!rows.Truncated && !rows.HasOmittedCells, "CSV verification read was truncated.");
+        (int Id, string Label, string Amount, string When, string Token)[] expected =
+        [
+            (1, "alpha", "10.500000000", "2024-02-29 13:45:30.1234567", "6f9619ff-8b86-d011-b42d-00c04fc964ff"),
+            (2, "a,b \"q\"", "-0.000100000", "1999-12-31 00:00:00.0000000", "00000000-0000-0000-0000-000000000000"),
+            (3, "beyond-sample", "1234567890.123456789", "2020-01-02 00:00:00.0000000", "11111111-2222-3333-4444-555555555555")
+        ];
+        if (includeSentinel)
+        {
+            expected =
+            [
+                ..expected,
+                (9, "sentinel-keep", "7.125000000", "2019-03-04 05:06:07.0000001", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+            ];
+        }
+        RequireEqual(expected.Length, rows.Rows.Count, "stored CSV row count for " + table);
+        for (var i = 0; i < expected.Length; i++)
+        {
+            var row = rows.Rows[i];
+            RequireEqual(expected[i].Id, Convert.ToInt32(row[0], CultureInfo.InvariantCulture), $"csv id {expected[i].Id}");
+            RequireEqual(expected[i].Label, Convert.ToString(row[1], CultureInfo.InvariantCulture) ?? "", $"csv label {expected[i].Id}");
+            RequireEqual(expected[i].Amount, Convert.ToString(row[2], CultureInfo.InvariantCulture) ?? "", $"csv amount {expected[i].Id}");
+            RequireEqual(expected[i].When, Convert.ToString(row[3], CultureInfo.InvariantCulture) ?? "", $"csv datetime {expected[i].Id}");
+            RequireEqual(expected[i].Token, Convert.ToString(row[4], CultureInfo.InvariantCulture) ?? "", $"csv guid {expected[i].Id}");
+        }
+    }
+
+    // ---- 10. security preview -------------------------------------------------------------------------------
+
+    async Task SecurityPreviewAsync(SqlSession session, CancellationToken ct)
+    {
+        var user = "accu" + Guid.NewGuid().ToString("N")[..12];
+        var quoted = SqlIdentity.QuoteIdentifier(user);
+        try
+        {
+            await ExecAsync(session, $"CREATE USER {quoted} WITHOUT LOGIN;", ct);
+        }
+        catch (AcceptanceFailure error)
+        {
+            throw new AcceptanceSkip("cannot create a login-less user for the permission preview: " + error.Message);
+        }
+        _users.Add(user);
+
+        await using var other = await ConnectAsync(ct);
+        var before = await PermissionSnapshotAsync(other, user, ct);
+        var preview = PermissionChangePreview.Create(
+        [
+            new PermissionChange(
+                PermissionAction.Grant,
+                PermissionScope.Schema,
+                "SELECT",
+                user,
+                Database: _database,
+                Schema: _schema)
+        ]);
+        Require(preview.HasChanges, "GRANT preview produced no statement.");
+        Require(preview.ExecutableSql.Contains("GRANT", StringComparison.Ordinal), "Preview SQL is not a GRANT.");
+        Require(preview.ExecutableSql.Contains(quoted, StringComparison.Ordinal), "Preview SQL does not name the user.");
+        // Preview is pure. ApplyPermissionChangeAsync is intentionally not called.
+        var after = await PermissionSnapshotAsync(other, user, ct);
+        RequireEqual(before, after, "permissions after GRANT preview");
+        Require(!after.Contains("SELECT", StringComparison.Ordinal), "A SELECT permission appeared without applying the preview.");
+    }
+
+    async Task<string> PermissionSnapshotAsync(SqlSession session, string user, CancellationToken ct)
+    {
+        var rows = await session.QueryRawAsync("""
+            SELECT p.state_desc, p.permission_name, p.class_desc, COALESCE(SCHEMA_NAME(p.major_id), N'') AS schema_name
+            FROM sys.database_permissions AS p
+            WHERE p.grantee_principal_id = DATABASE_PRINCIPAL_ID(@u)
+            ORDER BY p.class_desc, p.permission_name, p.state_desc, schema_name;
+            """, [new EditParameter("@u", user)], 100, ct);
+        Require(!rows.Truncated, "Permission snapshot was truncated.");
+        var sb = new StringBuilder();
+        foreach (var row in rows.Rows)
+        {
+            foreach (var value in row)
+                sb.Append(Convert.ToString(value, CultureInfo.InvariantCulture)).Append('\u001f');
+            sb.Append('\u001e');
+        }
+        return sb.ToString();
+    }
+
+    // ---- 11. backup -----------------------------------------------------------------------------------------
+
+    async Task BackupAsync(SqlSession session, CancellationToken ct)
+    {
+        var directory = await ScalarAsync(session, "SELECT CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultDataPath'));", ct) as string;
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            directory = await ScalarAsync(session, """
+                SELECT LEFT(physical_name, LEN(physical_name) - CHARINDEX('\', REVERSE(REPLACE(physical_name, '/', '\'))))
+                FROM sys.master_files WHERE database_id = 1 AND file_id = 1;
+                """, ct) as string;
+        }
+        if (string.IsNullOrWhiteSpace(directory))
+            throw new AcceptanceSkip("SQL Server did not report a data directory, so there is no known server-side backup path.");
+
+        var name = "accbak" + Guid.NewGuid().ToString("N")[..12];
+        var quoted = SqlIdentity.QuoteIdentifier(name);
+        var created = false;
+        try
+        {
+            try
+            {
+                await ExecAsync(session, $"CREATE DATABASE {quoted};", ct);
+                created = true;
+                _databases.Add(name);
+            }
+            catch (AcceptanceFailure error) when (!created)
+            {
+                throw new AcceptanceSkip("cannot create a disposable database to back up: " + error.Message);
+            }
+
+            var slash = Math.Max(directory.LastIndexOf('/'), directory.LastIndexOf('\\'));
+            var separator = slash >= 0 && directory[slash] == '\\' ? '\\' : '/';
+            var devicePath = directory.TrimEnd('/', '\\') + separator + name + ".bak";
+            var plan = new BackupRestorePlan
+            {
+                Operation = OperationKind.Backup,
+                Database = name,
+                Device = new BackupDevice(devicePath, BackupPathKind.ServerSide),
+                CopyOnly = true,
+                Checksum = true,
+                Overwrite = false,
+                ServerRunsOnThisMac = false
+            };
+            var issues = plan.Validate().Where(i => i.Severity == OperationIssueSeverity.Error).ToList();
+            if (issues.Count > 0)
+                throw new AcceptanceSkip("backup plan is not usable on this server: " + issues[0].Message);
+
+            await using var other = await ConnectAsync(ct);
+            var before = (int)(await ScalarAsync(other, """
+                SELECT COUNT(*) FROM msdb.dbo.backupset
+                WHERE database_name = @n AND type = 'D' AND is_copy_only = 1;
+                """, ct, new EditParameter("@n", name)))!;
+            RequireEqual(0, before, "backupset rows before execute");
+            var preview = plan.GeneratePreviewSql();
+            Require(preview.Contains("BACKUP DATABASE", StringComparison.Ordinal), "Preview is not a BACKUP DATABASE statement.");
+            var unchanged = (int)(await ScalarAsync(other, """
+                SELECT COUNT(*) FROM msdb.dbo.backupset
+                WHERE database_name = @n AND type = 'D' AND is_copy_only = 1;
+                """, ct, new EditParameter("@n", name)))!;
+            RequireEqual(0, unchanged, "generating the backup preview wrote a backupset row");
+
+            var result = await OperationRunner.ExecuteAsync(
+                plan, preview, confirmed: true, (sql, token) => session.ExecuteAsync(sql, token), ct);
+            if (result.Outcome != OperationOutcome.Completed)
+                throw new AcceptanceSkip("server did not complete the backup (" + result.Outcome + "): " + result.Message);
+
+            var after = (int)(await ScalarAsync(other, """
+                SELECT COUNT(*) FROM msdb.dbo.backupset
+                WHERE database_name = @n AND type = 'D' AND is_copy_only = 1;
+                """, ct, new EditParameter("@n", name)))!;
+            Require(after >= 1, "The backup completed but msdb.dbo.backupset has no copy-only row for the disposable database.");
+        }
+        finally
+        {
+            if (created)
+            {
+                try
+                {
+                    using var drop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    await ExecAsync(session, $"DROP DATABASE IF EXISTS {quoted};", drop.Token);
+                }
+                catch (Exception error)
+                {
+                    Report("CORE-CLEANUP", "FAIL", _redactor.Clean("drop disposable backup database: " + error.Message));
+                }
+            }
+        }
+    }
+
     async Task TryAsync(SqlSession session, string sql)
     {
         try
@@ -584,8 +1053,12 @@ sealed class AcceptanceRun
 
     async Task CleanupAsync(SqlSession admin, bool schemaCreated)
     {
+        foreach (var database in _databases)
+            await TryAsync(admin, $"DROP DATABASE IF EXISTS {SqlIdentity.QuoteIdentifier(database)};");
         if (!schemaCreated)
             return;
+        foreach (var user in _users)
+            await TryAsync(admin, $"DROP USER IF EXISTS {SqlIdentity.QuoteIdentifier(user)};");
         foreach (var table in _tables.AsEnumerable().Reverse())
             await TryAsync(admin, $"DROP TABLE IF EXISTS {Table(table)};");
         await TryAsync(admin, $"DROP SCHEMA IF EXISTS {SqlIdentity.QuoteIdentifier(_schema)};");
