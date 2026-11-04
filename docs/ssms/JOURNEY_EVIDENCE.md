@@ -16,7 +16,7 @@ Status meanings:
 - **Skip** — not run; the reason says why.
 - **Fail** — run and failed. None recorded.
 
-Last Core run: 100 named assertions printed `PASS` plus the summary line, 0 `FAIL` (`dotnet Sqloryn.Core.Tests.dll`), on macOS 27.2 arm64.
+Last Core run: 109 named assertions printed `PASS` plus the summary line, 0 `FAIL` (`dotnet Sqloryn.Core.Tests.dll`), on macOS 27.2 arm64.
 
 ## 1. Install/open and identify
 

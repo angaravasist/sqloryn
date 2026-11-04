@@ -50,7 +50,9 @@ internal static class PlanXmlReader
             offset += read;
             if (offset > maxCharacters)
                 throw new PlanCommandException(null,
-                    $"The estimated plan is too large to display (more than {maxCharacters:N0} characters).");
+                    $"The estimated plan is too large to display (reader stopped after {maxCharacters:N0} characters; " +
+                    $"per-plan limit {EstimatedPlanService.MaxPlanCharacters:N0}, " +
+                    $"total limit {EstimatedPlanService.MaxTotalPlanCharacters:N0}).");
             sb.Append(buffer, 0, read);
         }
     }

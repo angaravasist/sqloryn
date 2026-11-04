@@ -16,11 +16,19 @@ ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "experiments/SqlClientProbe/bin/Release/net10.0/SqlClientProbe.dll"
 CORE_ACCEPTANCE_PROJECT = ROOT / "tests/Sqloryn.Core.SqlAcceptance/Sqloryn.Core.SqlAcceptance.csproj"
 CORE_ACCEPTANCE = ROOT / "tests/Sqloryn.Core.SqlAcceptance/bin/Release/net10.0/Sqloryn.Core.SqlAcceptance.dll"
-# A green SqlClientProbe alone never closes Core findings; at least this many Core checks must PASS.
-CORE_ACCEPTANCE_MIN_PASS = 5
+# A green SqlClientProbe alone never closes Core findings; these named Core checks must PASS.
+CORE_ACCEPTANCE_REQUIRED_PASSES = (
+    "CORE-MATERIALISE",
+    "CORE-EXPORT",
+    "CORE-DESIGN-PK",
+    "CORE-EDIT-CONFLICT",
+    "CORE-PLAN-INSERT",
+)
+CORE_ACCEPTANCE_MIN_PASS = len(CORE_ACCEPTANCE_REQUIRED_PASSES)
 # The only case that may SKIP (server refuses to create a restricted login); anything else is a failure.
 CORE_ACCEPTANCE_ALLOWED_SKIPS = {"CORE-PLAN-DENIED"}
 CORE_ACCEPTANCE_COMPLETE_RE = re.compile(r"\ACORE-ACCEPTANCE COMPLETE pass=(\d+) skip=(\d+) fail=(\d+)\Z")
+CORE_ACCEPTANCE_PASS_RE = re.compile(r"\APASS (CORE-[A-Z0-9-]+) ")
 REMOTE_HELPER = Path(__file__).resolve().parent / "sql_probe_remote_helper.py"
 # SQL Server 2022 CU27 GDR1, Ubuntu 22.04; resolved from MCR on 2026-10-31.
 IMAGE = "mcr.microsoft.com/mssql/server@sha256:cf8f0ab2ebe61feec2eed2629061a07d247f791c2a8ddda74a4ac9f06a291718"
@@ -363,11 +371,15 @@ def check_core_acceptance_output(stdout):
     """Pure verdict for the acceptance transcript; a missing/partial/skipped run is never success."""
     complete = None
     skipped = []
+    passed_names = set()
     for line in stdout.splitlines():
         if line.startswith("SKIP CORE-ACCEPTANCE "):
             raise ProbeError("Core acceptance was skipped; probe alone does not close Core findings.")
         if line.startswith("SKIP CORE-"):
             skipped.append(line.split()[1])
+        pass_match = CORE_ACCEPTANCE_PASS_RE.match(line)
+        if pass_match:
+            passed_names.add(pass_match.group(1))
         matched = CORE_ACCEPTANCE_COMPLETE_RE.match(line)
         if matched:
             complete = tuple(int(group) for group in matched.groups())
@@ -378,6 +390,10 @@ def check_core_acceptance_output(stdout):
         raise ProbeError("Core acceptance reported failures; no Core claim is valid.")
     if passed < CORE_ACCEPTANCE_MIN_PASS:
         raise ProbeError("Core acceptance passed too few checks; no Core claim is valid.")
+    missing = [name for name in CORE_ACCEPTANCE_REQUIRED_PASSES if name not in passed_names]
+    if missing:
+        raise ProbeError(
+            "Core acceptance omitted required checks (" + ", ".join(missing) + "); no Core claim is valid.")
     if not set(skipped) <= CORE_ACCEPTANCE_ALLOWED_SKIPS:
         raise ProbeError("Core acceptance skipped an unexpected check; no Core claim is valid.")
     return complete
@@ -387,10 +403,13 @@ def invoke_core_acceptance(port, certificate, password):
     """Run Sqloryn.Core live checks against the same disposable instance (after PROBE passed)."""
     if not CORE_ACCEPTANCE.is_file():
         raise ProbeError("Build the Release configuration first (Core acceptance project missing); see docs/TESTING.md.")
-    result = subprocess.run(
-        ["dotnet", "run", "--project", str(CORE_ACCEPTANCE_PROJECT), "-c", "Release", "--no-build"],
-        cwd=ROOT, env=core_acceptance_environment(port, certificate, password),
-        text=True, capture_output=True, timeout=330)
+    try:
+        result = subprocess.run(
+            ["dotnet", "run", "--project", str(CORE_ACCEPTANCE_PROJECT), "-c", "Release", "--no-build"],
+            cwd=ROOT, env=core_acceptance_environment(port, certificate, password),
+            text=True, capture_output=True, timeout=330)
+    except subprocess.TimeoutExpired as error:
+        raise ProbeError("Core SQL acceptance timed out; no Core claim is valid.") from error
     for line in result.stdout.splitlines():
         if line.startswith(("PASS CORE-", "SKIP CORE-", "CORE-ACCEPTANCE COMPLETE", "Core acceptance target:")):
             print(line)

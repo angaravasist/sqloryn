@@ -546,7 +546,7 @@ class ProbeRunnerTests(unittest.TestCase):
 
 GOOD_CORE_OUTPUT = (
     "Core acceptance target: SQL Server 16.0\n"
-    + "".join(f"PASS CORE-{name} ok\n" for name in ("A", "B", "C", "D", "E"))
+    + "".join(f"PASS {name} ok\n" for name in runner.CORE_ACCEPTANCE_REQUIRED_PASSES)
     + "SKIP CORE-PLAN-DENIED cannot create a restricted login\n"
     + "CORE-ACCEPTANCE COMPLETE pass=5 skip=1 fail=0\n")
 
@@ -612,13 +612,26 @@ class CoreAcceptanceWiringTests(unittest.TestCase):
                 runner.invoke_core_acceptance(14330, Path("a"), "pw")
         self.assertIn("FAIL CORE-MATERIALISE", err.getvalue())
 
+    def test_core_acceptance_timeout_is_probe_error(self):
+        with patch.object(runner.subprocess, "run",
+                          side_effect=subprocess.TimeoutExpired(cmd=["dotnet"], timeout=1)):
+            with self.assertRaises(runner.ProbeError) as raised:
+                runner.invoke_core_acceptance(14330, Path("a"), "pw")
+        self.assertIn("timed out", str(raised.exception).lower())
+
     def test_core_acceptance_verdict_rejects_skip_missing_summary_and_failures(self):
         self.assertEqual(runner.check_core_acceptance_output(GOOD_CORE_OUTPUT), (5, 1, 0))
+        missing_required = (
+            "PASS CORE-MATERIALISE ok\nPASS CORE-EXPORT ok\nPASS CORE-DESIGN-PK ok\n"
+            "PASS CORE-EDIT-CONFLICT ok\n"
+            "SKIP CORE-PLAN-DENIED cannot create a restricted login\n"
+            "CORE-ACCEPTANCE COMPLETE pass=4 skip=1 fail=0\n")
         bad = {
             "unconfigured skip": "SKIP CORE-ACCEPTANCE environment not configured\n",
-            "no summary": "PASS CORE-A ok\n",
+            "no summary": "PASS CORE-MATERIALISE ok\n",
             "failures": GOOD_CORE_OUTPUT.replace("fail=0", "fail=1"),
             "too few passes": GOOD_CORE_OUTPUT.replace("pass=5", "pass=4"),
+            "missing required name": missing_required,
             "unexpected skip": GOOD_CORE_OUTPUT.replace("SKIP CORE-PLAN-DENIED", "SKIP CORE-EDIT-CONFLICT"),
         }
         for label, output in bad.items():

@@ -206,15 +206,12 @@ sealed class AcceptanceRun
             return;
         }
         Require(!cell.IsNull, $"{what}: unexpected NULL.");
-        // Either date-only or midnight datetime text is acceptable; the calendar day must be exact.
-        var rest = cell.Display.StartsWith(expected, StringComparison.Ordinal) ? cell.Display[expected.Length..] : null;
-        Require(rest is not null && (rest.Length == 0 || (rest.StartsWith("T00:00:00", StringComparison.Ordinal) &&
-                                                          rest["T00:00:00".Length..].All(ch => ch is '0' or '.'))),
-            $"{what}: expected calendar day {expected} but display was '{cell.Display}'.");
-        Require(cell.Kind is "datetime" or "date", $"{what}: unexpected kind '{cell.Kind}'.");
+        // Shipping path must emit ISO date only (yyyy-MM-dd), never a midnight datetime string.
+        RequireEqual(expected, cell.Display, $"{what}: display");
+        RequireEqual("date", cell.Kind, $"{what}: kind");
     }
 
-    static void RequireMoney(CellValue cell, decimal? expected, string what)
+    static void RequireMoney(CellValue cell, decimal? expected, string what, string expectedKind)
     {
         if (expected is null)
         {
@@ -226,7 +223,11 @@ sealed class AcceptanceRun
         Require(decimal.TryParse(cell.Display, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
                 CultureInfo.InvariantCulture, out var actual), $"{what}: '{cell.Display}' is not a decimal.");
         RequireEqual(expected.Value, actual, what + " value");
-        Require(cell.Kind is "number" or "decimal" or "money", $"{what}: unexpected kind '{cell.Kind}'.");
+        // Four fractional digits from SqlMoney (e.g. 5.0000, -12.3456).
+        Require(cell.Display.Contains('.', StringComparison.Ordinal) &&
+                cell.Display[(cell.Display.IndexOf('.') + 1)..].Length == 4,
+            $"{what}: expected exactly four fractional digits, got '{cell.Display}'.");
+        RequireEqual(expectedKind, cell.Kind, $"{what}: kind");
     }
 
     async Task MaterialiseAsync(SqlSession session, CancellationToken ct)
@@ -242,8 +243,8 @@ sealed class AcceptanceRun
             var row = set.Rows[i];
             RequireEqual(expected.Id.ToString(CultureInfo.InvariantCulture), row[0].Display, $"row {expected.Id} id");
             RequireDate(row[1], expected.Date, $"row {expected.Id} date");
-            RequireMoney(row[2], expected.Money, $"row {expected.Id} money");
-            RequireMoney(row[3], expected.Small, $"row {expected.Id} smallmoney");
+            RequireMoney(row[2], expected.Money, $"row {expected.Id} money", "money");
+            RequireMoney(row[3], expected.Small, $"row {expected.Id} smallmoney", "smallmoney");
             if (expected.Text is null)
                 Require(row[4].IsNull, $"row {expected.Id} text: expected NULL.");
             else
