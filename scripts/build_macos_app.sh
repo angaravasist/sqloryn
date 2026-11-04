@@ -77,7 +77,7 @@ EVIDENCE="$ROOT/docs/evidence/package-$SHORT.md"
 [[ "$SELF_CONTAINED" == "1" ]] && EVIDENCE="$ROOT/docs/evidence/package-$SHORT-self-contained.md"
 mkdir -p "$ROOT/docs/evidence"
 COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
-if [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then DIRTY="dirty (uncommitted changes were present; the commit alone does not identify this build)"; else DIRTY="clean"; fi
+if [[ -n "$(git -C "$ROOT" status --porcelain -- . ':!docs/evidence' ':!artifacts' 2>/dev/null)" ]]; then DIRTY="dirty (uncommitted changes were present; the commit alone does not identify this build)"; else DIRTY="clean"; fi
 DLL="$APP/Contents/MacOS/Sqloryn.dll"
 DLL_SHA="$(shasum -a 256 "$DLL" | awk '{print $1}')"
 EXE_SHA="$(shasum -a 256 "$APP/Contents/MacOS/Sqloryn" | awk '{print $1}')"
