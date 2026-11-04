@@ -19,8 +19,29 @@ public enum CsvImportMode
 /// <param name="TargetColumn">Destination column name (existing column for Append/Replace, new column for Create).</param>
 /// <param name="Type">How cells are parsed and sent. For Create it is also the column type.</param>
 /// <param name="Length">Create only: nvarchar length (null = MAX).</param>
-/// <param name="Scale">Create only: decimal scale.</param>
-public sealed record CsvColumnMapping(int SourceIndex, string TargetColumn, CsvSqlType Type, int? Length = null, int? Scale = null);
+/// <param name="Scale">Create only: decimal scale (0–38).</param>
+/// <param name="Destination">Append/Replace: exact destination type metadata used for fidelity checks before any write.</param>
+public sealed record CsvColumnMapping(
+    int SourceIndex,
+    string TargetColumn,
+    CsvSqlType Type,
+    int? Length = null,
+    int? Scale = null,
+    CsvDestinationType? Destination = null);
+
+/// <summary>
+/// Exact SQL Server destination column type for Append/Replace fidelity checks.
+/// A successful provider conversion alone is not proof that the value was preserved.
+/// </summary>
+/// <param name="SqlTypeName">sys.types name (e.g. decimal, varchar, money).</param>
+/// <param name="MaxLength">Character/binary length; negative means MAX.</param>
+/// <param name="Precision">Numeric precision when applicable.</param>
+/// <param name="Scale">Numeric or temporal scale when applicable.</param>
+public sealed record CsvDestinationType(
+    string SqlTypeName,
+    int? MaxLength = null,
+    int? Precision = null,
+    int? Scale = null);
 
 public sealed class CsvImportConversionException(int rowInBatch, int sourceColumn, string message) : Exception(message)
 {
@@ -238,6 +259,9 @@ public sealed class CsvImportPlan
                     throw new CsvImportConversionException(r, m.SourceIndex, $"Row is missing source column {m.SourceIndex + 1}.");
                 if (!TryConvert(rows[r][m.SourceIndex], m.Type, EmptyTextAsNull, out var value, out var error))
                     throw new CsvImportConversionException(r, m.SourceIndex, $"Value in source column {m.SourceIndex + 1} {error}.");
+                if (m.Destination is { } dest
+                    && !CsvDestinationFidelity.TryAccept(rows[r][m.SourceIndex], dest, EmptyTextAsNull, out var fidelityError))
+                    throw new CsvImportConversionException(r, m.SourceIndex, $"Value in source column {m.SourceIndex + 1} {fidelityError}.");
                 parameters.Add(new EditParameter("@p" + parameters.Count.ToString(CultureInfo.InvariantCulture), value));
             }
         }

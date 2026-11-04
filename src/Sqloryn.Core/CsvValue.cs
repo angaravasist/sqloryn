@@ -31,12 +31,15 @@ public static class CsvSqlTypes
         };
     }
 
-    /// <summary>T-SQL type text for CREATE TABLE. <paramref name="length"/> is for text (null = MAX); <paramref name="scale"/> for decimals.</summary>
+    /// <summary>
+    /// T-SQL type text for CREATE TABLE. <paramref name="length"/> is for text (null = MAX);
+    /// <paramref name="scale"/> for decimals must be 0–38 (never silently clamped).
+    /// </summary>
     public static string ToSqlTypeText(CsvSqlType type, int? length, int? scale) => type switch
     {
         CsvSqlType.Int => "int",
         CsvSqlType.BigInt => "bigint",
-        CsvSqlType.Decimal => $"decimal(38, {Math.Clamp(scale ?? 10, 0, 18).ToString(CultureInfo.InvariantCulture)})",
+        CsvSqlType.Decimal => FormatDecimal(scale),
         CsvSqlType.Bit => "bit",
         CsvSqlType.DateTime2 => "datetime2(7)",
         CsvSqlType.UniqueIdentifier => "uniqueidentifier",
@@ -44,6 +47,14 @@ public static class CsvSqlTypes
             ? $"nvarchar({length.Value.ToString(CultureInfo.InvariantCulture)})"
             : "nvarchar(max)"
     };
+
+    static string FormatDecimal(int? scale)
+    {
+        var s = scale ?? 10;
+        if (s is < 0 or > 38)
+            throw new ArgumentOutOfRangeException(nameof(scale), s, "Decimal scale must be between 0 and 38 inclusive.");
+        return $"decimal(38, {s.ToString(CultureInfo.InvariantCulture)})";
+    }
 }
 
 /// <summary>

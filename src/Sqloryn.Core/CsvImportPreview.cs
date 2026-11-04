@@ -276,7 +276,7 @@ public static class CsvImportPreview
             if (_bigInt && !CsvValue.TryParseInt64(text, strictLeadingZeros: true, out _)) _bigInt = false;
             if (_decimal)
             {
-                if (CsvValue.TryParseDecimalText(text, strictLeadingZeros: true, out var digits, out var scale) && scale <= 18)
+                if (CsvValue.TryParseDecimalText(text, strictLeadingZeros: true, out var digits, out var scale) && scale <= 38)
                 {
                     MaxScale = Math.Max(MaxScale, scale);
                     _maxIntegerDigits = Math.Max(_maxIntegerDigits, digits);

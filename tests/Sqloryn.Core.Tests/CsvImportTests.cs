@@ -46,8 +46,116 @@ static class CsvImportTests
         PreviewDoesNotWrite();
         PlanValidationAndSql();
         Conversion();
+        CreateDecimalScaleExact();
+        DestinationFidelity();
         await ApplyAsync();
+        await ImmutableSourceFingerprintAsync();
         AppWiring();
+    }
+
+    /// <summary>
+    /// CREATE must emit the observed decimal scale (0–38), never silently clamp to 18.
+    /// </summary>
+    static void CreateDecimalScaleExact()
+    {
+        Check(CsvSqlTypes.ToSqlTypeText(CsvSqlType.Decimal, null, 28) == "decimal(38, 28)", "create-decimal-scale-28");
+        Check(CsvSqlTypes.ToSqlTypeText(CsvSqlType.Decimal, null, 0) == "decimal(38, 0)", "create-decimal-scale-0");
+        Check(CsvSqlTypes.ToSqlTypeText(CsvSqlType.Decimal, null, 38) == "decimal(38, 38)", "create-decimal-scale-38");
+        Throws<ArgumentOutOfRangeException>(() => CsvSqlTypes.ToSqlTypeText(CsvSqlType.Decimal, null, 39), "create-decimal-scale-39-refused");
+        Throws<ArgumentOutOfRangeException>(() => CsvSqlTypes.ToSqlTypeText(CsvSqlType.Decimal, null, -1), "create-decimal-scale-negative-refused");
+
+        var frac28 = "1." + new string('1', 28);
+        var preview = CsvImportPreview.Parse(Utf8("amount\n" + frac28 + "\n"), new CsvImportOptions());
+        Check(preview.Columns[0].GuessedType == CsvSqlType.Decimal && preview.Columns[0].MaxScale == 28, "preview-guesses-scale-28");
+        var plan = CsvImportPlan.FromPreview(preview, Target, CsvImportMode.Create);
+        Check(plan.Mappings[0].Scale == 28, "create-plan-keeps-scale-28");
+        Check(plan.GetPrepareStatements()[0].Contains("decimal(38, 28)", StringComparison.Ordinal), "create-ddl-scale-28");
+        Pass("csv-create-decimal-scale-exact");
+    }
+
+    /// <summary>
+    /// Append/Replace must refuse cells that would lose fidelity against the destination type before any write.
+    /// </summary>
+    static void DestinationFidelity()
+    {
+        var decimalDest = new CsvDestinationType("decimal", Precision: 10, Scale: 2);
+        Check(!CsvDestinationFidelity.TryAccept("1.234", decimalDest, emptyTextAsNull: false, out var err)
+              && err is not null && err.Contains("scale", StringComparison.OrdinalIgnoreCase), "dest-decimal-scale-refuse");
+        Check(CsvDestinationFidelity.TryAccept("1.23", decimalDest, false, out _), "dest-decimal-scale-ok");
+        Check(!CsvDestinationFidelity.TryAccept("123456789.01", decimalDest, false, out _), "dest-decimal-precision-refuse");
+
+        var varchar5 = new CsvDestinationType("varchar", MaxLength: 5);
+        Check(!CsvDestinationFidelity.TryAccept("abcdef", varchar5, false, out _), "dest-varchar-length-refuse");
+        Check(!CsvDestinationFidelity.TryAccept("café", varchar5, false, out var cafeErr)
+              && cafeErr is not null, "dest-varchar-non-latin1-refuse");
+        Check(CsvDestinationFidelity.TryAccept("abcde", varchar5, false, out _), "dest-varchar-ok");
+
+        var money = new CsvDestinationType("money");
+        Check(!CsvDestinationFidelity.TryAccept("922337203685477.5808", money, false, out _), "dest-money-overflow-refuse");
+        Check(!CsvDestinationFidelity.TryAccept("1.23456", money, false, out _), "dest-money-scale-refuse");
+
+        var nvarchar10 = new CsvDestinationType("nvarchar", MaxLength: 10);
+        Check(CsvDestinationFidelity.TryAccept("café", nvarchar10, false, out _), "dest-nvarchar-unicode-ok");
+        Check(!CsvDestinationFidelity.TryAccept("abcdefghijk", nvarchar10, false, out _), "dest-nvarchar-length-refuse");
+
+        // Replace refuses lossy data before the transaction begins (old rows survive).
+        var replacePlan = new CsvImportPlan(Target, CsvImportMode.Replace,
+            [new CsvColumnMapping(0, "amt", CsvSqlType.Decimal, Scale: 2, Destination: decimalDest)], null, false);
+        var factory = new FakeCsvImportFactory(replacedRows: 4);
+        var refused = CsvImportApply.ApplyAsync(factory, replacePlan, Source("amt\n1.234\n")).GetAwaiter().GetResult();
+        Check(refused.Outcome == CsvImportOutcome.RefusedInvalidData && factory.Log.Count == 0, "replace-lossy-refused-before-begin");
+        Check(refused.Issues.Any(i => i.Severity == CsvIssueSeverity.Error), "replace-lossy-reports-issue");
+        Pass("csv-destination-fidelity");
+    }
+
+    /// <summary>
+    /// Source content must be fingerprint-verified (or snapshotted) so same-row-count file edits cannot commit silently.
+    /// </summary>
+    static async Task ImmutableSourceFingerprintAsync()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "sqloryn-csv-fp-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "people.csv");
+            File.WriteAllText(path, "id,name\n1,Ann\n2,Bob\n");
+            var source = CsvImportSource.LoadImmutable(path, new CsvImportOptions());
+            Check(source.ContentSha256 is { Length: 64 }, "immutable-has-sha256");
+            Check(source.ByteLength is > 0, "immutable-has-length");
+
+            // Snapshot Open is independent of disk after load.
+            File.WriteAllText(path, "id,name\n9,Zed\n8,Yan\n"); // same row count, different content
+            using (var stream = source.Open())
+            using (var reader = new StreamReader(stream, Encoding.UTF8))
+            {
+                var text = reader.ReadToEnd();
+                Check(text.Contains("Ann", StringComparison.Ordinal) && !text.Contains("Zed", StringComparison.Ordinal),
+                    "immutable-open-ignores-disk-mutation");
+            }
+
+            // Apply refuses when the on-disk file no longer matches the fingerprint (Replace must not delete).
+            var replaceFactory = new FakeCsvImportFactory(replacedRows: 9);
+            var plan = PeoplePlan(CsvImportMode.Replace);
+            var result = await CsvImportApply.ApplyAsync(replaceFactory, plan, source);
+            Check(result.Outcome == CsvImportOutcome.RefusedInvalidData && replaceFactory.Log.Count == 0,
+                "fingerprint-mismatch-refuses-before-begin");
+            Check(result.Message.Contains("changed", StringComparison.OrdinalIgnoreCase)
+                  || result.Message.Contains("fingerprint", StringComparison.OrdinalIgnoreCase)
+                  || result.Issues.Any(i => i.Message.Contains("changed", StringComparison.OrdinalIgnoreCase)),
+                "fingerprint-mismatch-message");
+
+            // Matching disk + snapshot still commits.
+            File.WriteAllText(path, "id,name\n1,Ann\n2,Bob\n");
+            var okSource = CsvImportSource.LoadImmutable(path, new CsvImportOptions());
+            var okFactory = new FakeCsvImportFactory();
+            var ok = await CsvImportApply.ApplyAsync(okFactory, PeoplePlan(CsvImportMode.Append), okSource);
+            Check(ok.Committed && ok.RowsInserted == 2, "fingerprint-match-commits");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+        Pass("csv-immutable-source-fingerprint");
     }
 
     static void ParserBasics()
@@ -444,6 +552,8 @@ static class CsvImportTests
         var apply = window.IndexOf("ApplyCsvImportAsync", StringComparison.Ordinal);
         Check(confirm > 0 && apply > confirm, "import-window-confirms-before-apply");
         Check(window.Split("ApplyCsvImportAsync").Length == 2, "import-window-single-write-call-site");
+        Check(window.Contains("LoadImmutable", StringComparison.Ordinal), "import-window-uses-immutable-source");
+        Check(window.Contains("CsvDestinationType", StringComparison.Ordinal), "import-window-carries-destination-types");
         var shell = File.ReadAllText(Path.Combine(root, "src", "Sqloryn.App", "MainWindow.Shell.cs"));
         Check(shell.Contains("OnImportCsv", StringComparison.Ordinal), "import-reachable-from-menu");
         Pass("csv-import-app-wiring");
