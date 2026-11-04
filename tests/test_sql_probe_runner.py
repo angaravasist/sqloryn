@@ -1,6 +1,7 @@
 """No live Docker/SSH: prove runner isolation, lifecycle and licence gates."""
 import contextlib
 import importlib.util
+import inspect
 import io
 import os
 from pathlib import Path
@@ -24,6 +25,12 @@ helper = load("sql_probe_remote_helper", "scripts/sql_probe_remote_helper.py")
 
 
 class ProbeRunnerTests(unittest.TestCase):
+    def setUp(self):
+        # Preflight requires both executables; unit tests never depend on a local build.
+        patcher = patch.object(runner, "CORE_ACCEPTANCE", Path(__file__))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_refuses_unaccepted_license_before_any_work(self):
         with patch.object(runner, "execute_local") as execute, contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as error:
@@ -535,6 +542,96 @@ class ProbeRunnerTests(unittest.TestCase):
                     runner.execute_ssh("example.test", known.name)
         cleanup.assert_not_called()
         self.assertFalse(any(argv[:1] == ["/usr/bin/python3"] for argv in calls))
+
+
+GOOD_CORE_OUTPUT = (
+    "Core acceptance target: SQL Server 16.0\n"
+    + "".join(f"PASS CORE-{name} ok\n" for name in ("A", "B", "C", "D", "E"))
+    + "SKIP CORE-PLAN-DENIED cannot create a restricted login\n"
+    + "CORE-ACCEPTANCE COMPLETE pass=5 skip=1 fail=0\n")
+
+
+class CoreAcceptanceWiringTests(unittest.TestCase):
+    """A green SqlClientProbe alone must never close Core findings."""
+
+    def setUp(self):
+        patcher = patch.object(runner, "CORE_ACCEPTANCE", Path(__file__))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_core_acceptance_runs_after_probe_success_with_same_instance(self):
+        order = []
+        with patch.object(runner, "invoke_probe", side_effect=lambda *a: order.append(("probe", a))), \
+                patch.object(runner, "invoke_core_acceptance", side_effect=lambda *a: order.append(("core", a))):
+            runner.run_sql_acceptance(14330, "sqloryn-probe-x", Path("server.crt"), Path("wrong.crt"), "pw")
+        self.assertEqual([kind for kind, _ in order], ["probe", "core"])
+        self.assertEqual(order[1][1], (14330, Path("server.crt"), "pw"))
+
+    def test_probe_failure_stops_before_core_acceptance(self):
+        with patch.object(runner, "invoke_probe", side_effect=runner.ProbeError("probe failed")), \
+                patch.object(runner, "invoke_core_acceptance") as core:
+            with self.assertRaises(runner.ProbeError):
+                runner.run_sql_acceptance(14330, "n", Path("a"), Path("b"), "pw")
+        core.assert_not_called()
+
+    def test_local_and_ssh_paths_route_through_probe_then_core(self):
+        for function in (runner.execute_local, runner.execute_ssh):
+            source = inspect.getsource(function)
+            self.assertIn("run_sql_acceptance(", source)
+            self.assertNotIn("invoke_probe(", source)
+
+    def test_core_acceptance_command_and_environment(self):
+        done = subprocess.CompletedProcess([], 0, stdout=GOOD_CORE_OUTPUT, stderr="")
+        stale = {"SQLORYN_ACCEPTANCE_TRUST": "1", "SQLORYN_ACCEPTANCE_SERVER": "stale", "PATH": "/usr/bin"}
+        with patch.dict(os.environ, stale, clear=True), \
+                patch.object(runner.subprocess, "run", return_value=done) as call, \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            runner.invoke_core_acceptance(14330, Path("/tmp/server.crt"), "synthetic-secret")
+        argv = call.call_args.args[0]
+        self.assertEqual(argv[:2], ["dotnet", "run"])
+        self.assertIn(str(runner.CORE_ACCEPTANCE_PROJECT), argv)
+        self.assertEqual(argv[argv.index("-c") + 1], "Release")
+        self.assertIn("--no-build", argv)
+        self.assertNotIn("synthetic-secret", " ".join(argv))
+        env = call.call_args.kwargs["env"]
+        self.assertEqual(env["SQLORYN_ACCEPTANCE_SERVER"], "127.0.0.1")
+        self.assertEqual(env["SQLORYN_ACCEPTANCE_PORT"], "14330")
+        self.assertEqual(env["SQLORYN_ACCEPTANCE_USER"], "sa")
+        self.assertEqual(env["SQLORYN_ACCEPTANCE_PASSWORD"], "synthetic-secret")
+        self.assertEqual(env["SQLORYN_ACCEPTANCE_DATABASE"], "master")
+        self.assertEqual(env["SQLORYN_ACCEPTANCE_CERT"], "/tmp/server.crt")
+        self.assertNotIn("SQLORYN_ACCEPTANCE_TRUST", env)  # certificate pin only; never both
+        self.assertEqual(env["PATH"], "/usr/bin")
+        self.assertNotIn("synthetic-secret", out.getvalue())
+
+    def test_core_acceptance_failure_is_not_success(self):
+        failed = subprocess.CompletedProcess([], 1, stdout="", stderr="FAIL CORE-MATERIALISE boom\n")
+        with patch.object(runner.subprocess, "run", return_value=failed), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(runner.ProbeError):
+                runner.invoke_core_acceptance(14330, Path("a"), "pw")
+        self.assertIn("FAIL CORE-MATERIALISE", err.getvalue())
+
+    def test_core_acceptance_verdict_rejects_skip_missing_summary_and_failures(self):
+        self.assertEqual(runner.check_core_acceptance_output(GOOD_CORE_OUTPUT), (5, 1, 0))
+        bad = {
+            "unconfigured skip": "SKIP CORE-ACCEPTANCE environment not configured\n",
+            "no summary": "PASS CORE-A ok\n",
+            "failures": GOOD_CORE_OUTPUT.replace("fail=0", "fail=1"),
+            "too few passes": GOOD_CORE_OUTPUT.replace("pass=5", "pass=4"),
+            "unexpected skip": GOOD_CORE_OUTPUT.replace("SKIP CORE-PLAN-DENIED", "SKIP CORE-EDIT-CONFLICT"),
+        }
+        for label, output in bad.items():
+            with self.subTest(label), self.assertRaises(runner.ProbeError):
+                runner.check_core_acceptance_output(output)
+
+    def test_missing_core_acceptance_build_fails_before_any_resource(self):
+        with patch.object(runner, "CORE_ACCEPTANCE", ROOT / "tests/does-not-exist.dll"), \
+                patch.object(runner, "run") as run, patch.object(runner.subprocess, "run") as sub:
+            with self.assertRaises(runner.ProbeError):
+                runner.execute_local()
+        run.assert_not_called()
+        sub.assert_not_called()
 
 
 def socket_bound_port():

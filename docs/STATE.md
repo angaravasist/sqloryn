@@ -52,6 +52,19 @@ Hosted checks for the post-merge tip are pending after push.
 | Live disposable SQL / eight journeys | **Not run** — no authorised fixture |
 | Windows SSH product path | **Closed** |
 
+## Core SQL acceptance harness
+
+`tests/Sqloryn.Core.SqlAcceptance` runs after a passing `SqlClientProbe` inside
+`scripts/run_sql_probe.py` (same licence gate, same disposable instance, local and
+SSH modes). **A green probe alone is not Core acceptance** and closes no Core
+finding. Added here, but **not yet run against a live SQL Server** (no Docker
+engine in the authoring environment): findings 3 (live collation/transaction),
+6, 15 and S-2 (date/money) stay open until a `CORE-*` transcript from a real run
+is recorded. Predicted failure: S-2 is probably still open in Core — `date` and
+`money` columns appear to reach `NotSupportedException` in
+`ResultMaterializer.FormatSqlTypedCell`, so `CORE-MATERIALISE` / `CORE-EXPORT`
+are expected to fail until Core is fixed.
+
 ## Reviewer launch
 
 ```sh

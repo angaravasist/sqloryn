@@ -22,7 +22,8 @@ flowchart LR
 | `src/Sqloryn.App` | Studio UI: connect/profiles, OE, editor, DataGrid results, export, design/edit dialogs |
 | `assets/icon` | Original app icon (SVG/PNG/ICNS) — not derived from Microsoft assets |
 | `experiments/SqlClientProbe` | Disposable qualification harness (not the app path) |
-| `scripts/run_sql_probe.py` | Local/SSH disposable server runner (lab only; not a product SSH connection) |
+| `tests/Sqloryn.Core.SqlAcceptance` | Live Core checks on the disposable instance (env-driven; SKIPs without it) |
+| `scripts/run_sql_probe.py` | Local/SSH disposable server runner: probe, then Core acceptance (lab only; not a product SSH connection) |
 | `scripts/build_macos_app.sh` | Framework-dependent `.app` package with icon |
 
 Each query tab owns a `SqlSession`. Results are applied only to the originating
