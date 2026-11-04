@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
@@ -95,8 +96,9 @@ public partial class MainWindow
 
     /// <summary>
     /// One result set as a grid. Header clicks cycle ascending, descending and original order over the
-    /// rows retained in memory (Core <see cref="ResultSetView.SortedRowIndexes"/>; NULLs last); the server is never re-queried,
-    /// so a banner states when sorting covers only the retained rows of a truncated set.
+    /// rows retained in memory (Core <see cref="ResultSetView.SortedRowIndexes"/>; NULLs last). The filter box
+    /// calls <see cref="ResultSetView.FilterContains"/> on those same rows. Neither path re-queries the server,
+    /// and export still writes the full retained result. A banner states the retained-row scope.
     /// </summary>
     static Control BuildResultGrid(ResultSet set, int shownRows)
     {
@@ -174,6 +176,72 @@ public partial class MainWindow
         ResultSetView? view = null;
         var sortColumn = -1;
         var descending = false;
+        string? filterText = null;
+
+        var filterBox = new TextBox
+        {
+            PlaceholderText = "Filter retained rows",
+            Margin = new Avalonia.Thickness(8, 4, 8, 0)
+        };
+        AutomationProperties.SetName(filterBox, "Filter retained rows");
+        ToolTip.SetTip(filterBox,
+            "Narrows rows already kept in memory. Does not re-query the server. NULL cells do not match the text NULL. Export still writes the full retained result.");
+
+        void ApplyProjection()
+        {
+            view ??= ResultSetView.FromResultSet(set);
+            IReadOnlyList<int> sourceIndexes;
+            ResultSetView scoped;
+            if (string.IsNullOrEmpty(filterText))
+            {
+                sourceIndexes = Enumerable.Range(0, view.Rows.Count).ToList();
+                scoped = view;
+            }
+            else
+            {
+                sourceIndexes = view.FilterRowIndexes(filterText, null);
+                scoped = view.FilterContains(filterText);
+            }
+
+            var ordered = sourceIndexes;
+            string? scope = string.IsNullOrEmpty(filterText) && sortColumn < 0 ? null : scoped.ScopeLabel;
+            if (sortColumn >= 0)
+            {
+                var local = scoped.SortedRowIndexes(sortColumn, descending);
+                ordered = local.Select(i => sourceIndexes[i]).ToList();
+                scope = scoped.SortByColumn(sortColumn, descending).ScopeLabel ?? scope;
+            }
+
+            grid.ItemsSource = Project(ordered);
+            for (var c = 0; c < dataColumns.Length; c++)
+                dataColumns[c].Header = c == sortColumn ? headerNames[c] + (descending ? " ▼" : " ▲") : headerNames[c];
+
+            if (string.IsNullOrEmpty(filterText) && sortColumn < 0)
+            {
+                banner.IsVisible = false;
+                return;
+            }
+
+            var bits = new List<string>();
+            if (!string.IsNullOrEmpty(filterText))
+            {
+                var visible = ShownFilter(filterText);
+                if (sourceIndexes.Count == 0)
+                    bits.Add($"No retained rows contain \"{visible}\". NULL cells are not matched as the text NULL.");
+                else if (sourceIndexes.Count > shownRows)
+                    bits.Add($"Filter matches {sourceIndexes.Count:N0} retained rows; displaying the first {shownRows:N0} (Settings > rows shown).");
+                else
+                    bits.Add($"Filter matches {sourceIndexes.Count:N0} retained row{(sourceIndexes.Count == 1 ? "" : "s")}.");
+            }
+            if (sortColumn >= 0)
+                bits.Add($"Sorted by {headerNames[sortColumn]} ({(descending ? "descending" : "ascending")}, NULL last).");
+            if (!string.IsNullOrEmpty(scope))
+                bits.Add(scope.TrimEnd('.') + ".");
+            bits.Add("Display only. Does not re-query the server. Export still writes the full retained result.");
+            banner.Text = string.Join(" ", bits);
+            banner.IsVisible = true;
+        }
+
         grid.Sorting += (_, e) =>
         {
             e.Handled = true; // Core sorts retained rows; the DataGrid's own view sort is not used.
@@ -183,28 +251,28 @@ public partial class MainWindow
             if (sortColumn != column) { sortColumn = column; descending = false; }
             else if (!descending) descending = true;
             else sortColumn = -1;
-
-            view ??= ResultSetView.FromResultSet(set);
-            grid.ItemsSource = sortColumn < 0
-                ? Project(Enumerable.Range(0, shownRows))
-                : Project(view.SortedRowIndexes(sortColumn, descending));
-            for (var c = 0; c < dataColumns.Length; c++)
-                dataColumns[c].Header = c == sortColumn ? headerNames[c] + (descending ? " ▼" : " ▲") : headerNames[c];
-            if (sortColumn < 0)
-                banner.IsVisible = false;
-            else
-            {
-                var scope = view.SortByColumn(sortColumn, descending).ScopeLabel ?? "Retained rows only";
-                banner.Text = $"Sorted by {headerNames[sortColumn]} ({(descending ? "descending" : "ascending")}, NULL last). {scope}.";
-                banner.IsVisible = true;
-            }
+            ApplyProjection();
         };
+        filterBox.TextChanged += (_, _) =>
+        {
+            filterText = string.IsNullOrEmpty(filterBox.Text) ? null : filterBox.Text;
+            ApplyProjection();
+        };
+        ApplyProjection();
 
         var host = new DockPanel();
+        DockPanel.SetDock(filterBox, Dock.Top);
         DockPanel.SetDock(banner, Dock.Top);
+        host.Children.Add(filterBox);
         host.Children.Add(banner);
         host.Children.Add(grid);
         return host;
+    }
+
+    static string ShownFilter(string text)
+    {
+        var one = text.Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal).Trim();
+        return one.Length <= 80 ? one : one[..80] + "…";
     }
 
     static Control BuildCell(ResultRow? row, int index)
