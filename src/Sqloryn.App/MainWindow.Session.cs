@@ -1,11 +1,14 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using Sqloryn.Core;
 
 namespace Sqloryn;
 
 public partial class MainWindow
 {
+    DispatcherTimer? _runClock;
+
     async void OnRunCurrentBatch(object? sender, RoutedEventArgs e)
     {
         if (_active is null)
@@ -77,12 +80,13 @@ public partial class MainWindow
         tab.RunCts = new CancellationTokenSource();
         var cts = tab.RunCts;
         var binding = tab.CaptureBinding();
-        tab.Status = "Running…";
-        if (ReferenceEquals(_active, tab))
-            UpdateStatus();
+        tab.RunStartedUtc = DateTimeOffset.UtcNow;
+        ShowRunning(tab, 0, initial: true);
+        EnsureRunClock();
         try
         {
             var result = await tab.Session.ExecuteAsync(sql, origin, cts.Token);
+            StopRunClock(tab);
             if (!OwnerStillCurrent(tab, binding))
                 return true;
             tab.LastResult = result;
@@ -102,6 +106,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
+            StopRunClock(tab);
             if (!OwnerStillCurrent(tab, binding))
                 return true;
             tab.Status = "Run failed";
@@ -122,6 +127,7 @@ public partial class MainWindow
         }
         finally
         {
+            StopRunClock(tab);
             tab.EndRun();
             if (ReferenceEquals(tab.RunCts, cts))
                 tab.RunCts = null;
@@ -129,6 +135,72 @@ public partial class MainWindow
                 UpdateStatus();
         }
         return true;
+    }
+
+    void EnsureRunClock()
+    {
+        if (_runClock is null)
+        {
+            _runClock = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _runClock.Tick += (_, _) =>
+            {
+                if (_active is not { } tab || tab.RunStartedUtc is not DateTimeOffset started || !tab.IsExecuting)
+                {
+                    if (!_tabs.Any(t => t.IsExecuting))
+                        _runClock?.Stop();
+                    return;
+                }
+                var ms = (long)(DateTimeOffset.UtcNow - started).TotalMilliseconds;
+                ShowRunning(tab, ms < 0 ? 0 : ms, initial: false);
+            };
+        }
+        if (!_runClock.IsEnabled)
+            _runClock.Start();
+    }
+
+    void StopRunClock(QueryTab tab)
+    {
+        tab.RunStartedUtc = null;
+        if (!_tabs.Any(t => t.RunStartedUtc is not null))
+            _runClock?.Stop();
+    }
+
+    /// <summary>
+    /// Messages and the status bar say Running, with client elapsed time, until the command ends.
+    /// A previous success is not left on screen during Execute.
+    /// </summary>
+    void ShowRunning(QueryTab tab, long elapsedMilliseconds, bool initial)
+    {
+        if (elapsedMilliseconds < 0)
+            elapsedMilliseconds = 0;
+        tab.Status = LongRunningStatus.Describe(elapsedMilliseconds);
+        if (!ReferenceEquals(_active, tab))
+            return;
+        UpdateStatus();
+        var messages = LongRunningStatus.FormatMessages(elapsedMilliseconds);
+        var hasMessages = ResultTabs.Items.OfType<TabItem>().Any(t => t.Tag is -1);
+        if (initial || !hasMessages)
+        {
+            _renderingResults = true;
+            try
+            {
+                ResultTabs.Items.Clear();
+                MessagesBox.Text = messages;
+                var messagesTab = new TabItem { Header = "Messages", Tag = -1, Content = MessagesBox };
+                ResultTabs.Items.Add(messagesTab);
+                ResultTabs.SelectedItem = messagesTab;
+            }
+            finally
+            {
+                _renderingResults = false;
+            }
+            SetResultsVisible(true);
+        }
+        else
+        {
+            MessagesBox.Text = messages;
+        }
+        ResultSummary.Text = tab.Status;
     }
 
     void RememberBatch(ExecutionHistoryEntry entry)

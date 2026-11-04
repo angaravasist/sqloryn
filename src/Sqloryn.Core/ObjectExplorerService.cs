@@ -40,6 +40,12 @@ public static class ObjectExplorerService
         new("Synonyms", "synonyms", "synonym")
     ];
 
+    /// <summary>Folders shown directly under a database, before schemas. Contents load only when expanded.</summary>
+    public static IReadOnlyList<SchemaFolder> DatabaseFolders { get; } =
+    [
+        new("User-defined types", "types", "usertype")
+    ];
+
     static readonly SchemaFolder[] TableFolderList =
     [
         new("Columns", "columns", "column"),

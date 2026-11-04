@@ -70,6 +70,43 @@ static class CatalogClient
     public static Task<CatalogListing<SchemaObject>> ListSynonymsAsync(SqlSession session, string database, string schema, CancellationToken ct = default)
         => ListSchemaObjectsAsync(session, MetadataCatalog.ListSynonyms(database, schema), schema, ct);
 
+    public static async Task<CatalogListing<UserDefinedType>> ListUserDefinedTypesAsync(
+        SqlSession session, string database, CancellationToken ct = default)
+    {
+        var rows = await session.QueryRawAsync(MetadataCatalog.ListUserDefinedTypes(database), null, MaxItems, ct);
+        return Listing(rows, UserDefinedTypeCatalog.Parse(rows));
+    }
+
+    /// <summary>Read-only <c>sys.objects</c> facts. An empty result is named; dates are not invented.</summary>
+    public static async Task<string> ReadObjectPropertiesAsync(
+        SqlSession session, string database, string schema, string name, CancellationToken ct = default)
+    {
+        var rows = await session.QueryRawAsync(
+            MetadataCatalog.ObjectFacts(database, schema, name),
+            [new EditParameter(MetadataCatalog.SchemaParameter, schema), new EditParameter(MetadataCatalog.NameParameter, name)],
+            2,
+            ct);
+        var facts = ObjectPropertyCatalog.ParseObject(rows);
+        if (facts is null)
+            return ObjectPropertySheet.FormatNoRow(name);
+        var text = ObjectPropertySheet.FormatCatalogObject(facts);
+        return rows.Rows.Count > 1
+            ? text + "\nMore than one catalog row matched; showing the first. Nothing was changed."
+            : text;
+    }
+
+    /// <summary>Read-only <c>sys.databases</c> facts. Modified is reported as not provided.</summary>
+    public static async Task<string> ReadDatabasePropertiesAsync(SqlSession session, string name, CancellationToken ct = default)
+    {
+        var rows = await session.QueryRawAsync(
+            MetadataCatalog.DatabaseFacts(name),
+            [new EditParameter(MetadataCatalog.NameParameter, name)],
+            2,
+            ct);
+        var facts = ObjectPropertyCatalog.ParseDatabase(rows);
+        return facts is null ? ObjectPropertySheet.FormatNoRow(name) : ObjectPropertySheet.FormatDatabase(facts);
+    }
+
     public static Task<CatalogListing<SchemaObject>> ListForeignKeysAsync(SqlSession session, string database, string schema, string table, CancellationToken ct = default)
         => ListTableObjectsAsync(session, MetadataCatalog.ListForeignKeys(database, schema, table), schema, table, ct);
 

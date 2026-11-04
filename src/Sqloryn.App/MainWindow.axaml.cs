@@ -191,7 +191,13 @@ public partial class MainWindow : Window
         RefreshHeader(tab);
         UpdateStatus();
         UpdateRunMode();
-        RenderResult(tab.LastResult);
+        if (tab.IsExecuting && tab.RunStartedUtc is DateTimeOffset started)
+        {
+            var ms = (long)(DateTimeOffset.UtcNow - started).TotalMilliseconds;
+            ShowRunning(tab, ms < 0 ? 0 : ms, initial: true);
+        }
+        else
+            RenderResult(tab.LastResult);
         _ = LoadDatabasesAsync(tab);
     }
 
@@ -260,8 +266,8 @@ public partial class MainWindow : Window
         RunButton.IsEnabled = connected && !executing;
         RunBatchButton.IsEnabled = connected && !executing;
         DatabaseBox.IsEnabled = connected && !executing && !tab.Session.TargetUnknown;
-        CancelButton.IsEnabled = executing;
-        CancelButton.IsVisible = executing;
+        CancelButton.IsEnabled = LongRunningStatus.CancelControlEnabled(executing);
+        CancelButton.IsVisible = LongRunningStatus.CancelControlVisible;
         // Export is only offered once there is something to export.
         var hasSets = tab.LastResult?.ResultSets.Count > 0;
         ExportCsvButton.IsEnabled = hasSets;

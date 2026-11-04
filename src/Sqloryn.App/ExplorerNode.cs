@@ -18,9 +18,9 @@ sealed class ExplorerNode(string title, string kind, string? database = null, st
     public string Title { get; } = title;
 
     /// <summary>
-    /// Folders: database-level none; tables, views, keys, indexes, procedures, functions, sequences, synonyms (schema);
+    /// Folders: types (database); tables, views, keys, indexes, procedures, functions, sequences, synonyms (schema);
     /// columns, foreignkeys, constraints, triggers (table/view). Items: database, schema, table, view, key, index,
-    /// procedure, function, sequence, synonym, column, foreignkey, constraint, trigger, placeholder.
+    /// procedure, function, sequence, synonym, usertype, typesystem, column, foreignkey, constraint, trigger, placeholder.
     /// </summary>
     public string Kind { get; } = kind;
     public string? Database { get; } = database;
@@ -29,6 +29,12 @@ sealed class ExplorerNode(string title, string kind, string? database = null, st
 
     /// <summary>Extra read-only text shown in the properties panel (also searched by the filter for notes).</summary>
     public string? Info { get; set; }
+
+    /// <summary>Catalog object name when <see cref="ObjectName"/> is the parent table (keys, constraints, triggers).</summary>
+    public string? CatalogName { get; init; }
+
+    /// <summary>Precomputed child label, such as a user-defined type's system type. Not SQL.</summary>
+    public string? Detail { get; init; }
 
     public List<ExplorerNode> Children { get; } = [];
     public ObservableCollection<ExplorerNode> Shown { get; } = [];
@@ -53,11 +59,13 @@ sealed class ExplorerNode(string title, string kind, string? database = null, st
 
     /// <summary>Leaf kinds never load children.</summary>
     public bool IsLeaf => Kind is "placeholder" or "column" or "procedure" or "function" or "key" or "index"
-        or "foreignkey" or "constraint" or "trigger" or "sequence" or "synonym";
+        or "foreignkey" or "constraint" or "trigger" or "sequence" or "synonym" or "typesystem";
 
     static HashSet<string> BuildFolderKinds()
     {
         var kinds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var f in ObjectExplorerService.DatabaseFolders)
+            kinds.Add(f.FolderKind);
         foreach (var f in ObjectExplorerService.SchemaFolders)
             kinds.Add(f.FolderKind);
         foreach (var f in ObjectExplorerService.TableFolders("table"))

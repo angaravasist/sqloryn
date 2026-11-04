@@ -44,7 +44,8 @@
                   AutomationProperties.Name="Run current batch"
                   ToolTip.Tip="Run only the GO batch at the caret or selection (Shift+F5). Other batches are not run." />
           <Button Name="CancelButton" Classes="tool" Content="Cancel" Click="OnCancel"
-                  IsVisible="False" AutomationProperties.Name="Cancel query" />
+                  IsEnabled="False" AutomationProperties.Name="Cancel query"
+                  ToolTip.Tip="Cancel the running command (⌘. or Esc). Enabled only while a command is running." />
         </StackPanel>
       </DockPanel>
     </Border>
@@ -98,6 +99,7 @@
           </TreeView.Styles>
           <TreeView.ContextMenu>
             <ContextMenu>
+              <MenuItem Header="Properties…" Click="OnObjectProperties" />
               <MenuItem Header="Expand" Click="OnExpandSelected" />
               <MenuItem Header="Refresh Selected" Click="OnRefreshSubtree" />
               <MenuItem Header="Script SELECT" Click="OnScriptSelect" />
@@ -118,7 +120,12 @@
                    Text="Not connected. Choose Connect to browse databases." />
         <!-- Properties appear only once an object is selected. -->
         <Border Grid.Row="3" Name="PropertiesHeader" Classes="sectionhead" BorderThickness="0,1,0,1" IsVisible="False">
-          <TextBlock Name="PropertiesTitle" Classes="caption" Text="PROPERTIES" />
+          <DockPanel>
+            <Button DockPanel.Dock="Right" Name="ObjectPropertiesButton" Classes="tool" Padding="8,2" Content="Properties"
+                    Click="OnObjectProperties" AutomationProperties.Name="Object properties"
+                    ToolTip.Tip="Read-only name, schema, type and catalog dates for the selected object. Nothing is changed." />
+            <TextBlock Name="PropertiesTitle" Classes="caption" Text="PROPERTIES" VerticalAlignment="Center" />
+          </DockPanel>
         </Border>
         <TextBox Grid.Row="4" Name="PropertiesBox" Classes="mono" IsReadOnly="True" AcceptsReturn="True"
                  TextWrapping="Wrap" Height="190" FontSize="12" BorderThickness="0" CornerRadius="0"
@@ -169,7 +176,10 @@
         <DockPanel Grid.Row="3" Name="ResultsPane" IsVisible="False" MinHeight="90">
           <Border DockPanel.Dock="Top" Classes="sectionhead">
             <DockPanel>
-              <TextBlock DockPanel.Dock="Right" Name="ResultSummary" Classes="muted" />
+              <Button DockPanel.Dock="Right" Name="ViewStructuredButton" Classes="tool" Content="View XML/JSON"
+                      Click="OnViewStructured" AutomationProperties.Name="View XML or JSON"
+                      ToolTip.Tip="Pretty-prints a retained xml cell or nvarchar JSON. Does not re-query the server and does not execute the cell." />
+              <TextBlock DockPanel.Dock="Right" Name="ResultSummary" Classes="muted" Margin="0,0,8,0" />
               <TextBlock Classes="caption" Text="RESULTS" VerticalAlignment="Center" />
             </DockPanel>
           </Border>

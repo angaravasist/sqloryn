@@ -9,6 +9,7 @@ public static class MetadataCatalog
 {
     public const string SchemaParameter = "@schema";
     public const string TableParameter = "@table";
+    public const string NameParameter = "@name";
 
     public static string ListDatabases()
         => """
@@ -312,6 +313,55 @@ public static class MetadataCatalog
             INNER JOIN {db}.sys.schemas AS s ON o.schema_id = s.schema_id
             WHERE i.is_primary_key = 1 AND s.name = {SchemaParameter} AND o.name = {TableParameter}
             ORDER BY ic.key_ordinal;
+            """;
+    }
+
+    /// <summary>
+    /// Columns: schema, name, type_desc, create_date, modify_date. One <c>sys.objects</c> row.
+    /// Requires <see cref="SchemaParameter"/> and <see cref="NameParameter"/>. Read-only.
+    /// </summary>
+    public static string ObjectFacts(string database, string schema, string name)
+    {
+        RequireName(schema);
+        RequireName(name);
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT s.name, o.name, o.type_desc, o.create_date, o.modify_date
+            FROM {db}.sys.objects AS o
+            INNER JOIN {db}.sys.schemas AS s ON o.schema_id = s.schema_id
+            WHERE s.name = {SchemaParameter} AND o.name = {NameParameter};
+            """;
+    }
+
+    /// <summary>
+    /// Columns: name, create_date. <c>sys.databases</c> has no modify_date column.
+    /// Requires <see cref="NameParameter"/>. Read-only.
+    /// </summary>
+    public static string DatabaseFacts(string name)
+    {
+        RequireName(name);
+        return $"""
+            SELECT name, create_date
+            FROM sys.databases
+            WHERE name = {NameParameter};
+            """;
+    }
+
+    /// <summary>
+    /// User-defined types in one database. Columns: schema, type name, base type name (null when the catalog
+    /// does not return one), max_length, precision, scale, is_table_type. System types are excluded.
+    /// </summary>
+    public static string ListUserDefinedTypes(string database)
+    {
+        var db = SqlIdentity.QuoteIdentifier(database);
+        return $"""
+            SELECT s.name, t.name, b.name, t.max_length, t.precision, t.scale, t.is_table_type
+            FROM {db}.sys.types AS t
+            INNER JOIN {db}.sys.schemas AS s ON t.schema_id = s.schema_id
+            LEFT JOIN {db}.sys.types AS b
+              ON t.system_type_id = b.user_type_id AND b.is_user_defined = 0
+            WHERE t.is_user_defined = 1
+            ORDER BY s.name, t.name;
             """;
     }
 
