@@ -102,6 +102,7 @@ public partial class MainWindow
                 C("_Connect…", () => OnConnect(this, e), Key.C, Primary | KeyModifiers.Shift),
                 C("_Disconnect", () => OnDisconnect(this, e)),
                 null,
+                C("Change _Database…", () => OnChangeDatabase(this, e)),
                 C("_Revalidate Target", () => OnRevalidate(this, e))
             ]),
             ("_Query",
@@ -113,6 +114,8 @@ public partial class MainWindow
                 IsMac
                     ? C("_Cancel", () => OnCancel(this, e), Key.OemPeriod, KeyModifiers.Meta)
                     : C("_Cancel", () => OnCancel(this, e), display: Key.Escape),
+                C("Run Current _Batch", () => OnRunCurrentBatch(this, e), Key.F5, KeyModifiers.Shift),
+                C("Session _ANSI Settings…", () => OnSessionAnsi(this, e)),
                 null,
                 // Compiles under SET SHOWPLAN_XML; the SQL is never executed.
                 C("Display _Estimated Plan", () => OnDisplayEstimatedPlan(this, e), Key.L, Primary)
@@ -125,6 +128,7 @@ public partial class MainWindow
             ("_Object",
             [
                 C("_Expand Selected", () => OnExpandSelected(this, e), Key.E, Primary),
+                C("Refresh _Selected", () => OnRefreshSubtree(this, e)),
                 C("Script _SELECT in New Tab (Table/View)", () => OnScriptSelect(this, e), Key.E, Primary | KeyModifiers.Shift),
                 null,
                 C("_New Table…", () => OnNewTable(this, e)),
@@ -217,6 +221,12 @@ public partial class MainWindow
     /// <summary>F5 runs on every platform; Escape cancels only while a command is running.</summary>
     void OnShellKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.F5 && e.KeyModifiers == KeyModifiers.Shift)
+        {
+            e.Handled = true;
+            OnRunCurrentBatch(this, new RoutedEventArgs());
+            return;
+        }
         if (e.KeyModifiers != KeyModifiers.None)
             return;
         if (e.Key == Key.F5)

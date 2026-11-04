@@ -65,9 +65,10 @@ public static class GoBatchSplitter
         var lineNo = 1;
 
         // location = where a rejection caused by this emit is reported.
-        void Flush(int end, int count, SqlScriptLocation location)
+        void Flush(int contentEnd, int regionEnd, int count, SqlScriptLocation location)
         {
-            var raw = sql.AsSpan(batchStart, end - batchStart);
+            var regionStart = batchStart;
+            var raw = sql.AsSpan(batchStart, contentEnd - batchStart);
             var trimmedStart = raw.Length - raw.TrimStart().Length;
             var text = raw.Trim().ToString();
             if (text.Length == 0)
@@ -80,7 +81,7 @@ public static class GoBatchSplitter
                 else if (sql[i] == '\r' && !(i + 1 < sql.Length && sql[i + 1] == '\n'))
                     line++;
             }
-            emit(new SqlBatch(text, batchStart + trimmedStart, text.Length, line, count), location);
+            emit(new SqlBatch(text, batchStart + trimmedStart, text.Length, line, count, regionStart, regionEnd), location);
         }
 
         while (pos < sql.Length)
@@ -126,7 +127,7 @@ public static class GoBatchSplitter
                 if (go == GoLine.Separator)
                 {
                     separatorSeen = true;
-                    Flush(pos, count, lineLocation);
+                    Flush(pos, next, count, lineLocation);
                     batchStart = next;
                     batchStartLine = lineNo + 1;
                     pos = next;
@@ -141,8 +142,34 @@ public static class GoBatchSplitter
         }
 
         // Final batch: a rejection here is reported at the batch's own start.
-        Flush(sql.Length, 1, new SqlScriptLocation(batchStart, batchStartLine, 1));
+        Flush(sql.Length, sql.Length, 1, new SqlScriptLocation(batchStart, batchStartLine, 1));
         foundSeparator = separatorSeen;
+    }
+
+    /// <summary>
+    /// The non-empty batch whose region contains <paramref name="caret"/> (clamped).
+    /// A GO line belongs to the batch it ends. A caret in a skipped empty region uses the following batch.
+    /// </summary>
+    public static SqlBatch Choose(string sql, int caret)
+    {
+        ArgumentNullException.ThrowIfNull(sql);
+        var script = Parse(sql);
+        if (script.Batches.Count == 0)
+            throw new InvalidOperationException("No batch to run.");
+        var offset = Math.Clamp(caret, 0, sql.Length);
+        foreach (var batch in script.Batches)
+        {
+            if (offset >= batch.RegionStart && offset < batch.RegionEnd)
+                return batch;
+            if (offset == sql.Length && batch.RegionEnd == sql.Length && offset >= batch.RegionStart)
+                return batch;
+        }
+        foreach (var batch in script.Batches)
+        {
+            if (batch.RegionStart >= offset)
+                return batch;
+        }
+        return script.Batches[^1];
     }
 
     static void ScanLine(ReadOnlySpan<char> line, ref LexState state, ref int blockDepth)
@@ -258,7 +285,8 @@ public readonly record struct SqlScriptLocation(int Offset, int Line, int Column
 /// One batch from the original script. <see cref="Start"/>/<see cref="Length"/> span the trimmed
 /// <see cref="Text"/> in the source; <see cref="RepeatCount"/> comes from a following <c>GO n</c>.
 /// </summary>
-public sealed record SqlBatch(string Text, int Start, int Length, int StartLine, int RepeatCount);
+public sealed record SqlBatch(
+    string Text, int Start, int Length, int StartLine, int RepeatCount, int RegionStart = 0, int RegionEnd = 0);
 
 /// <summary>Result of a preflight parse. <see cref="ExpandedBatchCount"/> is the sum of repeat counts.</summary>
 public sealed record SqlScript(IReadOnlyList<SqlBatch> Batches, bool HasSeparator, int ExpandedBatchCount);

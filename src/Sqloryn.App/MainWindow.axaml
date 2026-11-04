@@ -30,12 +30,19 @@
           <Button Name="DisconnectButton" Classes="tool" Content="Disconnect" Click="OnDisconnect"
                   IsVisible="False" AutomationProperties.Name="Disconnect" />
           <TextBlock Name="ConnectionLabel" VerticalAlignment="Center" Margin="6,0,2,0" Classes="muted"
-                     Text="Not connected" TextTrimming="CharacterEllipsis" MaxWidth="320"
+                     Text="Not connected" TextTrimming="CharacterEllipsis" MaxWidth="200"
                      AutomationProperties.Name="Connection target" />
+          <ComboBox Name="DatabaseBox" MinWidth="128" MaxWidth="200" VerticalAlignment="Center" IsEnabled="False"
+                    PlaceholderText="Database" SelectionChanged="OnDatabaseChanged"
+                    AutomationProperties.Name="Database for this query tab"
+                    ToolTip.Tip="Databases this login can access. Changing this affects only the active query tab." />
           <Rectangle Classes="vsep" />
           <Button Name="RunButton" Classes="primary" Content="▶  Run" Click="OnRun"
                   AutomationProperties.Name="Run query"
                   ToolTip.Tip="Run selection or document (F5; ⌘↵ on Mac, Ctrl+Enter elsewhere)" />
+          <Button Name="RunBatchButton" Classes="tool" Content="Run Batch" Click="OnRunCurrentBatch"
+                  AutomationProperties.Name="Run current batch"
+                  ToolTip.Tip="Run only the GO batch at the caret or selection (Shift+F5). Other batches are not run." />
           <Button Name="CancelButton" Classes="tool" Content="Cancel" Click="OnCancel"
                   IsVisible="False" AutomationProperties.Name="Cancel query" />
         </StackPanel>
@@ -60,8 +67,14 @@
       <Grid Name="Sidebar" Grid.Column="0" RowDefinitions="Auto,Auto,*,Auto,Auto" Background="{DynamicResource SidebarBg}">
         <Border Grid.Row="0" Classes="sectionhead">
           <DockPanel>
-            <Button DockPanel.Dock="Right" Name="RefreshTreeButton" Classes="tool" Padding="8,2" Content="Refresh"
-                    Click="OnRefreshTree" AutomationProperties.Name="Refresh object explorer" />
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="2">
+              <Button Name="RefreshSelectedButton" Classes="tool" Padding="8,2" Content="Refresh Selected"
+                      Click="OnRefreshSubtree" AutomationProperties.Name="Refresh selected subtree"
+                      ToolTip.Tip="Reload the selected database or folder. Other branches stay as they are." />
+              <Button Name="RefreshTreeButton" Classes="tool" Padding="8,2" Content="Refresh"
+                      Click="OnRefreshTree" AutomationProperties.Name="Refresh object explorer"
+                      ToolTip.Tip="Reload the whole object explorer for this tab." />
+            </StackPanel>
             <TextBlock Classes="caption" Text="OBJECT EXPLORER" VerticalAlignment="Center" />
           </DockPanel>
         </Border>
@@ -86,6 +99,7 @@
           <TreeView.ContextMenu>
             <ContextMenu>
               <MenuItem Header="Expand" Click="OnExpandSelected" />
+              <MenuItem Header="Refresh Selected" Click="OnRefreshSubtree" />
               <MenuItem Header="Script SELECT" Click="OnScriptSelect" />
               <Separator />
               <MenuItem Header="New Table…" Click="OnNewTable" />
