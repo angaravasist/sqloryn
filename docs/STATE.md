@@ -9,14 +9,14 @@ Owner: SQLoryn maintainer. Reviewed: 2026-11-04. Experimental; no release suppor
 ## Work under review
 
 Branch `codex/macos-database-studio` — Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
-WS7-T1 security (worktree `ws7-security`, not yet merged): `SecurityTests` named assertions PASS with fakes; no live restricted-principal evidence. Full delivery contract active. Tip under push merges WS1–WS6 + WS12 component work (editor, import, explorer, types, transactional DDL, Mac shell/packaging). Not product-complete: live SQL, screenshots, security/ops/Agent/HA/BI queues remain.
+WS7-T1 security (worktree `ws7-security`, not yet merged): `SecurityTests` named assertions PASS with fakes; no live restricted-principal evidence. Full delivery contract active. Tip merges WS1–WS12 component workstreams (connections, explorer, editor, types, schema/edit, import, security, ops, Agent/plans, HA/BI gates, Mac shell/packaging). **Not product-complete:** live SQL, screenshots/VoiceOver, Entra, multi-node HA, BI services, signing, and remaining CAP rows stay open.
 
 ## Hosted checks
 
 | Tip | Result |
 |---|---|
 | `06bc2ad` | probe-components ×3 PASS · repo-safeguards PASS · CodeQL PASS · sql-integration SKIPPED — [components](https://github.com/angaravasist/sqloryn/actions/runs/41750374026) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41750368912) |
-| post-delivery tip | pending after push |
+| post-WS12 tip | pending after this push |
 
 ## PR #7 finding dispositions
 
@@ -43,7 +43,7 @@ WS7-T1 security (worktree `ws7-security`, not yet merged): `SecurityTests` named
 | Check | Result |
 |---|---|
 | `dotnet build SQLoryn.slnx -c Release` | 0 warnings / 0 errors |
-| Core component executable | **169 PASS** lines (named assertions + summary), 0 FAIL |
+| Core component executable | **217 PASS** lines (named assertions + summary), 0 FAIL |
 | SqlClientProbe.Tests | **35 PASS** (prior tip; re-run with integrated build as needed) |
 | Python tests | **51 OK** |
 | `repo_preflight.py` | PASS |

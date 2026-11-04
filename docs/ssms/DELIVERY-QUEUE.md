@@ -33,16 +33,16 @@ Counts are unequal statuses, not a percentage. Update this file when assigning o
 | WS6-T1 | Import | CSV preview/plan/apply + ImportCsvWindow | done-component | Live INSERT on disposable SQL |
 | WS7-T1 | Security | Logins/users/roles read + GRANT/DENY/REVOKE preview + confirmed transactional apply (SecurityWindow) | done-component | Restricted principal fixture for live; role-change check from separate principal; login/role-membership writes not built |
 | WS8-T1 | Operations | Backup/restore/CHECKDB plans + OperationsWindow (preview, confirm, honest outcome) | done-component | Disposable SQL Server fixture for live backup/restore/CHECKDB; VERIFYONLY/chain validation not built |
-| WS9-T1 | Agent/plans | Safe plan XML parse + Agent job list model | ready | Agent-enabled server |
+| WS9-T1 | Agent/plans | Safe plan XML parse + AgentWindow | done-component | Agent-enabled server for live |
 | WS10-T1 | HA/repl | Capability-gated incomplete shells (`GatedWorkspaceCatalog`, Tools menu) | done-component (shell only; feature stays incomplete) | Multi-node topology |
 | WS11-T1 | BI/cloud | Explicit unsupported gates (SSISDB/SSAS/SSRS/Fabric/Azure disabled) | done-component (shell only; feature stays incomplete) | Service protocol/auth |
 | CAP-176 | AI | Deferred | blocked | Product deferral |
 
 ## Integrated tip (this wave)
 
-Merged into `codex/macos-database-studio`: ws4-types, ws5-schema, ws2-explorer, ws12-mac, ws1-connect, ws3-editor, ws6-import.
+Merged into `codex/macos-database-studio`: WS1–WS12 worktrees through ws11-gates.
 
-Local integrated checks (SHA recorded in STATE after commit): Release 0/0, Core **169 PASS** named lines + summary (0 FAIL), Python **51 OK**, preflight PASS, arm64 FD `.app` with provenance.
+Local integrated checks: Release 0/0, Core **217 PASS** (0 FAIL across 3 reruns), Python **51 OK**, preflight PASS, arm64 FD `.app` with provenance. Screenshots blocked.
 
 ## Next ready queue
 

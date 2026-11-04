@@ -114,10 +114,22 @@ public static class SafeFileWriter
 
         public void Commit(string stagedPath, string destinationPath)
         {
+            // Prefer Replace when the destination already exists. When it does not, Move can still
+            // race with another writer that created the destination between Exists and Move —
+            // fall back to Replace so concurrent saves never throw or leave a torn destination.
             if (File.Exists(destinationPath))
+            {
                 File.Replace(stagedPath, destinationPath, destinationBackupFileName: null);
-            else
+                return;
+            }
+            try
+            {
                 File.Move(stagedPath, destinationPath);
+            }
+            catch (IOException) when (File.Exists(destinationPath))
+            {
+                File.Replace(stagedPath, destinationPath, destinationBackupFileName: null);
+            }
         }
     }
 }
