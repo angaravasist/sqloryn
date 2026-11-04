@@ -741,6 +741,33 @@ public sealed class SqlSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Runs one <see cref="AgentCommand"/> (start or delete an Agent job). The statement text is a fixed constant inside the
+    /// command and the job id is bound as a parameter; callers must have obtained confirmation (see <see cref="AgentActions"/>).
+    /// A cancel or timeout here means the server's outcome is unknown, not that nothing happened.
+    /// </summary>
+    public async Task ExecuteAgentCommandAsync(AgentCommand command, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(command);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureConnected();
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+            await using var cmd = _connection!.CreateCommand();
+            cmd.CommandText = command.Sql;
+            cmd.CommandTimeout = _options!.CommandTimeoutSeconds;
+            AddParameters(cmd, command.Parameters);
+            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     static void AddParameters(SqlCommand cmd, IEnumerable<EditParameter>? parameters)
     {
         if (parameters is null)

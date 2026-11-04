@@ -145,12 +145,12 @@ CAP-143,Administration & maintenance,Server properties/configuration,Inspect app
 CAP-144,Administration & maintenance,Activity Monitor,Inspect workloads accurately,Missing DMV permissions,Unassessed candidate; not implemented
 CAP-145,Administration & maintenance,Server/database reports,"Provide clear, truthful operational metrics",Incomplete visibility,Unassessed candidate; not implemented
 CAP-146,Administration & maintenance,Server logs and error log,Browse without data exposure,OS/service constraints,Unassessed candidate; not implemented
-CAP-147,Administration & maintenance,SQL Server Agent jobs,Manage supported job definitions,Agent unavailable on Azure SQL DB,Unassessed candidate; not implemented
-CAP-148,Administration & maintenance,Job steps/schedules/history,Inspect changes and execution outcomes,Job step side effects,Unassessed candidate; not implemented
+CAP-147,Administration & maintenance,SQL Server Agent jobs,Manage supported job definitions,Agent unavailable on Azure SQL DB,WS9-T1: read-only list + confirmed Run/Delete behind capability gate (ws9-agent-*); fakes only; no create/edit; live pending
+CAP-148,Administration & maintenance,Job steps/schedules/history,Inspect changes and execution outcomes,Job step side effects,WS9-T1: schedules + bounded history read; denial differs from empty (ws9-agent-*); fakes only; live pending
 CAP-149,Administration & maintenance,Alerts and operators,Represent notifications and supported channels,Unsupported server environment,Unassessed candidate; not implemented
 CAP-150,Administration & maintenance,Extended Events,Manage sessions and inspect event data,High-volume overhead,Unassessed candidate; not implemented
 CAP-151,Administration & maintenance,Query Store,Inspect plans/runtime metadata where enabled,Query Store disabled,Unassessed candidate; not implemented
-CAP-152,Administration & maintenance,Estimated/actual execution plans,Distinguish predicted from executed plan,Invalid/missing Showplan,SPEC-003: Display Estimated Plan via SHOWPLAN_XML text only; bounded per plan and in total; never executes SQL (estimate-plan-*; plan-reader-*; sqlsession-estimate-*); fakes only; no actual or graphical plan; live pending
+CAP-152,Administration & maintenance,Estimated/actual execution plans,Distinguish predicted from executed plan,Invalid/missing Showplan,SPEC-003: Display Estimated Plan via SHOWPLAN_XML text only; bounded per plan and in total; never executes SQL (estimate-plan-*; plan-reader-*; sqlsession-estimate-*); operator summary via SafeShowPlanXml, DTD/XXE prohibited (ws9-plan-*; ws9-xxe-*); fakes only; no actual or graphical plan; live pending
 CAP-153,Administration & maintenance,Live query statistics,Show progress where available,Permission/version limitation,Unassessed candidate; not implemented
 CAP-154,Administration & maintenance,Query diagnostics/profiler,"Explain data source, sampling and overhead",Monitoring load,Unassessed candidate; not implemented
 CAP-155,Administration & maintenance,Maintenance plans,Clarify Windows/SSIS-specific prerequisites,Mac-only parity barrier,Unassessed candidate; not implemented

@@ -1213,6 +1213,24 @@ public partial class MainWindow : Window
         StatusBar.Text = "Import finished; expand Tables again (or Refresh) to see changes.";
     }
 
+    async void OnOpenAgent(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect first.";
+            return;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return;
+        }
+        await new AgentWindow(tab.Session).ShowDialog(this);
+    }
+
     async void OnEditRows(object? sender, RoutedEventArgs e)
     {
         if (RequireSelectedTable(tablesOnly: true) is not { } selected)
