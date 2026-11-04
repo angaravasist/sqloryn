@@ -1175,6 +1175,44 @@ public partial class MainWindow : Window
         }
     }
 
+    async void OnImportCsv(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect first.";
+            return;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return;
+        }
+
+        // Destination: the selected table, else the selected schema (or its folders), else the connected database's dbo.
+        var node = SelectedNode;
+        string? database = node?.Database ?? tab.Session.Database;
+        var schema = node?.Schema ?? "dbo";
+        string? table = node is { Kind: "table" } ? node.ObjectName : null;
+        if (string.IsNullOrEmpty(database))
+        {
+            StatusBar.Text = "Select a database or schema in Object Explorer first.";
+            return;
+        }
+
+        var window = new ImportCsvWindow(tab.Session, database, schema, table);
+        await window.ShowDialog(this);
+        if (!window.Applied || !ReferenceEquals(_active, tab) || node is null)
+            return;
+        if (node.Kind == "table" && node.Loaded)
+            _explorer.Reset(node);
+        else if (_explorer.FindTablesFolder(node) is { Loaded: true } tables)
+            _explorer.Reset(tables);
+        StatusBar.Text = "Import finished; expand Tables again (or Refresh) to see changes.";
+    }
+
     async void OnEditRows(object? sender, RoutedEventArgs e)
     {
         if (RequireSelectedTable(tablesOnly: true) is not { } selected)

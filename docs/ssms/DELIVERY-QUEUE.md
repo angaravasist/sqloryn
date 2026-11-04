@@ -30,7 +30,7 @@ Counts are unequal statuses, not a percentage. Update this file when assigning o
 | WS12-P1 | Distribution | RuntimeIdentifiers + locked SC publish arm64/x64 + provenance hashes | csproj, build_macos_app.sh | ready | Clean Mac without .NET |
 | WS3-T1 | Editor | Licence-reviewed editor component ADR; syntax + line numbers offline | App editor, NuGet | ready | Package licence OK |
 | WS1-T1 | Connections | Database identifiers via structured APIs; capability probe stub | ConnectionOptions | ready | Entra fixture |
-| WS6-T1 | Import | Flat-file import preview/mapping Core model (no write on preview) | new Core Import* | ready | — |
+| WS6-T1 | Import | Flat-file import preview/mapping Core model (no write on preview) | `CsvImport*`, `ImportCsvWindow` | component-done (fakes); live SQL pending | Live INSERT/CREATE/DELETE on a disposable instance |
 | WS7-T1 | Security | Logins/users list + GRANT preview Core (no apply without confirm) | new Security* | ready | Restricted principal fixture |
 | WS8-T1 | Operations | Backup/restore guided UI shell + Core preview models | new Ops* | ready | Disposable DB fixture |
 | WS9-T1 | Agent/plans | Plan XML safe parse + Messages graphical stub; Agent job list model | EstimatedPlan*, new Agent* | ready | Agent-enabled server |
