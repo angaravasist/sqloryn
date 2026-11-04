@@ -214,6 +214,155 @@ Pass("numeric-38-production-path");
     Pass("s2-date-money-types");
 }
 
+// --- WS4-T1: time + uniqueidentifier through the production typed path ---
+{
+    var guidA = Guid.Parse("6F9619FF-8B86-D011-B42D-00C04FC964FF");
+    var typedT = new FakeSqlTypedCellSource(
+        ["time", "time", "time", "uniqueidentifier", "uniqueidentifier", "time", "uniqueidentifier"],
+        [new TimeSpan(13, 45, 30), new TimeSpan(0, 0, 0, 0, 0).Add(TimeSpan.FromTicks(1234567)), null,
+         guidA, null, new TimeSpan(23, 59, 59) + TimeSpan.FromTicks(9999999), Guid.Empty]);
+    var t0 = ResultMaterializer.FormatSqlTypedCell(typedT, 0);
+    Check(t0.Display == "13:45:30" && t0.Kind == "time" && !t0.IsNull && !t0.Truncated, "ws4-time-whole-seconds");
+    var t1 = ResultMaterializer.FormatSqlTypedCell(typedT, 1);
+    Check(t1.Display == "00:00:00.1234567" && t1.Kind == "time", "ws4-time-100ns-precision");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 2).IsNull, "ws4-time-null");
+    var g0 = ResultMaterializer.FormatSqlTypedCell(typedT, 3);
+    Check(g0.Display == "6f9619ff-8b86-d011-b42d-00c04fc964ff" && g0.Kind == "uniqueidentifier", "ws4-guid-D-format");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 4).IsNull, "ws4-guid-null");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 5).Display == "23:59:59.9999999", "ws4-time-max");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 6).Display == "00000000-0000-0000-0000-000000000000", "ws4-guid-empty");
+
+    var prevCultureT = System.Globalization.CultureInfo.CurrentCulture;
+    try
+    {
+        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("ar-SA");
+        Check(ResultMaterializer.FormatSqlTypedCell(typedT, 0).Display == "13:45:30", "ws4-time-culture-invariant");
+    }
+    finally { System.Globalization.CultureInfo.CurrentCulture = prevCultureT; }
+
+    // Fixture (non-SqlDataReader) fallback path through ReadResultSetAsync.
+    using var tgReader = new TypedValueReader(
+        ["t", "g"],
+        ["time", "uniqueidentifier"],
+        [typeof(TimeSpan), typeof(Guid)],
+        [
+            [new TimeSpan(8, 5, 0), guidA],
+            [null, null]
+        ]);
+    var tgOutcome = await ResultMaterializer.ReadResultSetAsync(tgReader, new ResultBudget(), CancellationToken.None);
+    Check(tgOutcome.RowFailure is null && tgOutcome.Set.Rows.Count == 2, "ws4-read-resultset-no-failure");
+    Check(tgOutcome.Set.Rows[0][0].Display == "08:05:00" && tgOutcome.Set.Rows[0][0].Kind == "time", "ws4-read-time");
+    Check(tgOutcome.Set.Rows[0][1].Display == "6f9619ff-8b86-d011-b42d-00c04fc964ff" && tgOutcome.Set.Rows[0][1].Kind == "uniqueidentifier", "ws4-read-guid");
+    Check(tgOutcome.Set.Rows[1].All(c => c.IsNull), "ws4-read-nulls");
+
+    // Export: kind-only inference, CSV (spreadsheet-safe) and JSON strings.
+    var tgSet = new ResultSet
+    {
+        Columns = ["t", "g", "tn", "gn"],
+        Rows =
+        [[
+            ResultMaterializer.FormatSqlTypedCell(typedT, 1),
+            ResultMaterializer.FormatSqlTypedCell(typedT, 3),
+            ResultMaterializer.FormatSqlTypedCell(typedT, 2),
+            ResultMaterializer.FormatSqlTypedCell(typedT, 4)
+        ]]
+    };
+    var tgView = ResultSetView.FromResultSet(tgSet);
+    Check(tgView.Columns[0].SqlType == "time" && tgView.Columns[1].SqlType == "uniqueidentifier", "ws4-infer-time-guid");
+    var plainTg = CsvExporter.ToCsv(tgView).Split("\r\n")[1];
+    Check(plainTg == "00:00:00.1234567,6f9619ff-8b86-d011-b42d-00c04fc964ff,,", "ws4-csv-plain");
+    var safeTg = CsvExporter.ToCsv(tgView, new CsvOptions { SpreadsheetSafe = true }).Split("\r\n")[1];
+    Check(safeTg == plainTg, "ws4-csv-spreadsheet-safe-unprefixed");
+    var tgJson = System.Text.Json.JsonDocument.Parse(JsonExporter.ToJson(tgView)).RootElement
+        .GetProperty("resultSets")[0];
+    var tgRow = tgJson.GetProperty("rows")[0];
+    Check(tgRow[0].ValueKind == System.Text.Json.JsonValueKind.String && tgRow[0].GetString() == "00:00:00.1234567", "ws4-json-time-string");
+    Check(tgRow[1].ValueKind == System.Text.Json.JsonValueKind.String && tgRow[1].GetString() == "6f9619ff-8b86-d011-b42d-00c04fc964ff", "ws4-json-guid-string");
+    Check(tgRow[2].ValueKind == System.Text.Json.JsonValueKind.Null && tgRow[3].ValueKind == System.Text.Json.JsonValueKind.Null, "ws4-json-null");
+    Check(tgJson.GetProperty("columns")[0].GetProperty("sqlType").GetString() == "time"
+          && tgJson.GetProperty("columns")[1].GetProperty("sqlType").GetString() == "uniqueidentifier", "ws4-json-sqltype");
+    Pass("ws4-time-guid-types");
+}
+
+// --- WS4-T2: retained-row sort / filter helpers (never re-query; operate on retained rows only) ---
+{
+    ResultSetView MakeView(bool truncated, params (string id, string name, string? n)[] rows) => new()
+    {
+        Columns = [new ResultColumn("id", "int"), new ResultColumn("name", "nvarchar"), new ResultColumn("amt", "decimal")],
+        Truncated = truncated,
+        Rows = rows.Select(r => (IReadOnlyList<ResultCell>)
+        [
+            ResultCell.Of(r.id),
+            r.name is null ? ResultCell.Null : ResultCell.Of(r.name),
+            r.n is null ? ResultCell.Null : ResultCell.Of(r.n)
+        ]).ToList()
+    };
+
+    var sv = MakeView(false,
+        ("10", "banana", "2.50"),
+        ("2", null!, "-1"),
+        ("33", "Apple", null),
+        ("4", "cherry", "100"));
+
+    // numeric column sorts numerically (not lexically), NULLs last in both directions
+    var byIdAsc = sv.SortByColumn(0, descending: false);
+    Check(string.Join(",", byIdAsc.Rows.Select(r => r[0].Display)) == "2,4,10,33", "ws4-sort-numeric-asc");
+    var byIdDesc = sv.SortByColumn(0, descending: true);
+    Check(string.Join(",", byIdDesc.Rows.Select(r => r[0].Display)) == "33,10,4,2", "ws4-sort-numeric-desc");
+
+    var byAmtAsc = sv.SortByColumn(2, descending: false);
+    Check(string.Join(",", byAmtAsc.Rows.Select(r => r[2].IsNull ? "NULL" : r[2].Display)) == "-1,2.50,100,NULL", "ws4-sort-nulls-last-asc");
+    var byAmtDesc = sv.SortByColumn(2, descending: true);
+    Check(string.Join(",", byAmtDesc.Rows.Select(r => r[2].IsNull ? "NULL" : r[2].Display)) == "100,2.50,-1,NULL", "ws4-sort-nulls-last-desc");
+
+    // text sort: case-insensitive; NULL (not empty string) last
+    var byName = sv.SortByColumn(1, descending: false);
+    Check(string.Join(",", byName.Rows.Select(r => r[1].IsNull ? "NULL" : r[1].Display)) == "Apple,banana,cherry,NULL", "ws4-sort-text-ci-nulls-last");
+
+    // 38-digit decimals compare exactly (no System.Decimal / double narrowing)
+    var big = MakeView(false,
+        ("1", "a", "12345678901234567890123456789012345679"),
+        ("2", "b", "12345678901234567890123456789012345678"));
+    Check(big.SortByColumn(2, false).Rows[0][0].Display == "2", "ws4-sort-decimal38-exact");
+
+    // stable: equal keys keep original order; source view untouched
+    var ties = MakeView(false, ("1", "x", "5"), ("2", "x", "5"), ("3", "x", "5"));
+    Check(string.Join(",", ties.SortByColumn(1, true).Rows.Select(r => r[0].Display)) == "1,2,3", "ws4-sort-stable");
+    Check(sv.Rows[0][0].Display == "10", "ws4-sort-does-not-mutate-source");
+
+    // Truncated label propagates; complete sets are not labelled truncated
+    var trunc = MakeView(true, ("2", "b", "1"), ("1", "a", "2"));
+    var truncSorted = trunc.SortByColumn(0, false);
+    Check(truncSorted.Truncated && truncSorted.ScopeLabel is not null
+          && truncSorted.ScopeLabel.Contains("retained", StringComparison.OrdinalIgnoreCase)
+          && truncSorted.ScopeLabel.Contains("more rows", StringComparison.OrdinalIgnoreCase), "ws4-sort-truncated-label");
+    var completeSorted = sv.SortByColumn(0, false);
+    Check(!completeSorted.Truncated && completeSorted.ScopeLabel is not null
+          && !completeSorted.ScopeLabel.Contains("more rows", StringComparison.OrdinalIgnoreCase), "ws4-sort-complete-label");
+    Check(trunc.FilterContains("a").Truncated && trunc.FilterContains("a").ScopeLabel!.Contains("more rows", StringComparison.OrdinalIgnoreCase), "ws4-filter-truncated-label");
+
+    // Filter: case-insensitive substring, all columns, or one column; NULL never matches
+    Check(sv.FilterContains("APPLE").Rows.Count == 1, "ws4-filter-ci");
+    Check(sv.FilterContains("an").Rows.Count == 1 && sv.FilterContains("an").Rows[0][0].Display == "10", "ws4-filter-substring");
+    Check(sv.FilterContains("NULL").Rows.Count == 0, "ws4-filter-null-not-text-NULL");
+    Check(sv.FilterContains("e", columnOrdinal: 1).Rows.Count == 2, "ws4-filter-column-scope");
+    Check(sv.FilterContains("33", columnOrdinal: 1).Rows.Count == 0, "ws4-filter-column-scope-excludes-others");
+    Check(sv.FilterContains("").Rows.Count == 4 && sv.FilterContains(null).Rows.Count == 4, "ws4-filter-empty-returns-all");
+    Check(sv.FilterContains("zzz").Rows.Count == 0, "ws4-filter-no-match");
+    Check(sv.FilterContains("1").SortByColumn(0, true).Rows.Count == 3, "ws4-filter-then-sort-compose");
+
+    // Index helpers used by the grid (keeps CellValue Truncated flags / row numbers)
+    Check(string.Join(",", sv.SortedRowIndexes(0, false)) == "1,3,0,2", "ws4-sorted-indexes");
+    Check(string.Join(",", sv.FilterRowIndexes("an", null)) == "0", "ws4-filter-indexes");
+
+    try { sv.SortByColumn(9, false); throw new Exception("FAIL ws4-sort-bad-ordinal"); }
+    catch (ArgumentOutOfRangeException) { }
+
+    // Exports of a sorted/filtered truncated view stay marked incomplete
+    Check(JsonExporter.ToJson(truncSorted).Contains("\"truncated\": true", StringComparison.Ordinal), "ws4-sort-export-still-truncated");
+    Pass("ws4-retained-sort-filter");
+}
+
 // --- 2. Budget exhausted mid-row; omit incomplete row; display shows intact rows + marker ---
 var wide = new DataTable();
 wide.Columns.Add("a", typeof(string));

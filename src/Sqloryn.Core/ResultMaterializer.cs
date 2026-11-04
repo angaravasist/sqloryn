@@ -59,6 +59,10 @@ public interface ISqlTypedCellSource
     SqlMoney GetSqlMoney(int ordinal);
     /// <summary>SQL <c>date</c> column value (time-of-day component is meaningless and ignored).</summary>
     DateTime GetDate(int ordinal);
+    /// <summary>SQL <c>time</c> column value as a TimeSpan (100 ns ticks cover time(7) exactly).</summary>
+    TimeSpan GetTime(int ordinal);
+    /// <summary>SQL <c>uniqueidentifier</c> column value.</summary>
+    Guid GetGuid(int ordinal);
     long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length);
     long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length);
     bool TryGetBoolean(int ordinal, out bool value);
@@ -76,6 +80,8 @@ public sealed class SqlDataReaderCellSource(SqlDataReader reader) : ISqlTypedCel
     public DateTimeOffset GetDateTimeOffset(int ordinal) => reader.GetDateTimeOffset(ordinal);
     public SqlMoney GetSqlMoney(int ordinal) => reader.GetSqlMoney(ordinal);
     public DateTime GetDate(int ordinal) => reader.GetDateTime(ordinal);
+    public TimeSpan GetTime(int ordinal) => reader.GetTimeSpan(ordinal);
+    public Guid GetGuid(int ordinal) => reader.GetGuid(ordinal);
     public long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
         => reader.GetChars(ordinal, dataOffset, buffer, bufferOffset, length);
     public long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length)
@@ -259,6 +265,12 @@ public static class ResultMaterializer
         if (typeName.Equals("date", StringComparison.OrdinalIgnoreCase))
             return FormatDate(source.GetDate(ordinal));
 
+        if (typeName.Equals("time", StringComparison.OrdinalIgnoreCase))
+            return FormatTime(source.GetTime(ordinal));
+
+        if (typeName.Equals("uniqueidentifier", StringComparison.OrdinalIgnoreCase))
+            return FormatGuid(source.GetGuid(ordinal));
+
         if (IsCharacterType(typeName))
             return ReadBoundedChars(source, ordinal);
         if (IsBinaryType(typeName))
@@ -288,6 +300,28 @@ public static class ResultMaterializer
     /// <summary>SQL <c>date</c> as ISO yyyy-MM-dd (no time component).</summary>
     public static CellValue FormatDate(DateTime value)
         => CellValue.Text(value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), "date");
+
+    /// <summary>
+    /// SQL <c>time</c> as invariant <c>HH:mm:ss</c> with a fractional part only when non-zero (trailing zeros trimmed,
+    /// up to 7 digits = 100 ns). The declared time(n) scale is not carried by the value.
+    /// </summary>
+    public static CellValue FormatTime(TimeSpan value)
+    {
+        var negative = value < TimeSpan.Zero;
+        var ticks = negative ? -value.Ticks : value.Ticks;
+        var whole = TimeSpan.FromTicks(ticks - ticks % TimeSpan.TicksPerSecond);
+        var text = ((int)whole.TotalHours).ToString("00", CultureInfo.InvariantCulture) + ":" +
+                   whole.Minutes.ToString("00", CultureInfo.InvariantCulture) + ":" +
+                   whole.Seconds.ToString("00", CultureInfo.InvariantCulture);
+        var fraction = ticks % TimeSpan.TicksPerSecond;
+        if (fraction != 0)
+            text += "." + fraction.ToString("0000000", CultureInfo.InvariantCulture).TrimEnd('0');
+        return CellValue.Text(negative ? "-" + text : text, "time");
+    }
+
+    /// <summary>SQL <c>uniqueidentifier</c> as lowercase 8-4-4-4-12 ("D") text.</summary>
+    public static CellValue FormatGuid(Guid value)
+        => CellValue.Text(value.ToString("D", CultureInfo.InvariantCulture), "uniqueidentifier");
 
     static bool IsMoneyType(string typeName, out string kind)
     {
@@ -333,6 +367,10 @@ public static class ResultMaterializer
             return CellValue.Text(reader.GetBoolean(ordinal) ? "true" : "false", "bool");
         if (fieldType == typeof(DateTime) && SafeTypeName(reader, ordinal).Equals("date", StringComparison.OrdinalIgnoreCase))
             return FormatDate(reader.GetDateTime(ordinal));
+        if (fieldType == typeof(TimeSpan))
+            return FormatTime(reader.GetFieldValue<TimeSpan>(ordinal));
+        if (fieldType == typeof(Guid))
+            return FormatGuid(reader.GetFieldValue<Guid>(ordinal));
         if (fieldType == typeof(DateTimeOffset))
             return CellValue.Text(reader.GetFieldValue<DateTimeOffset>(ordinal).ToString("o", CultureInfo.InvariantCulture), "datetimeoffset");
         if (fieldType == typeof(DateTime))

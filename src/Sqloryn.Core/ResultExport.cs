@@ -12,7 +12,7 @@ public readonly record struct ResultCell(string Display, bool IsNull)
     public static ResultCell Of(string display) => new(display ?? "", false);
 }
 
-public sealed class ResultSetView
+public sealed partial class ResultSetView
 {
     public required IReadOnlyList<ResultColumn> Columns { get; init; }
     public required IReadOnlyList<IReadOnlyList<ResultCell>> Rows { get; init; }
@@ -58,7 +58,7 @@ public sealed class ResultSetView
             {
                 "number" => "int",
                 "bool" => "bit",
-                "datetime" or "datetimeoffset" or "date" or "money" or "smallmoney" => row[ordinal].Kind,
+                "datetime" or "datetimeoffset" or "date" or "money" or "smallmoney" or "time" or "uniqueidentifier" => row[ordinal].Kind,
                 "empty-string" or "text" => "nvarchar",
                 "binary" => "varbinary",
                 "null" => "",
