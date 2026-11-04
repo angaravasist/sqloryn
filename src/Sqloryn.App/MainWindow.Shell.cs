@@ -59,6 +59,8 @@ public partial class MainWindow
             C("Save _As…", () => OnSaveAs(this, e), Key.S, Primary | KeyModifiers.Shift),
             C("_Close Tab", () => OnCloseTab(this, e), Key.W, Primary),
             null,
+            C("_Import Flat File…", () => OnImportCsv(this, e)),
+            null,
             C("Export Results as _CSV…", () => OnExportCsv(this, e)),
             C("Export Results as CSV (Spreadsheet-_safe)…", () => OnExportCsvSafe(this, e)),
             C("Export Results as _JSON…", () => OnExportJson(this, e))

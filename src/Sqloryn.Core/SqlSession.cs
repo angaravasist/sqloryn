@@ -880,6 +880,84 @@ public sealed class SqlSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Applies a reviewed flat-file import (<see cref="CsvImportPlan"/>) in ONE owned SqlTransaction after the whole file
+    /// validated cleanly: optional CREATE TABLE or DELETE, then parameterised INSERT batches, then commit. Any failure,
+    /// duplicate key or cancel (<see cref="RequestCancel"/> or <paramref name="cancellationToken"/>) rolls everything back.
+    /// Refuses to run when the session already has an open transaction. If the outcome is
+    /// <see cref="CsvImportOutcome.OutcomeUnknown"/> the connection is closed so no transaction or lock survives.
+    /// </summary>
+    public async Task<CsvImportResult> ApplyCsvImportAsync(
+        CsvImportPlan plan,
+        CsvImportSource source,
+        IProgress<long>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(source);
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? linked = null;
+        try
+        {
+            EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before importing.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _activeCts = linked;
+            Interlocked.Increment(ref _inFlight);
+
+            var connection = _connection!;
+            var timeout = _options!.CommandTimeoutSeconds;
+
+            await using (var state = connection.CreateCommand())
+            {
+                state.CommandText = "SELECT CONVERT(int, XACT_STATE());";
+                state.CommandTimeout = timeout;
+                var xact = (int)(await state.ExecuteScalarAsync(linked.Token).ConfigureAwait(false) ?? 0);
+                if (xact != 0)
+                    return new CsvImportResult(CsvImportOutcome.RolledBackError, 0, 0, 0, [],
+                        "A transaction is already open on this session; refusing to import inside it. Nothing was written.");
+            }
+
+            var factory = new SqlCsvImportTransactionFactory(this, connection, timeout);
+            CsvImportResult result;
+            try
+            {
+                result = await CsvImportApply.ApplyAsync(factory, plan, source, linked.Token, progress).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not ArgumentException)
+            {
+                result = new CsvImportResult(CsvImportOutcome.OutcomeUnknown, 0, 0, 0, [],
+                    $"The import ended unexpectedly ({ex.Message.Replace('\r', ' ').Replace('\n', ' ')}). It may or may not have been applied.");
+            }
+
+            if (result.Outcome == CsvImportOutcome.OutcomeUnknown)
+            {
+                // Closing the connection ends any transaction the server may still hold for us.
+                _targetUnknown = true;
+                await DisposeConnectionAsync().ConfigureAwait(false);
+                result = result with { Message = result.Message + " The session was disconnected; reconnect and reload." };
+            }
+            return result;
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCts, linked))
+                _activeCts = null;
+            _activeSqlCommand = null;
+            linked?.Dispose();
+            if (linked is not null)
+                Interlocked.Decrement(ref _inFlight);
+            _gate.Release();
+        }
+    }
+
     /// <summary>Test seam: supplies the plan command runner instead of the live connection. Never set in production code.</summary>
     internal Func<IPlanCommandRunner>? PlanRunnerForTests { get; init; }
 
@@ -1050,6 +1128,71 @@ public sealed class SqlSession : IAsyncDisposable
             {
                 await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                 return await EditRowsSql.ReadAffectedCountAsync(reader, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public Task CommitAsync(CancellationToken cancellationToken) => transaction.CommitAsync(cancellationToken);
+        public Task RollbackAsync(CancellationToken cancellationToken) => transaction.RollbackAsync(cancellationToken);
+        public ValueTask DisposeAsync() => transaction.DisposeAsync();
+    }
+
+    sealed class SqlCsvImportTransactionFactory(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds)
+        : ICsvImportTransactionFactory
+    {
+        public async Task<ICsvImportTransaction> BeginAsync(CancellationToken cancellationToken)
+        {
+            var tx = (SqlTransaction)await connection.BeginTransactionAsync(
+                IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+            return new SqlCsvImportTransaction(owner, connection, tx, commandTimeoutSeconds);
+        }
+    }
+
+    sealed class SqlCsvImportTransaction(SqlSession owner, SqlConnection connection, SqlTransaction transaction, int commandTimeoutSeconds)
+        : ICsvImportTransaction
+    {
+        // 2601: unique index violation; 2627: unique/primary key constraint violation.
+        static bool IsDuplicateKey(SqlException ex)
+            => ex.Errors.Cast<SqlError>().Any(e => e.Number is 2601 or 2627);
+
+        public async Task ExecuteAsync(string sql, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public async Task<int> ExecuteAffectedAsync(EditCommand command, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = command.CommandText;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            AddParameters(cmd, command.Parameters);
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                return await EditRowsSql.ReadAffectedCountAsync(reader, cancellationToken).ConfigureAwait(false);
+            }
+            catch (SqlException ex) when (IsDuplicateKey(ex))
+            {
+                throw new CsvImportDuplicateKeyException("The server rejected a duplicate key.", ex);
             }
             finally
             {
