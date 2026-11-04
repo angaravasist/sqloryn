@@ -30,7 +30,7 @@ Prior six-scenario pass on `0af9108`: [run 41793052872](https://github.com/angar
 ## Work under review
 
 Branch `codex/macos-database-studio` — Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
-Full delivery contract active on tip `496b503`. Linux Core live: **12/12** scenarios on that tip. **Not product-complete:** native Mac SQL/UI acceptance, Entra, multi-node HA, BI services, signing, Agent live, and remaining CAP rows stay open.
+Full delivery contract active on tip `1a1d515`. Linux Core live evidence remains the **12/12** scenarios on ancestor `496b503` ([run 41807915637](https://github.com/angaravasist/sqloryn/actions/runs/41807915637)) until a new disposable run. **Not product-complete:** native Mac SQL/UI acceptance, Entra, multi-node HA, BI services, signing, Agent live, and remaining CAP rows stay open.
 
 ## Hosted checks
 
@@ -40,6 +40,7 @@ Full delivery contract active on tip `496b503`. Linux Core live: **12/12** scena
 | `0af9108` | probe-components ×3 PASS · repo-safeguards PASS · CodeQL PASS · **sql-integration PASS** (six CORE scenarios, cleanup) — [run 41793052872](https://github.com/angaravasist/sqloryn/actions/runs/41793052872) |
 | `496b503` | probe-components ×3 PASS · repo-safeguards PASS · **sql-integration PASS** (twelve CORE scenarios, pass=12 skip=0 fail=0, cleanup) — [run 41807915637](https://github.com/angaravasist/sqloryn/actions/runs/41807915637) | Independent verifier: Release 0/0, Core **227 PASS** |
 | `11c992b` | Continues from `496b503` with CAP-040/054/060/071 + CAP-084/075/087/099/014; Core **234 PASS** locally; SQL evidence still the twelve scenarios on `496b503` until re-run |
+| `1a1d515` | Merges CAP-081/046/064/091; Core **240 PASS** locally (independent verifier); SQL evidence still pinned to `496b503` until re-run |
 
 ## PR #7 finding dispositions
 
@@ -65,8 +66,8 @@ Full delivery contract active on tip `496b503`. Linux Core live: **12/12** scena
 
 | Check | Result |
 |---|---|
-| `dotnet build SQLoryn.slnx -c Release` | 0 warnings / 0 errors on `496b503` |
-| Core component executable | **227 PASS** lines (named assertions + summary), 0 FAIL |
+| `dotnet build SQLoryn.slnx -c Release` | 0 warnings / 0 errors on `1a1d515` |
+| Core component executable | **240 PASS** lines (named assertions + summary), 0 FAIL |
 | SqlClientProbe.Tests | **35 PASS** (CI matrix on `496b503`) |
 | Python probe-runner tests | **48 OK** |
 | `repo_preflight.py` | PASS (CI repo-safeguards) |
@@ -102,9 +103,8 @@ open artifacts/macos/osx-arm64/SQLoryn.app
 
 `date` (ISO `yyyy-MM-dd`), `money` and `smallmoney` (four fractional digits via `SqlMoney`, invariant, sign preserved)
 are materialised by `ResultMaterializer` and covered by fixtures (`s2-date-money-types`) **and** live Linux
-`CORE-MATERIALISE` / `CORE-EXPORT` on `0af9108`. `time` and `uniqueidentifier` have component fixtures (`ws4-*`)
-and a harness scenario `CORE-TIME-GUID`; live reader evidence for those types is still pending a disposable run.
-`sql_variant` and other unhandled types still throw
+`CORE-MATERIALISE` / `CORE-EXPORT` (also on `496b503`). `time` and `uniqueidentifier` have component fixtures (`ws4-*`)
+**and** live `CORE-TIME-GUID` on `496b503`. `sql_variant` and other unhandled types still throw
 `NotSupportedException`.
 
 ## WS1-T1 connections (component-verified only)
