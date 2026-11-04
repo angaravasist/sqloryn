@@ -60,17 +60,24 @@ SHOWPLAN). After the probe passes, `run_sql_probe.py` runs
 probe failure stops the run before this step; both local and PROBE-11 SSH-tunnel
 modes do this, and neither is relaxed). Stable lines: `PASS`/`SKIP`/`FAIL CORE-*`
 and `CORE-ACCEPTANCE COMPLETE pass=N skip=M fail=K`. The runner rejects a run
-with no summary, any `fail`, fewer than 5 passes, or a skip other than
-`CORE-PLAN-DENIED` (server refused to create a restricted login).
+with no summary, any `fail`, a missing required pass (the nine names below), or a
+skip other than `CORE-PLAN-DENIED`, `CORE-SECURITY` or `CORE-BACKUP`.
 
-Checks use one uniquely named synthetic schema that is dropped afterwards:
-`CORE-MATERIALISE` (date, money, smallmoney: NULL, negative, fractional, extremes),
-`CORE-EXPORT` (CSV and JSON from `ResultSetView.FromResultSet`),
+Checks use one uniquely named synthetic schema that is dropped afterwards.
+Required passes: `CORE-MATERIALISE` (date, money, smallmoney: NULL, negative,
+fractional, extremes), `CORE-EXPORT` (CSV and JSON from `ResultSetView.FromResultSet`),
 `CORE-DESIGN-PK` (`TableDesignSql.PreviewCreate` + execute; second connection
 verifies columns and composite PK), `CORE-EDIT-CONFLICT` (two sessions: CI-collation
 case change conflicts through the BIN2 predicate, fresh edit commits, two-row
-batch rolls back), `CORE-PLAN-INSERT` and `CORE-PLAN-DENIED` (`EstimatePlanAsync`
-INSERT writes no row; denied login via `DENY SHOWPLAN`).
+batch rolls back), `CORE-PLAN-INSERT` (`EstimatePlanAsync` INSERT writes no row),
+`CORE-TIME-GUID` (time and uniqueidentifier displays from a second session),
+`CORE-DESIGN-APPLY` (transactional create, additive `ALTER`, failed-batch rollback,
+stale fingerprint refused), `CORE-EDIT-INSERT-DELETE` (insert/delete conflict and
+fresh delete, second session), `CORE-CSV-IMPORT` (Create and Append; exact stored
+values, including a row past the preview sample). `CORE-PLAN-DENIED`,
+`CORE-SECURITY` (GRANT preview must not change permissions; skip only if a
+login-less user cannot be created) and `CORE-BACKUP` (copy-only backup recorded
+in `msdb.dbo.backupset`, or skip when the server cannot back up) may skip.
 
 Manual run against an instance you already own (disposable, synthetic data only;
 encryption is mandatory; set `SQLORYN_ACCEPTANCE_CERT` *or*

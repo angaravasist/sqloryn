@@ -544,11 +544,12 @@ class ProbeRunnerTests(unittest.TestCase):
         self.assertFalse(any(argv[:1] == ["/usr/bin/python3"] for argv in calls))
 
 
+_CORE_PASS_COUNT = len(runner.CORE_ACCEPTANCE_REQUIRED_PASSES)
 GOOD_CORE_OUTPUT = (
     "Core acceptance target: SQL Server 16.0\n"
     + "".join(f"PASS {name} ok\n" for name in runner.CORE_ACCEPTANCE_REQUIRED_PASSES)
     + "SKIP CORE-PLAN-DENIED cannot create a restricted login\n"
-    + "CORE-ACCEPTANCE COMPLETE pass=5 skip=1 fail=0\n")
+    + f"CORE-ACCEPTANCE COMPLETE pass={_CORE_PASS_COUNT} skip=1 fail=0\n")
 
 
 class CoreAcceptanceWiringTests(unittest.TestCase):
@@ -620,7 +621,7 @@ class CoreAcceptanceWiringTests(unittest.TestCase):
         self.assertIn("timed out", str(raised.exception).lower())
 
     def test_core_acceptance_verdict_rejects_skip_missing_summary_and_failures(self):
-        self.assertEqual(runner.check_core_acceptance_output(GOOD_CORE_OUTPUT), (5, 1, 0))
+        self.assertEqual(runner.check_core_acceptance_output(GOOD_CORE_OUTPUT), (_CORE_PASS_COUNT, 1, 0))
         missing_required = (
             "PASS CORE-MATERIALISE ok\nPASS CORE-EXPORT ok\nPASS CORE-DESIGN-PK ok\n"
             "PASS CORE-EDIT-CONFLICT ok\n"
@@ -630,13 +631,31 @@ class CoreAcceptanceWiringTests(unittest.TestCase):
             "unconfigured skip": "SKIP CORE-ACCEPTANCE environment not configured\n",
             "no summary": "PASS CORE-MATERIALISE ok\n",
             "failures": GOOD_CORE_OUTPUT.replace("fail=0", "fail=1"),
-            "too few passes": GOOD_CORE_OUTPUT.replace("pass=5", "pass=4"),
+            "too few passes": GOOD_CORE_OUTPUT.replace(f"pass={_CORE_PASS_COUNT}", "pass=4"),
             "missing required name": missing_required,
             "unexpected skip": GOOD_CORE_OUTPUT.replace("SKIP CORE-PLAN-DENIED", "SKIP CORE-EDIT-CONFLICT"),
         }
         for label, output in bad.items():
             with self.subTest(label), self.assertRaises(runner.ProbeError):
                 runner.check_core_acceptance_output(output)
+
+    def test_this_wave_is_required_and_backup_security_may_skip(self):
+        required = runner.CORE_ACCEPTANCE_REQUIRED_PASSES
+        for name in ("CORE-TIME-GUID", "CORE-DESIGN-APPLY", "CORE-EDIT-INSERT-DELETE", "CORE-CSV-IMPORT"):
+            self.assertIn(name, required)
+            self.assertNotIn(name, runner.CORE_ACCEPTANCE_ALLOWED_SKIPS)
+        self.assertTrue({"CORE-PLAN-DENIED", "CORE-BACKUP", "CORE-SECURITY"} <= runner.CORE_ACCEPTANCE_ALLOWED_SKIPS)
+        allowed = (
+            "Core acceptance target: SQL Server 16.0\n"
+            + "".join(f"PASS {name} ok\n" for name in required)
+            + "SKIP CORE-PLAN-DENIED cannot create a restricted login\n"
+            + "SKIP CORE-SECURITY cannot create a login-less user\n"
+            + "SKIP CORE-BACKUP server did not complete the backup\n"
+            + f"CORE-ACCEPTANCE COMPLETE pass={len(required)} skip=3 fail=0\n")
+        self.assertEqual(runner.check_core_acceptance_output(allowed), (len(required), 3, 0))
+        hidden = allowed.replace("SKIP CORE-BACKUP", "SKIP CORE-CSV-IMPORT")
+        with self.assertRaises(runner.ProbeError):
+            runner.check_core_acceptance_output(hidden)
 
     def test_missing_core_acceptance_build_fails_before_any_resource(self):
         with patch.object(runner, "CORE_ACCEPTANCE", ROOT / "tests/does-not-exist.dll"), \

@@ -49,7 +49,7 @@ Local integrated checks: Release 0/0, Core **217 PASS** (0 FAIL across 3 reruns)
 Stale duplicates removed: WS9 parser/AgentWindow, WS10/WS11 gate shells, and hosted six-scenario SQL already landed as done-component / live-partial.
 
 1. **CSV fidelity trio** (below) — first priority.
-2. Expand live Core harness for this wave; keep CORE-PLAN-DENIED required when the fixture can create the login (already pass=6 skip=0 on 0af9108).
+2. Live acceptance for this wave is active/partial: the harness names the new scenarios; a disposable Linux run still has to pass them. Keep CORE-PLAN-DENIED required when the fixture can create the login (already pass=6 skip=0 on 0af9108).
 3. WS4-T2b: Results filter UI box (Core filter API exists).
 4. WS7 follow-up: login/role-membership writes; live restricted-principal + separate-principal verify.
 5. WS8 follow-ups: RESTORE VERIFYONLY/FILELISTONLY, files/filegroups, index maintenance; live backup round trip.
@@ -80,7 +80,7 @@ Keep the full DELIVERY-CONTRACT active. The following are actionable corrections
 | CSV exact CREATE types | CsvSqlTypes.ToSqlTypeText currently clamps decimal scale to 18. Reject or preserve values requiring greater scale without silently changing them. Check full precision/scale and range before mutation, including values beyond the preview sample. Live test exact stored value from a second session. | ready |
 | CSV existing target fidelity | Carry actual destination type/length/precision/scale into Append/Replace validation. Reject lossy conversions before deleting or inserting. Include decimal rounding, money, date/time and text widths. A successful SQL conversion is insufficient proof of faithful import. | ready |
 | CSV validated input identity | CsvImportSource.FromFile permits concurrent writes and validation/apply open the file separately. RunAsync only compares row counts after insertion. Use a bounded-memory immutable snapshot or verify a content fingerprint before commit. Test changed content with unchanged row count, including Replace, and confirm old target data survives. | ready |
-| Live acceptance for this wave | Expand Core scenarios for transactional schema failure/freshness, insert/delete conflicts, CSV rollback/fidelity/file changes, security denial and separate-principal effect, backup/restore round trip, time/GUID and Agent where available. Require expected cases explicitly. | ready |
+| Live acceptance for this wave | Expand Core scenarios for transactional schema failure/freshness, insert/delete conflicts, CSV rollback/fidelity/file changes, security denial and separate-principal effect, backup/restore round trip, time/GUID and Agent where available. Require expected cases explicitly. Harness now names CORE-TIME-GUID, CORE-DESIGN-APPLY, CORE-EDIT-INSERT-DELETE, CORE-CSV-IMPORT (required passes) plus CORE-SECURITY and CORE-BACKUP (pass or explicit skip). No new live pass is claimed until the disposable Linux job runs. | active/partial |
 | Queue reconciliation | Remove duplicate ready tasks that already landed, split done-component rows with missing UI into separate unfinished subactions, and assign all missing CAP rows within scope. HA/BI gate screens remain incomplete features. | ready |
 
 The prior consent covers a disposable GitHub-hosted Linux SQL test with temporary credentials and cleanup. Keep that runner distinct from native Mac qualification and additional topology/service credentials. Verify current native automation availability rather than treating an earlier Screen Recording failure as universal.
