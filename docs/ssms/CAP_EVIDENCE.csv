@@ -1,6 +1,6 @@
 cap_id,workstream,domain,capability,owner,entry_point,impl_symbols,code_status,component_test,native_or_live,blocker,evidence_sha,notes
 CAP-001,Connect,Connections & profiles,Discover/register SQL Server endpoint,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-002,Connect,Connections & profiles,Connect with SQL authentication,integrator,,,partial_code,,unverified,,,SPEC-003: SQL auth UI + Core options; live connect pending this tip
+CAP-002,Connect,Connections & profiles,Connect with SQL authentication,integrator,,,partial_code,ConnectionTests,unverified,,badb0bb,SQL auth UI+Core; Entra gated
 CAP-003,Connect,Connections & profiles,Connect with supported Entra methods,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-004,Connect,Connections & profiles,Integrated authentication where supported,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-005,"Cloud,Connect",Connections & profiles,Connect to Azure SQL Database,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
@@ -20,7 +20,7 @@ CAP-018,Connect,Connections & profiles,Connection state and reconnect,integrator
 CAP-019,Connect,Connections & profiles,Multiple simultaneous sessions,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-020,Connect,Connections & profiles,Server capability/permission discovery,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-021,Connect,Connections & profiles,Connection diagnostics,integrator,,,partial_code,,unverified,,,SPEC-003: DiagnosticsRedactor support bundle only (redact-* tests); no connection troubleshooting wizard; not a diagnostics surface
-CAP-022,Explorer,Object Explorer,List instances and databases,integrator,,,partial_code,,unverified,,,SPEC-003: OE databases via MetadataCatalog (metadata-dbs-schemas); component-tested; live expand pending
+CAP-022,Explorer,Object Explorer,List instances and databases,integrator,,,partial_code,ws2-* ExplorerCatalogTests,unverified,,badb0bb,folders+filter+overview; live expand unverified
 CAP-023,Explorer,Object Explorer,System database visibility,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-024,Explorer,Object Explorer,List schemas,integrator,,,partial_code,,unverified,,,SPEC-003: OE schema folders (metadata-dbs-schemas; oe-schema-folders); same-name disambiguation by schema; live expand pending
 CAP-025,Explorer,Object Explorer,Tables and columns,integrator,,,partial_code,,unverified,,,SPEC-003: OE tables and columns with truncation notes (metadata-tables; metadata-columns; oe-truncation-*); live expand pending
@@ -45,12 +45,12 @@ CAP-043,Explorer,Object Explorer,Object properties,integrator,,,missing,,unverif
 CAP-044,Editor,Editor & SQL scripting,Multiple query tabs,integrator,,,partial_code,,unverified,,,SPEC-003: multi-tab ScriptDocument with per-tab SQL isolation (script-document; tab-sql-isolation); Core-tested
 CAP-045,Editor,Editor & SQL scripting,New/open/save/save as,integrator,,,partial_code,,unverified,,,SPEC-003: Open/Save/Save As UTF-8 .sql with staged replace and external-edit refusal (d2-*; script-save-*); Core-tested; native Save sheet unverified
 CAP-046,Editor,Editor & SQL scripting,Unsaved document recovery,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-047,Editor,Editor & SQL scripting,T-SQL syntax and semantics,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
+CAP-047,Editor,Editor & SQL scripting,T-SQL syntax and semantics,integrator,,,partial_code,EditorTests ws3-*,unverified,,badb0bb,AvaloniaEdit line numbers+highlight; native UI unverified
 CAP-048,Editor,Editor & SQL scripting,Autocomplete and IntelliSense,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-049,Editor,Editor & SQL scripting,Error annotations,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-050,Editor,Editor & SQL scripting,Code folding and minimap where useful,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-051,Editor,Editor & SQL scripting,Find and replace,integrator,,,partial_code,,unverified,,,SPEC-003: FindReplaceEngine + UI (find-*; replace-*); unit-tested
-CAP-052,Editor,Editor & SQL scripting,Line/column navigation,integrator,,,partial_code,,unverified,,,SPEC-003: batch/GO/SQLCMD rejections map to document line (d5-*; preflight-error-location); editor caret jump unverified
+CAP-052,Editor,Editor & SQL scripting,Line/column navigation,integrator,,,partial_code,EditorTests ws3-*,unverified,,badb0bb,Go to line; VoiceOver unverified
 CAP-053,Editor,Editor & SQL scripting,Snippets and templates,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-054,Engine,Editor & SQL scripting,Query options and timeouts,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-055,Engine,Editor & SQL scripting,Selected-text execution,integrator,,,partial_code,,unverified,,,SPEC-003: F5 selection-or-document resolve (batch-selection; d5-go-selection-line); Core-tested
@@ -64,15 +64,15 @@ CAP-062,Editor,Editor & SQL scripting,Editor formatting,integrator,,,missing,,un
 CAP-063,"Deploy,Editor",Editor & SQL scripting,SQL project/source association,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-064,Editor,Editor & SQL scripting,Execution history and recall,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-065,BI,Editor & SQL scripting,Multiple language modes when relevant,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-066,Engine,Query execution,Execute user-authored T-SQL,integrator,,,partial_code,,unverified,,,SPEC-003: F5 selection-or-document; Core ResolveBatch
+CAP-066,Engine,Query execution,Execute user-authored T-SQL,integrator,,,partial_code,ws4-time-guid-types,unverified,,badb0bb,time+uniqueidentifier fixtures; live unverified
 CAP-067,Engine,Query execution,Execution progress and latency,integrator,,,partial_code,,unverified,,,SPEC-003: cancel/timeout/unobserved outcomes; Core-tested (DP0+)
 CAP-068,Engine,Query execution,Query cancellation,integrator,,,partial_code,,unverified,,,SPEC-003: cancel outcome mapping in SqlSession (cancel*; observe-*); fake-provider tested; live server-side effect pending
 CAP-069,Engine,Query execution,Command timeout,integrator,,,partial_code,,unverified,,,SPEC-003: timeout vs cancel vs unobserved (provider-timeout; timeout-*; watchdog*); fake-provider tested; live pending
 CAP-070,Engine,Query execution,Connection timeout during execution,integrator,,,partial_code,,unverified,,,SPEC-003: transport loss reports unknown outcome with no replay (observe-one-row-then-transport-loss; no-replay-note); fake-provider tested; live pending
 CAP-071,Engine,Query execution,Multiple batches,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-072,Results,Query execution,Multiple result sets,integrator,,,partial_code,,unverified,,,SPEC-003: one result view per set; JSON/CSV multi-set export rules (result-view-from-set; export-json-multi-set-one-file); component-tested; live pending
-CAP-073,Results,Query execution,Informational messages,integrator,,,partial_code,,unverified,,,SPEC-001 transport experiment only; application not implemented
-CAP-074,Engine,Query execution,SQL errors and line numbers,integrator,,,partial_code,,unverified,,,SPEC-001 transport experiment only; application not implemented
+CAP-073,Results,Query execution,Informational messages,integrator,,,partial_code,BatchObserver InfoMessage,unverified,,badb0bb,InfoMessage path present; was transport-only stale
+CAP-074,Engine,Query execution,SQL errors and line numbers,integrator,,,partial_code,QueryOutcomeFormatter,unverified,,badb0bb,result errors mapped; was transport-only stale
 CAP-075,Engine,Query execution,Affected row counts,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-076,Engine,Query execution,Session isolation,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-077,Engine,Query execution,Query execution without DB privilege,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
@@ -92,7 +92,7 @@ CAP-090,Results,"Results, export & data types",Large result paging/virtualizatio
 CAP-091,Results,"Results, export & data types",Binary/varbinary rendering,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-092,Results,"Results, export & data types",Decimal numeric precision,integrator,,,partial_code,,unverified,,,SPEC-003: decimal 38-digit production path and exact string JSON (numeric-38-production-path; sqldecimal-*; json-decimal-string); fixture-tested; live reader behaviour pending
 CAP-093,Results,"Results, export & data types",datetime/datetimeoffset handling,integrator,,,partial_code,,unverified,,,SPEC-003: datetime and datetimeoffset ISO text and date ISO (s2-date-*); fixture-tested; time and others unsupported; live pending
-CAP-094,Results,"Results, export & data types",Unicode/collation display,integrator,,,partial_code,,unverified,,,SPEC-001 transport experiment only; application not implemented
+CAP-094,Results,"Results, export & data types",Unicode/collation display,integrator,,,partial_code,s2/ws4 materialiser,unverified,,badb0bb,Unicode/text paths exist; was transport-only stale
 CAP-095,Results,"Results, export & data types",NULL versus empty string,integrator,,,partial_code,,unverified,,,SPEC-003: NULL vs empty display/export; unit-tested
 CAP-096,Results,"Results, export & data types",XML/JSON viewer,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-097,Results,"Results, export & data types",Geospatial and specialized SQL types,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
@@ -100,7 +100,7 @@ CAP-098,Results,"Results, export & data types",Sort/filter result viewing,integr
 CAP-099,Results,"Results, export & data types",Result statistics and row count,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-100,Results,"Results, export & data types",Explain truncation,integrator,,,partial_code,,unverified,,,SPEC-003: truncation flagged on retained rows/cells and exports (export-reports-truncation; json-truncated-flag; ui-truncation-marker; oe-truncation-*; raw-has-omitted-flag); component-tested; live pending
 CAP-101,Results,"Results, export & data types",Export cancellation,integrator,,,partial_code,,unverified,,,SPEC-003: export cancel leaves existing files untouched (export-cancel-leaves-files-untouched; export-replace-failure-preserves-files); component-tested
-CAP-102,"Operations,Schema",Schema & database design,Create/alter/drop database,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
+CAP-102,"Operations,Schema",Schema & database design,Create/alter/drop database,integrator,,,partial_code,design-apply-*,unverified,,badb0bb,transactional apply fakes
 CAP-103,"Operations,Schema",Schema & database design,Database configuration/properties,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-104,Schema,Schema & database design,Create/alter/drop tables,integrator,,,partial_code,,unverified,,,SPEC-003: New Table CREATE TABLE preview/confirm with optional PK (design-create-*; table-design-primary-key); component-tested; live apply pending
 CAP-105,Schema,Schema & database design,Visual table designer,integrator,,,partial_code,,unverified,,,SPEC-003: Design Table additive/destructive DDL preview/confirm (table-design-preview; design-alter-*; design-hostile-*); no visual designer; live apply pending
@@ -117,12 +117,12 @@ CAP-115,Schema,Schema & database design,Generate create/alter/drop scripts,integ
 CAP-116,Schema,Schema & database design,Script dependencies/order,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-117,"Cloud,Deploy",Schema & database design,Schema comparison,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-118,"Cloud,Deploy",Schema & database design,Schema deployment preview,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-119,"Cloud,Deploy,Operations",Schema & database design,DACPAC/BACPAC operations,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
+CAP-119,"Cloud,Deploy,Operations",Schema & database design,DACPAC/BACPAC operations,integrator,,,partial_code,csv-import-*,unverified,,badb0bb,CSV import Core+UI; live apply unverified
 CAP-120,"Cloud,Deploy",Schema & database design,SQL Database Projects,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-121,Schema,Schema & database design,Database diagrams/schema design,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-122,"Move,Operations",Schema & database design,Flat file import,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-123,"BI,Move,Operations",Schema & database design,Import/export data wizard,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-124,Schema,Schema & database design,Editable table data,integrator,,,partial_code,,unverified,,,SPEC-003: Edit Top 200 optimistic concurrency and one transaction; refusals (edit-rows-*; policy-*; batch-*; d3-*); fake-provider/component-tested; live apply pending
+CAP-124,Schema,Schema & database design,Editable table data,integrator,,,partial_code,edit-rows-insert-delete,unverified,,badb0bb,insert/delete fakes; live unverified
 CAP-125,Identity,Security administration,Logins,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-126,Identity,Security administration,Users and mappings,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-127,Identity,Security administration,Server roles,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented

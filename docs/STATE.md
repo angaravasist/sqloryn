@@ -9,19 +9,14 @@ Owner: SQLoryn maintainer. Reviewed: 2026-11-04. Experimental; no release suppor
 ## Work under review
 
 Branch `codex/macos-database-studio` — Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
-Prior tip with hosted green checks: `78fba00`. Integrated tip `5757f72` includes S-2, plan budget/SHOWPLAN discard, Core acceptance harness, offline journeys and catalogue realignment.
+Full delivery contract active. Tip under push merges WS1–WS6 + WS12 component work (editor, import, explorer, types, transactional DDL, Mac shell/packaging). Not product-complete: live SQL, screenshots, security/ops/Agent/HA/BI queues remain.
 
-## Hosted checks on `06bc2ad`
+## Hosted checks
 
-| Check | Result |
+| Tip | Result |
 |---|---|
-| probe-components (ubuntu-24.04) | PASS |
-| probe-components (macos-15) | PASS |
-| probe-components (macos-15-intel) | PASS |
-| repo-safeguards | PASS |
-| CodeQL · Analyze (actions/csharp/python) | PASS |
-| sql-integration | **SKIPPED** |
-| Runs | [components](https://github.com/angaravasist/sqloryn/actions/runs/41750374026) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41750368912) |
+| `06bc2ad` | probe-components ×3 PASS · repo-safeguards PASS · CodeQL PASS · sql-integration SKIPPED — [components](https://github.com/angaravasist/sqloryn/actions/runs/41750374026) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41750368912) |
+| post-delivery tip | pending after push |
 
 ## PR #7 finding dispositions
 
@@ -48,14 +43,13 @@ Prior tip with hosted green checks: `78fba00`. Integrated tip `5757f72` includes
 | Check | Result |
 |---|---|
 | `dotnet build SQLoryn.slnx -c Release` | 0 warnings / 0 errors |
-| Core component executable | **110 PASS lines** (109 named + summary), 0 FAIL (S-2, plan budget/bounded reader, SHOWPLAN taint+disconnect refuse, large-script, keyboard contract) |
-| SqlClientProbe.Tests | **35 PASS** |
-| Python tests | **50 OK** |
+| Core component executable | **169 PASS** lines (named assertions + summary), 0 FAIL |
+| SqlClientProbe.Tests | **35 PASS** (prior tip; re-run with integrated build as needed) |
+| Python tests | **51 OK** |
 | `repo_preflight.py` | PASS |
-| `bash scripts/build_macos_app.sh` | arm64 FD `.app` |
-| Launch smoke | process started; `scripts/measure_app_launch.sh` median 127 ms / max 169 ms to process start on M3, 3 runs ([evidence](evidence/launch-arm64.md)); not window or input-ready |
-| Screenshots | **Blocked** (no Screen Recording grant for agent) |
-| Live disposable SQL / eight journeys | **Not run** — no authorised fixture; offline per-step status in [JOURNEY_EVIDENCE](ssms/JOURNEY_EVIDENCE.md) and [JOURNEYS](JOURNEYS.md) |
+| `bash scripts/build_macos_app.sh` | arm64 FD `.app` + [provenance](evidence/package-arm64.md) |
+| Launch / screenshots | **Blocked** — Screen Recording denied; agent-shell Avalonia RenderTimer `-6661` on direct exec |
+| Live disposable SQL / eight journeys | **Not run** — CORE harness present; offline journey ledger in [JOURNEY_EVIDENCE](ssms/JOURNEY_EVIDENCE.md) |
 | Windows SSH product path | **Closed** |
 
 ## Core SQL acceptance harness
