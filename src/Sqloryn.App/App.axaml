@@ -8,34 +8,53 @@
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.ThemeDictionaries>
-        <!-- Neutral surfaces; accent comes from the OS (SystemControlHighlightAccentBrush). -->
+        <!-- Semantic palette. Surfaces are neutral; Accent and Focus follow the OS accent colour.
+             Selection is a neutral fill so the OS accent is not overused. Views reference these keys,
+             never raw colours. -->
         <ResourceDictionary x:Key="Dark">
-          <SolidColorBrush x:Key="Sq.Bg" Color="#1E1E1E" />
-          <SolidColorBrush x:Key="Sq.Panel" Color="#252526" />
-          <SolidColorBrush x:Key="Sq.Raised" Color="#2C2C2E" />
-          <SolidColorBrush x:Key="Sq.Hover" Color="#3A3A3C" />
-          <SolidColorBrush x:Key="Sq.Border" Color="#3F3F42" />
-          <SolidColorBrush x:Key="Sq.Text" Color="#E8E8EA" />
-          <SolidColorBrush x:Key="Sq.Muted" Color="#9A9AA0" />
-          <SolidColorBrush x:Key="Sq.Accent" Color="{DynamicResource SystemAccentColor}" />
-          <SolidColorBrush x:Key="Sq.OnAccent" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="Sq.Danger" Color="#FF6961" />
-          <SolidColorBrush x:Key="Sq.Warning" Color="#FFB340" />
-          <SolidColorBrush x:Key="Sq.GridAlt" Color="#222224" />
+          <SolidColorBrush x:Key="WindowBg" Color="#252527" />
+          <SolidColorBrush x:Key="ContentBg" Color="#1C1C1E" />
+          <SolidColorBrush x:Key="SidebarBg" Color="#2A2A2D" />
+          <SolidColorBrush x:Key="ToolbarBg" Color="#2E2E31" />
+          <SolidColorBrush x:Key="Separator" Color="#424246" />
+          <SolidColorBrush x:Key="Selection" Color="#3D3D42" />
+          <SolidColorBrush x:Key="Hover" Color="#38383C" />
+          <SolidColorBrush x:Key="Focus" Color="{DynamicResource SystemAccentColor}" />
+          <SolidColorBrush x:Key="Accent" Color="{DynamicResource SystemAccentColor}" />
+          <SolidColorBrush x:Key="OnAccent" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="Success" Color="#32D74B" />
+          <SolidColorBrush x:Key="Warning" Color="#FFB340" />
+          <SolidColorBrush x:Key="Destructive" Color="#FF6961" />
+          <SolidColorBrush x:Key="PrimaryText" Color="#E8E8EA" />
+          <SolidColorBrush x:Key="SecondaryText" Color="#A0A0A6" />
+          <SolidColorBrush x:Key="GridAlt" Color="#222224" />
+          <!-- Fluent control overrides so stock controls use the same palette. -->
+          <SolidColorBrush x:Key="TreeViewItemBackgroundSelected" Color="#3D3D42" />
+          <SolidColorBrush x:Key="TreeViewItemBackgroundSelectedPointerOver" Color="#46464B" />
+          <SolidColorBrush x:Key="TreeViewItemBackgroundPointerOver" Color="#38383C" />
+          <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="{DynamicResource SystemAccentColor}" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="Sq.Bg" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="Sq.Panel" Color="#F5F5F7" />
-          <SolidColorBrush x:Key="Sq.Raised" Color="#ECECEE" />
-          <SolidColorBrush x:Key="Sq.Hover" Color="#E0E0E3" />
-          <SolidColorBrush x:Key="Sq.Border" Color="#D2D2D7" />
-          <SolidColorBrush x:Key="Sq.Text" Color="#1D1D1F" />
-          <SolidColorBrush x:Key="Sq.Muted" Color="#6E6E73" />
-          <SolidColorBrush x:Key="Sq.Accent" Color="{DynamicResource SystemAccentColor}" />
-          <SolidColorBrush x:Key="Sq.OnAccent" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="Sq.Danger" Color="#C5221F" />
-          <SolidColorBrush x:Key="Sq.Warning" Color="#8F5900" />
-          <SolidColorBrush x:Key="Sq.GridAlt" Color="#F7F7F9" />
+          <SolidColorBrush x:Key="WindowBg" Color="#ECECEE" />
+          <SolidColorBrush x:Key="ContentBg" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="SidebarBg" Color="#F3F3F5" />
+          <SolidColorBrush x:Key="ToolbarBg" Color="#E7E7EA" />
+          <SolidColorBrush x:Key="Separator" Color="#D2D2D7" />
+          <SolidColorBrush x:Key="Selection" Color="#DADADF" />
+          <SolidColorBrush x:Key="Hover" Color="#E0E0E3" />
+          <SolidColorBrush x:Key="Focus" Color="{DynamicResource SystemAccentColor}" />
+          <SolidColorBrush x:Key="Accent" Color="{DynamicResource SystemAccentColor}" />
+          <SolidColorBrush x:Key="OnAccent" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="Success" Color="#1E7B34" />
+          <SolidColorBrush x:Key="Warning" Color="#8F5900" />
+          <SolidColorBrush x:Key="Destructive" Color="#C5221F" />
+          <SolidColorBrush x:Key="PrimaryText" Color="#1D1D1F" />
+          <SolidColorBrush x:Key="SecondaryText" Color="#6A6A70" />
+          <SolidColorBrush x:Key="GridAlt" Color="#F7F7F9" />
+          <SolidColorBrush x:Key="TreeViewItemBackgroundSelected" Color="#DADADF" />
+          <SolidColorBrush x:Key="TreeViewItemBackgroundSelectedPointerOver" Color="#D0D0D6" />
+          <SolidColorBrush x:Key="TreeViewItemBackgroundPointerOver" Color="#E0E0E3" />
+          <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="{DynamicResource SystemAccentColor}" />
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>
@@ -45,65 +64,68 @@
     <!-- No Accent override: Fluent takes the accent colour from the OS. -->
     <FluentTheme>
       <FluentTheme.Palettes>
-        <ColorPaletteResources x:Key="Dark" RegionColor="#1E1E1E" ErrorText="#FF6961" />
+        <ColorPaletteResources x:Key="Dark" RegionColor="#1C1C1E" ErrorText="#FF6961" />
         <ColorPaletteResources x:Key="Light" RegionColor="#FFFFFF" ErrorText="#C5221F" />
       </FluentTheme.Palettes>
     </FluentTheme>
     <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
 
     <Style Selector="Window">
-      <Setter Property="Background" Value="{DynamicResource Sq.Bg}" />
-      <Setter Property="Foreground" Value="{DynamicResource Sq.Text}" />
+      <Setter Property="Background" Value="{DynamicResource WindowBg}" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
       <Setter Property="FontSize" Value="13" />
     </Style>
 
     <!-- Surfaces -->
     <Style Selector="Border.panel">
-      <Setter Property="Background" Value="{DynamicResource Sq.Panel}" />
-      <Setter Property="BorderBrush" Value="{DynamicResource Sq.Border}" />
+      <Setter Property="Background" Value="{DynamicResource SidebarBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Separator}" />
       <Setter Property="BorderThickness" Value="1" />
     </Style>
     <Style Selector="Border.toolbar">
-      <Setter Property="Background" Value="{DynamicResource Sq.Raised}" />
-      <Setter Property="BorderBrush" Value="{DynamicResource Sq.Border}" />
+      <Setter Property="Background" Value="{DynamicResource ToolbarBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Separator}" />
       <Setter Property="BorderThickness" Value="0,1,0,1" />
       <Setter Property="Padding" Value="8,5" />
     </Style>
     <Style Selector="Border.statusbar">
-      <Setter Property="Background" Value="{DynamicResource Sq.Raised}" />
-      <Setter Property="BorderBrush" Value="{DynamicResource Sq.Border}" />
+      <Setter Property="Background" Value="{DynamicResource ToolbarBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Separator}" />
       <Setter Property="BorderThickness" Value="0,1,0,0" />
       <Setter Property="Padding" Value="10,4" />
     </Style>
     <Style Selector="Border.sectionhead">
-      <Setter Property="Background" Value="{DynamicResource Sq.Raised}" />
-      <Setter Property="BorderBrush" Value="{DynamicResource Sq.Border}" />
+      <Setter Property="Background" Value="{DynamicResource ToolbarBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Separator}" />
       <Setter Property="BorderThickness" Value="0,0,0,1" />
       <Setter Property="Padding" Value="10,6" />
     </Style>
     <Style Selector="Rectangle.vsep">
       <Setter Property="Width" Value="1" />
-      <Setter Property="Fill" Value="{DynamicResource Sq.Border}" />
+      <Setter Property="Fill" Value="{DynamicResource Separator}" />
       <Setter Property="Margin" Value="6,2" />
     </Style>
 
     <!-- Typography -->
     <Style Selector="TextBlock.muted">
-      <Setter Property="Foreground" Value="{DynamicResource Sq.Muted}" />
+      <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
     </Style>
     <Style Selector="TextBlock.caption">
-      <Setter Property="Foreground" Value="{DynamicResource Sq.Muted}" />
+      <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
       <Setter Property="FontSize" Value="11" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="LetterSpacing" Value="0.8" />
     </Style>
     <Style Selector="TextBlock.null">
       <Setter Property="FontStyle" Value="Italic" />
-      <Setter Property="Foreground" Value="{DynamicResource Sq.Muted}" />
+      <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
       <Setter Property="Opacity" Value="0.85" />
     </Style>
+    <Style Selector="TextBlock.connected">
+      <Setter Property="Foreground" Value="{DynamicResource Success}" />
+    </Style>
     <Style Selector="TextBlock.error">
-      <Setter Property="Foreground" Value="{DynamicResource Sq.Danger}" />
+      <Setter Property="Foreground" Value="{DynamicResource Destructive}" />
     </Style>
     <Style Selector="TextBlock.mono">
       <Setter Property="FontFamily" Value="Menlo, Monaco, Consolas, monospace" />
@@ -114,7 +136,7 @@
 
     <!-- Menu -->
     <Style Selector="Menu">
-      <Setter Property="Background" Value="{DynamicResource Sq.Panel}" />
+      <Setter Property="Background" Value="{DynamicResource SidebarBg}" />
     </Style>
 
     <!-- Buttons -->
@@ -123,41 +145,61 @@
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="Padding" Value="11,6" />
       <Setter Property="CornerRadius" Value="5" />
-      <Setter Property="Foreground" Value="{DynamicResource Sq.Text}" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
     </Style>
     <Style Selector="Button.tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource Sq.Hover}" />
-      <Setter Property="Foreground" Value="{DynamicResource Sq.Text}" />
+      <Setter Property="Background" Value="{DynamicResource Hover}" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
     </Style>
     <Style Selector="Button.tool:pressed /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource Sq.Border}" />
+      <Setter Property="Background" Value="{DynamicResource Separator}" />
     </Style>
     <Style Selector="Button.tool:disabled">
       <Setter Property="Opacity" Value="0.4" />
     </Style>
     <Style Selector="Button.primary">
-      <Setter Property="Background" Value="{DynamicResource Sq.Accent}" />
-      <Setter Property="Foreground" Value="{DynamicResource Sq.OnAccent}" />
+      <Setter Property="Background" Value="{DynamicResource Accent}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="CornerRadius" Value="5" />
       <Setter Property="Padding" Value="14,6" />
     </Style>
     <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource Sq.Accent}" />
-      <Setter Property="Foreground" Value="{DynamicResource Sq.OnAccent}" />
+      <Setter Property="Background" Value="{DynamicResource Accent}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
       <Setter Property="Opacity" Value="0.88" />
     </Style>
     <Style Selector="Button.primary:disabled">
       <Setter Property="Opacity" Value="0.45" />
     </Style>
+    <!-- Secondary toolbar actions: smaller and quieter than primary tools. -->
+    <Style Selector="Button.tool.secondary">
+      <Setter Property="Foreground" Value="{DynamicResource SecondaryText}" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Padding" Value="8,5" />
+    </Style>
+    <!-- Compact outlined button for secondary welcome actions. -->
+    <Style Selector="Button.quiet">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Separator}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Padding" Value="12,5" />
+    </Style>
+    <Style Selector="Button.quiet:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource Hover}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Separator}" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
+    </Style>
     <Style Selector="Button.danger">
-      <Setter Property="Background" Value="{DynamicResource Sq.Danger}" />
-      <Setter Property="Foreground" Value="{DynamicResource Sq.OnAccent}" />
+      <Setter Property="Background" Value="{DynamicResource Destructive}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
       <Setter Property="CornerRadius" Value="5" />
       <Setter Property="Padding" Value="14,6" />
     </Style>
     <Style Selector="TextBlock.warning">
-      <Setter Property="Foreground" Value="{DynamicResource Sq.Warning}" />
+      <Setter Property="Foreground" Value="{DynamicResource Warning}" />
     </Style>
 
     <!-- Inputs -->
@@ -165,8 +207,8 @@
       <Setter Property="CornerRadius" Value="4" />
     </Style>
     <Style Selector="TextBox.editor">
-      <Setter Property="Background" Value="{DynamicResource Sq.Panel}" />
-      <Setter Property="BorderBrush" Value="{DynamicResource Sq.Border}" />
+      <Setter Property="Background" Value="{DynamicResource ContentBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Separator}" />
       <Setter Property="CornerRadius" Value="0" />
       <Setter Property="Padding" Value="10,8" />
     </Style>
@@ -192,18 +234,18 @@
 
     <!-- Data grid -->
     <Style Selector="DataGrid">
-      <Setter Property="Background" Value="{DynamicResource Sq.Panel}" />
-      <Setter Property="BorderBrush" Value="{DynamicResource Sq.Border}" />
+      <Setter Property="Background" Value="{DynamicResource SidebarBg}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Separator}" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="GridLinesVisibility" Value="All" />
-      <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource Sq.Border}" />
-      <Setter Property="VerticalGridLinesBrush" Value="{DynamicResource Sq.Border}" />
+      <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource Separator}" />
+      <Setter Property="VerticalGridLinesBrush" Value="{DynamicResource Separator}" />
       <Setter Property="RowBackground" Value="Transparent" />
       <Setter Property="FontSize" Value="12" />
     </Style>
     <Style Selector="DataGridColumnHeader">
-      <Setter Property="Background" Value="{DynamicResource Sq.Raised}" />
-      <Setter Property="Foreground" Value="{DynamicResource Sq.Text}" />
+      <Setter Property="Background" Value="{DynamicResource ToolbarBg}" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryText}" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
   </Application.Styles>

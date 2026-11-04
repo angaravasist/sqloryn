@@ -3024,7 +3024,10 @@ Pass("explorer-ownership");
         return map;
     }
 
+    // Feature-local views (WelcomeView) keep the same stable names; scan them with the window.
     var main = NamedControls(Path.Combine(appDir, "MainWindow.axaml"));
+    foreach (var (k, v) in NamedControls(Path.Combine(appDir, "WelcomeView.axaml")))
+        main[k] = v;
     var expectMain = new Dictionary<string, string>
     {
         ["WelcomeConnect"] = "New connection",
@@ -3057,6 +3060,22 @@ Pass("explorer-ownership");
     var externalException = new ExternalDocumentChangedException("/tmp/x.sql");
     Check(externalException.Message.Length > 0 && !externalException.Message.Contains("secret", StringComparison.OrdinalIgnoreCase), "app-save-external-change-message-present");
     Pass("a11y-keyboard-contract-source-scan");
+
+    // Visual system: semantic resources exist in both theme variants; views use no legacy Sq.* keys.
+    var appXaml = File.ReadAllText(Path.Combine(appDir, "App.axaml"));
+    foreach (var key in new[] { "WindowBg", "ContentBg", "SidebarBg", "Separator", "Selection", "Focus", "Accent", "Success", "Warning", "Destructive", "SecondaryText" })
+        Check(System.Text.RegularExpressions.Regex.Matches(appXaml, $"x:Key=\"{key}\"").Count == 2, $"visual-semantic-resource-{key}-in-light-and-dark");
+    Check(Directory.GetFiles(appDir, "*.axaml").All(f => !File.ReadAllText(f).Contains("Sq.", StringComparison.Ordinal)), "visual-no-legacy-Sq-keys");
+    Check(appXaml.Contains("RequestedThemeVariant=\"Default\"", StringComparison.Ordinal), "visual-system-theme-tracking-default");
+    Pass("visual-system-source-scan");
+
+    // Settings: every control is either applied or documented read-only; the rows cap text is derived from the engine cap.
+    var settingsXaml = File.ReadAllText(Path.Combine(appDir, "SettingsWindow.axaml"));
+    foreach (var section in new[] { "General", "Editor", "Results", "Connections", "Privacy" })
+        Check(settingsXaml.Contains($"Header=\"{section}\"", StringComparison.Ordinal), $"settings-section-{section}");
+    var settingsCode = File.ReadAllText(Path.Combine(appDir, "SettingsWindow.axaml.cs"));
+    Check(settingsCode.Contains("AppSettings.MaxResultsMaxRows", StringComparison.Ordinal) && !settingsXaml.Contains("5,000", StringComparison.Ordinal), "settings-retention-text-derived-from-cap");
+    Pass("settings-grouping-source-scan");
 }
 
 // WS5-T1: transactional designer apply + schema freshness (fakes only; live SQL is separate acceptance)

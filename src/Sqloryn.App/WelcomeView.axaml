@@ -1,0 +1,25 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Sqloryn.WelcomeView">
+  <!-- Launch state: brand, one primary action, two compact secondary actions. Shown until there is
+       something to work on (see MainWindow.UpdateWelcome). -->
+  <Border Background="{DynamicResource ContentBg}">
+    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6" MaxWidth="360">
+      <TextBlock Text="SQLoryn" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" />
+      <TextBlock Classes="muted" TextAlignment="Center" TextWrapping="Wrap"
+                 Text="SQL Server tools for Mac" />
+      <Button Name="WelcomeConnect" Classes="primary" Content="New Connection…" Click="OnConnectClick"
+              Margin="0,18,0,0" HorizontalAlignment="Center" MinWidth="200"
+              HorizontalContentAlignment="Center"
+              AutomationProperties.Name="New connection" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8" Margin="0,4,0,0">
+        <Button Name="WelcomeNewQuery" Classes="quiet" Content="New Query" Click="OnNewQueryClick"
+                ToolTip.Tip="Start a blank query (⌘N)" AutomationProperties.Name="New query" />
+        <Button Name="WelcomeOpen" Classes="quiet" Content="Open SQL File…" Click="OnOpenClick"
+                ToolTip.Tip="Open a .sql file (⌘O)" AutomationProperties.Name="Open SQL file" />
+      </StackPanel>
+      <TextBlock Classes="muted" FontSize="11" TextAlignment="Center" TextWrapping="Wrap" Margin="0,18,0,0"
+                 Text="Connections require encryption. Passwords stay in memory unless you choose Remember (macOS Keychain)." />
+    </StackPanel>
+  </Border>
+</UserControl>

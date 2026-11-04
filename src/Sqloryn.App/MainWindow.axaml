@@ -10,12 +10,15 @@
          native menu bar (see MainWindow.Shell.cs) and this control stays empty and hidden. -->
     <Menu DockPanel.Dock="Top" Name="WindowMenu" />
 
-    <!-- Toolbar -->
+    <!-- Toolbar: [sidebar] | [connect + target] | [run / cancel] ............ [export: secondary] -->
     <Border DockPanel.Dock="Top" Classes="toolbar">
       <DockPanel>
-        <TextBlock DockPanel.Dock="Right" Name="ConnectionLabel" VerticalAlignment="Center"
-                   Margin="12,0,6,0" Classes="muted" Text="Not connected"
-                   AutomationProperties.Name="Connection target" />
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="2">
+          <Button Name="ExportCsvButton" Classes="tool secondary" Content="Export CSV" Click="OnExportCsv"
+                  IsVisible="False" AutomationProperties.Name="Export results as CSV" />
+          <Button Name="ExportJsonButton" Classes="tool secondary" Content="Export JSON" Click="OnExportJson"
+                  IsVisible="False" AutomationProperties.Name="Export results as JSON" />
+        </StackPanel>
         <StackPanel Orientation="Horizontal" Spacing="2">
           <Button Name="SidebarToggle" Classes="tool" Content="Sidebar"
                   Click="OnToggleSidebar" AutomationProperties.Name="Toggle object explorer sidebar"
@@ -25,17 +28,15 @@
                   AutomationProperties.Name="Connect" />
           <Button Name="DisconnectButton" Classes="tool" Content="Disconnect" Click="OnDisconnect"
                   IsVisible="False" AutomationProperties.Name="Disconnect" />
+          <TextBlock Name="ConnectionLabel" VerticalAlignment="Center" Margin="6,0,2,0" Classes="muted"
+                     Text="Not connected" TextTrimming="CharacterEllipsis" MaxWidth="320"
+                     AutomationProperties.Name="Connection target" />
           <Rectangle Classes="vsep" />
           <Button Name="RunButton" Classes="primary" Content="▶  Run" Click="OnRun"
                   AutomationProperties.Name="Run query"
                   ToolTip.Tip="Run selection or document (F5; ⌘↵ on Mac, Ctrl+Enter elsewhere)" />
           <Button Name="CancelButton" Classes="tool" Content="Cancel" Click="OnCancel"
                   IsVisible="False" AutomationProperties.Name="Cancel query" />
-          <Rectangle Name="ExportSeparator" Classes="vsep" IsVisible="False" />
-          <Button Name="ExportCsvButton" Classes="tool" Content="Export CSV" Click="OnExportCsv"
-                  IsVisible="False" AutomationProperties.Name="Export results as CSV" />
-          <Button Name="ExportJsonButton" Classes="tool" Content="Export JSON" Click="OnExportJson"
-                  IsVisible="False" AutomationProperties.Name="Export results as JSON" />
         </StackPanel>
       </DockPanel>
     </Border>
@@ -55,7 +56,7 @@
       </Grid.ColumnDefinitions>
 
       <!-- Object Explorer -->
-      <Grid Name="Sidebar" Grid.Column="0" RowDefinitions="Auto,Auto,*,Auto,Auto">
+      <Grid Name="Sidebar" Grid.Column="0" RowDefinitions="Auto,Auto,*,Auto,Auto" Background="{DynamicResource SidebarBg}">
         <Border Grid.Row="0" Classes="sectionhead">
           <DockPanel>
             <Button DockPanel.Dock="Right" Name="RefreshTreeButton" Classes="tool" Padding="8,2" Content="Refresh"
@@ -108,12 +109,12 @@
                  AutomationProperties.Name="Selected object properties and overview" />
       </Grid>
 
-      <GridSplitter Grid.Column="1" Name="SidebarSplitter" Width="4" Background="{DynamicResource Sq.Border}"
+      <GridSplitter Grid.Column="1" Name="SidebarSplitter" Width="4" Background="{DynamicResource Separator}"
                     ResizeDirection="Columns" />
 
       <!-- Workspace -->
       <Grid Grid.Column="2" Name="Workspace" RowDefinitions="Auto,*,Auto,Auto">
-        <Border Grid.Row="0" Background="{DynamicResource Sq.Panel}" BorderBrush="{DynamicResource Sq.Border}"
+        <Border Grid.Row="0" Background="{DynamicResource SidebarBg}" BorderBrush="{DynamicResource Separator}"
                 BorderThickness="0,0,0,1">
           <TabControl Name="QueryTabs" SelectionChanged="OnTabChanged"
                       AutomationProperties.Name="Query tabs" />
@@ -131,7 +132,7 @@
                    TextChanged="OnEditorTextChanged" />
         </DockPanel>
 
-        <GridSplitter Grid.Row="2" Name="ResultsSplitter" Height="4" Background="{DynamicResource Sq.Border}"
+        <GridSplitter Grid.Row="2" Name="ResultsSplitter" Height="4" Background="{DynamicResource Separator}"
                       ResizeDirection="Rows" HorizontalAlignment="Stretch" IsVisible="False" />
 
         <!-- Results appear once a run has produced output. -->
@@ -147,26 +148,7 @@
         </DockPanel>
 
         <!-- Welcome: shown on launch until there is something to work on. -->
-        <Border Grid.Row="0" Grid.RowSpan="4" Name="WelcomePanel" Background="{DynamicResource Sq.Bg}">
-          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="14" MaxWidth="440">
-            <TextBlock Text="SQLoryn" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" />
-            <TextBlock Classes="muted" TextAlignment="Center" TextWrapping="Wrap"
-                       Text="Connect to a SQL Server, start a blank query, or open a SQL file." />
-            <StackPanel Spacing="8" Margin="0,8,0,0">
-              <Button Name="WelcomeConnect" Classes="primary" Content="New Connection…" Click="OnConnect"
-                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                      AutomationProperties.Name="New connection" />
-              <Button Name="WelcomeNewQuery" Content="New Query" Click="OnWelcomeNewQuery"
-                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                      AutomationProperties.Name="New query" />
-              <Button Name="WelcomeOpen" Content="Open SQL File…" Click="OnOpen"
-                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                      AutomationProperties.Name="Open SQL file" />
-            </StackPanel>
-            <TextBlock Classes="muted" FontSize="11" TextAlignment="Center" TextWrapping="Wrap" Margin="0,8,0,0"
-                       Text="Connections require encryption. Passwords stay in memory unless you choose Remember (macOS Keychain)." />
-          </StackPanel>
-        </Border>
+        <local:WelcomeView Grid.Row="0" Grid.RowSpan="4" Name="WelcomePanel" />
       </Grid>
     </Grid>
   </DockPanel>

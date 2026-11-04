@@ -30,8 +30,11 @@ open artifacts/macos/osx-arm64/SQLoryn.app   # arm64
 Offline launch timing (process start only; writes `docs/evidence/launch-<arch>.md`):
 `bash scripts/measure_app_launch.sh 3`. Offline journey checklist: [JOURNEYS.md](JOURNEYS.md).
 
-Requires the SDK/runtime from `global.json`. Framework-dependent publish; not a
-signed installer. See [WALKTHROUGH.md](WALKTHROUGH.md).
+Requires the SDK/runtime from `global.json`. Default is a framework-dependent publish for the host RID
+(`Sqloryn.csproj` declares `RuntimeIdentifiers` osx-arm64;osx-x64). `SQLORYN_SELF_CONTAINED=1` bundles the runtime;
+neither mode has been tested on a Mac without .NET, so no clean-Mac claim exists. Each build writes provenance
+(commit, RID, dll hash) to `docs/evidence/package-<arm64|x64>[-self-contained].md`. Set `AVALONIA_TELEMETRY_OPTOUT=1`
+for any manual `dotnet build` (the script does). Not a signed installer. See [WALKTHROUGH.md](WALKTHROUGH.md).
 
 ## SQL acceptance
 
