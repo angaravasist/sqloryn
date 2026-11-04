@@ -32,10 +32,10 @@ Hosted checks for the post-merge tip are pending after push.
 | 8–12 | **Partial** | Shell build-only |
 | 13 | **Partial** | New-tab script SELECT |
 | 14 | **Partial** | Keys/indexes/functions folders + truncation; live expand **unverified** |
-| 15 | **Partial** | PK create preview + estimated plan fakes prove INSERT never executes on deny/success path; S-1 unexpected exception now always attempts SHOWPLAN OFF + taints session (`estimate-plan-unexpected-exception-turns-off`); live SHOWPLAN **unverified**; S-2 date/money materialisation still open |
+| 15 | **Partial** | PK create preview + estimated plan fakes prove INSERT never executes on deny/success path; S-1 unexpected exception now always attempts SHOWPLAN OFF + taints session (`estimate-plan-unexpected-exception-turns-off`); plan reads bounded per plan (4 Mi chars) and in total (8 Mi chars) with SHOWPLAN reset taint on unconfirmed OFF (`plan-reader-*`, `estimate-plan-total-budget*`); live SHOWPLAN **unverified**; S-2 date/money materialisation closed against **fixtures only** (`s2-*`), live reader behaviour **unverified** |
 | 16 | **Partial** | FD package + icon required |
 | 17 | **Open** | No VoiceOver / timings / screenshots (capture blocked) |
-| 18 | **Partial** | Inventory present; sql-integration still skipped |
+| 18 | **Partial** | Inventory present; SPEC-003 CAP anchors realigned and the edit-row mapping now reaches CAP-124 (catalogue rows with evidence cite test names; rows without evidence returned to unassessed); J7 recorded as partial, not substituted by redaction; 140 of 192 catalogue rows remain unassessed and CAP-073/074/094 still say transport experiment only (no application evidence cited); sql-integration still skipped |
 
 ## Integrated local checks (post D2–D8 + OE/plan merge)
 
@@ -59,11 +59,11 @@ Hosted checks for the post-merge tip are pending after push.
 SSH modes). **A green probe alone is not Core acceptance** and closes no Core
 finding. Added here, but **not yet run against a live SQL Server** (no Docker
 engine in the authoring environment): findings 3 (live collation/transaction),
-6, 15 and S-2 (date/money) stay open until a `CORE-*` transcript from a real run
-is recorded. Predicted failure: S-2 is probably still open in Core — `date` and
-`money` columns appear to reach `NotSupportedException` in
-`ResultMaterializer.FormatSqlTypedCell`, so `CORE-MATERIALISE` / `CORE-EXPORT`
-are expected to fail until Core is fixed.
+6, 15 and S-2 (live date/money reads) stay open until a `CORE-*` transcript from a
+real run is recorded. S-2 is fixed in `ResultMaterializer` and fixture-tested, so
+`CORE-MATERIALISE` / `CORE-EXPORT` are no longer expected to fail on the missing
+`date`/`money` handling, but that expectation is a prediction, not evidence: no
+acceptance transcript exists yet.
 
 ## Reviewer launch
 
