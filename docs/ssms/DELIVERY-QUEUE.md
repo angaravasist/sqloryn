@@ -5,7 +5,7 @@ Evidence ledger: [CAP_EVIDENCE.csv](CAP_EVIDENCE.csv). PR #7 branch `codex/macos
 
 Counts are unequal statuses, not a percentage. Each CAP id appears once. The 420 SURF rows stay in [actions.csv](actions.csv) and are not copied here; a SURF action is covered by its family CAP, not by a second task.
 
-Reconciled on `wt/queue-mac` and integrated with `wt/csv-fidelity` + `wt/core-wave`. CSV fidelity trio is done-component; expanded Core harness is named but not yet a new live pass.
+Reconciled on `wt/queue-mac` and integrated with `wt/csv-fidelity` + `wt/core-wave` + `wt/mac-caps`. CSV fidelity trio and LIVE-WAVE (12 Core scenarios on Linux `496b503`) are done-component.
 
 ## Status legend
 
@@ -25,10 +25,10 @@ These are the only rows for their work. They are not repeated in the inventory.
 
 | ID | CAP | Task | Acceptance | Status | Blocker |
 |---|---|---|---|---|---|
-| CSV-SCALE | CAP-122 | Exact CREATE decimal scale | `ToSqlTypeText` keeps scale 0–38 (refuses out of range); preview guesses ≤38. Component: `csv-create-decimal-scale-exact`. Live stored-value check remains under CORE-CSV-IMPORT. | done-component | Live CORE-CSV-IMPORT on disposable Linux. |
-| CSV-DEST | CAP-122 | Existing-target fidelity | `CsvDestinationType` + `CsvDestinationFidelity`; ImportCsvWindow passes catalog MaxLength/Precision/Scale. Refuses lossy conversions before begin. Component: `csv-destination-fidelity`. | done-component | Live CORE-CSV-IMPORT on disposable Linux. |
-| CSV-SNAP | CAP-122 | Validated input identity | `LoadImmutable` snapshot + SHA-256; Apply re-hashes path before begin; same-row-count edits refuse (Replace never deletes). Component: `csv-immutable-source-fingerprint`. | done-component | Live CORE-CSV-IMPORT on disposable Linux. |
-| LIVE-WAVE | CAP-066 CAP-102 CAP-124 CAP-122 CAP-129 CAP-135 CAP-136 | Live acceptance harness | Harness names CORE-TIME-GUID, CORE-DESIGN-APPLY, CORE-EDIT-INSERT-DELETE, CORE-CSV-IMPORT (required) plus CORE-SECURITY and CORE-BACKUP (pass or explicit skip). Keep CORE-PLAN-DENIED required when the fixture can create the login. | active/partial | Disposable Linux run has not passed the new scenarios. Six scenarios on `0af9108` stay the only live pass. |
+| CSV-SCALE | CAP-122 | Exact CREATE decimal scale | `ToSqlTypeText` keeps scale 0–38; live CREATE DDL and stored values verified under CORE-CSV-IMPORT on `496b503`. | done-component | Native Mac import walk open. |
+| CSV-DEST | CAP-122 | Existing-target fidelity | Destination fidelity refuses lossy Append before begin; live lossy refuse covered by CORE-CSV-IMPORT on `496b503`. | done-component | Native Mac import walk open. |
+| CSV-SNAP | CAP-122 | Validated input identity | LoadImmutable + fingerprint refuse on same-row-count edits; live Replace leave-old-row covered by CORE-CSV-IMPORT on `496b503`. | done-component | Native Mac import walk open. |
+| LIVE-WAVE | CAP-066 CAP-102 CAP-124 CAP-122 CAP-129 CAP-135 CAP-136 | Live acceptance harness | Tip `496b503` disposable Linux: CORE-ACCEPTANCE pass=12 skip=0 fail=0 including TIME-GUID, DESIGN-APPLY, EDIT-INSERT-DELETE, CSV-IMPORT, SECURITY, BACKUP — [run 41807915637](https://github.com/angaravasist/sqloryn/actions/runs/41807915637). Keep CORE-PLAN-DENIED required when the fixture can create the login. | done-component | Native Mac SQL still open; Agent live still open. |
 
 ## Native automation rechecked 4 Nov 2026
 
@@ -36,11 +36,11 @@ Outside the sandbox, `AXIsProcessTrusted` is true for this agent process and `CG
 
 ## Where to start next
 
-CSV fidelity trio is merged (done-component). CAP-084, CAP-075, CAP-087, CAP-099 and CAP-014 are done-component (component tests only; no live SQL and no native screenshot). Next open work is LIVE-WAVE disposable Linux evidence and the remaining ready rows. Retained-row filter (CAP-098) and last-batch transaction label (CAP-059 label) landed with queue-mac; transaction commands are not added.
+CSV fidelity trio, LIVE-WAVE (Linux pass=12), and CAP-084/075/087/099/014 are done-component on `496b503`. Next: CAP-060 (change database), CAP-054 (query options), CAP-071 (single GO batch), CAP-040 (refresh subtree), CAP-081 (explicit warnings). HA/BI remain gated-incomplete. Native Mac SQL/screenshots still open.
 
 ## Inventory
 
-191 inventory rows, plus the 4 integrator rows above (CSV trio done-component; LIVE-WAVE active/partial). CAP-122 is those CSV rows, not another importer. Inventory counts: alias 1, blocked 12, done-component 76, gated-incomplete 10, partial 24, ready 71, active/partial 1.
+191 inventory rows, plus the 4 integrator rows above (CSV trio + LIVE-WAVE done-component). CAP-122 is those CSV rows, not another importer. Inventory counts: alias 1, blocked 12, done-component 77, gated-incomplete 10, partial 24, ready 71.
 
 | ID | Workstream | Task | Status | Blocker |
 |---|---|---|---|---|
