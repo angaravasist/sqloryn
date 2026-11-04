@@ -46,6 +46,8 @@ This is not a Keychain or production credential design. Never supply real secret
 | R-013 / critical: PR exfiltration | Read-only token, pinned actions, no protected secrets/self-hosted runner; SQL job explicit | Review workflow diffs; temporary SQL admin password is intentionally available to its own job |
 | R-020 / high: no independent review | PR required; agent does not merge/release | Single maintainer cannot supply independent approval; seek review before distribution |
 
+Security administration (WS7-T1) adds permission-change risk: GRANT/DENY/REVOKE are built only from an allow-listed model with bracket-quoted identifiers (control characters refused, `'` doubled again inside the `sp_executesql` literal), previewed verbatim, applied only after a confirm dialog in one transaction, and rolled back on any error; the server, not the client, decides who may change a permission. Catalog reads are bounded and never select password hashes; no password or credential can be entered. Gaps: fake-transaction evidence only, no restricted-principal live run, effective permissions are not computed, and SQL Server metadata visibility means lists can be partial.
+
 Other risks are **unimplemented/unassessed**: destructive GUI (R-005), updater
 (R-008), Windows/BI management (R-012), optional AI (R-014), concurrent editing
 (R-017), target capability confusion (R-018). Accessibility (R-023): Preview 0

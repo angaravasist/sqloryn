@@ -9,7 +9,7 @@ Owner: SQLoryn maintainer. Reviewed: 2026-11-04. Experimental; no release suppor
 ## Work under review
 
 Branch `codex/macos-database-studio` — Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
-Full delivery contract active. Tip under push merges WS1–WS6 + WS12 component work (editor, import, explorer, types, transactional DDL, Mac shell/packaging). Not product-complete: live SQL, screenshots, security/ops/Agent/HA/BI queues remain.
+WS7-T1 security (worktree `ws7-security`, not yet merged): `SecurityTests` named assertions PASS with fakes; no live restricted-principal evidence. Full delivery contract active. Tip under push merges WS1–WS6 + WS12 component work (editor, import, explorer, types, transactional DDL, Mac shell/packaging). Not product-complete: live SQL, screenshots, security/ops/Agent/HA/BI queues remain.
 
 ## Hosted checks
 

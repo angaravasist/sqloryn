@@ -91,6 +91,8 @@
               <MenuItem Header="New Table…" Click="OnNewTable" />
               <MenuItem Header="Design Table…" Click="OnDesignTable" />
               <MenuItem Header="Edit Top 200 Rows…" Click="OnEditRows" />
+              <Separator />
+              <MenuItem Header="Security…" Click="OnSecurity" />
             </ContextMenu>
           </TreeView.ContextMenu>
         </TreeView>

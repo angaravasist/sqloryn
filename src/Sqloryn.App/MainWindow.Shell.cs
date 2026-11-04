@@ -75,6 +75,7 @@ public partial class MainWindow
         var tools = new List<Cmd?>();
         if (!IsMac)
             tools.Add(C("_Settings…", () => OnSettings(this, e), Key.OemComma, Primary));
+        tools.Add(C("S_ecurity…", () => OnSecurity(this, e)));
         tools.Add(C("_Diagnostics Bundle…", () => OnDiagnostics(this, e)));
 
         var groups = new List<(string, Cmd?[])>

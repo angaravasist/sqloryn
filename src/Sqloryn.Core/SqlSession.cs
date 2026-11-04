@@ -927,6 +927,82 @@ public sealed class SqlSession : IAsyncDisposable
     }
 
     /// <summary>
+    /// Applies a reviewed <see cref="PermissionChangePreview"/> (GRANT/DENY/REVOKE) in ONE owned SqlTransaction. Any failing
+    /// statement rolls the whole set back; a server refusal (this login may not change the permission) is reported as
+    /// <see cref="PermissionApplyOutcome.RefusedDenied"/> with nothing changed. Refuses to run when the session already has an
+    /// open transaction. If the outcome is <see cref="PermissionApplyOutcome.OutcomeUnknown"/> the connection is closed so no
+    /// transaction or lock survives. Passwords and other secrets are never part of a preview and never reach this method.
+    /// </summary>
+    public async Task<PermissionApplyResult> ApplyPermissionChangeAsync(
+        PermissionChangePreview preview, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(preview);
+        if (!preview.HasChanges)
+            throw new ArgumentException("The preview has no statements to apply.", nameof(preview));
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? linked = null;
+        try
+        {
+            EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before changing permissions.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _activeCts = linked;
+            Interlocked.Increment(ref _inFlight);
+
+            var connection = _connection!;
+            var timeout = _options!.CommandTimeoutSeconds;
+
+            await using (var state = connection.CreateCommand())
+            {
+                state.CommandText = "SELECT CONVERT(int, XACT_STATE());";
+                state.CommandTimeout = timeout;
+                var xact = (int)(await state.ExecuteScalarAsync(linked.Token).ConfigureAwait(false) ?? 0);
+                if (xact != 0)
+                    return new PermissionApplyResult(PermissionApplyOutcome.RolledBackError, 0, null,
+                        "A transaction is already open on this session; refusing to change permissions inside it. Nothing was changed.");
+            }
+
+            var factory = new SqlPermissionTransactionFactory(this, connection, timeout);
+            PermissionApplyResult result;
+            try
+            {
+                result = await PermissionChangeApply.ApplyAsync(factory, preview, linked.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not ArgumentException)
+            {
+                result = new PermissionApplyResult(PermissionApplyOutcome.OutcomeUnknown, 0, null,
+                    $"The permission change ended unexpectedly ({SanitizeMessage(DiagnosticsRedactor.Redact(ex.Message))}). It may or may not have been applied.");
+            }
+
+            if (result.Outcome == PermissionApplyOutcome.OutcomeUnknown)
+            {
+                // Closing the connection ends any transaction the server may still hold for us.
+                _targetUnknown = true;
+                await DisposeConnectionAsync().ConfigureAwait(false);
+                result = result with { Message = result.Message + " The session was disconnected; reconnect and reload." };
+            }
+            return result;
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCts, linked))
+                _activeCts = null;
+            _activeSqlCommand = null;
+            linked?.Dispose();
+            if (linked is not null)
+                Interlocked.Decrement(ref _inFlight);
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Applies a reviewed flat-file import (<see cref="CsvImportPlan"/>) in ONE owned SqlTransaction after the whole file
     /// validated cleanly: optional CREATE TABLE or DELETE, then parameterised INSERT batches, then commit. Any failure,
     /// duplicate key or cancel (<see cref="RequestCancel"/> or <paramref name="cancellationToken"/>) rolls everything back.
@@ -1239,6 +1315,43 @@ public sealed class SqlSession : IAsyncDisposable
             catch (SqlException ex) when (IsDuplicateKey(ex))
             {
                 throw new CsvImportDuplicateKeyException("The server rejected a duplicate key.", ex);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public Task CommitAsync(CancellationToken cancellationToken) => transaction.CommitAsync(cancellationToken);
+        public Task RollbackAsync(CancellationToken cancellationToken) => transaction.RollbackAsync(cancellationToken);
+        public ValueTask DisposeAsync() => transaction.DisposeAsync();
+    }
+
+    sealed class SqlPermissionTransactionFactory(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds)
+        : IPermissionTransactionFactory
+    {
+        public async Task<IPermissionTransaction> BeginAsync(CancellationToken cancellationToken)
+        {
+            var tx = (SqlTransaction)await connection.BeginTransactionAsync(
+                IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+            return new SqlPermissionTransaction(owner, connection, tx, commandTimeoutSeconds);
+        }
+    }
+
+    sealed class SqlPermissionTransaction(SqlSession owner, SqlConnection connection, SqlTransaction transaction, int commandTimeoutSeconds)
+        : IPermissionTransaction
+    {
+        public async Task ExecuteAsync(string sql, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {

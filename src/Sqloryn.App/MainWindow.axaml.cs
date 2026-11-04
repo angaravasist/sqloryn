@@ -1213,6 +1213,28 @@ public partial class MainWindow : Window
         StatusBar.Text = "Import finished; expand Tables again (or Refresh) to see changes.";
     }
 
+    /// <summary>Opens the security window on the active tab's session. Reading and previewing are safe; Apply confirms inside the window.</summary>
+    async void OnSecurity(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect first.";
+            return;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return;
+        }
+        var window = new SecurityWindow(tab.Session, SelectedNode?.Database ?? tab.Session.Database);
+        await window.ShowDialog(this);
+        if (window.Applied)
+            StatusBar.Text = "Permissions were changed; Object Explorer metadata may need a refresh.";
+    }
+
     async void OnEditRows(object? sender, RoutedEventArgs e)
     {
         if (RequireSelectedTable(tablesOnly: true) is not { } selected)
