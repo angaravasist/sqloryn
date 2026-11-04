@@ -358,6 +358,10 @@ public sealed class SqlSession : IAsyncDisposable
                 DrainDeadlineRequested: timers.DrainDeadlineFired,
                 Timers: timers);
 
+            // Client stopwatch around this batch's execute only. Target verification below is not included,
+            // and the number is not a server statistic.
+            var executeTimer = System.Diagnostics.Stopwatch.StartNew();
+            int? providerRows = null;
             try
             {
                 DbDataReader? reader = null;
@@ -385,9 +389,17 @@ public sealed class SqlSession : IAsyncDisposable
                 finally
                 {
                     // Dispose the active reader before same-session verification / cancel probe.
-                    if (reader is not null)
+                    // SqlDataReader.RecordsAffected is valid after close and is the provider count, not a grid tally.
+                    if (reader is SqlDataReader sqlReader)
+                    {
+                        await sqlReader.DisposeAsync().ConfigureAwait(false);
+                        providerRows = ProviderRowsAffected.FromRecordsAffected(sqlReader.RecordsAffected);
+                    }
+                    else if (reader is not null)
                         await reader.DisposeAsync().ConfigureAwait(false);
                 }
+
+                executeTimer.Stop();
 
                 // Only refine an already-recorded UserCancel; never overwrite provider/watchdog timeout.
                 if (obs.StopCause == StopCause.UserCancel)
@@ -408,6 +420,10 @@ public sealed class SqlSession : IAsyncDisposable
             }
 
             AfterObserve:
+            if (executeTimer.IsRunning)
+                executeTimer.Stop();
+            obs.ClientElapsedMilliseconds = executeTimer.ElapsedMilliseconds;
+            obs.RowsAffected = providerRows;
             foreach (var msg in messages)
                 obs.Messages.Insert(0, msg);
 
@@ -523,7 +539,9 @@ public sealed class SqlSession : IAsyncDisposable
                 TransactionState = sqlOutcome.TransactionState,
                 TargetConfidence = TargetConfidence.Known,
                 RetentionLimitReached = sqlOutcome.RetentionLimitReached,
-                StopCause = sqlOutcome.StopCause
+                StopCause = sqlOutcome.StopCause,
+                RowsAffected = sqlOutcome.RowsAffected,
+                ClientElapsedMilliseconds = sqlOutcome.ClientElapsedMilliseconds
             };
         }
 
@@ -543,7 +561,9 @@ public sealed class SqlSession : IAsyncDisposable
             TransactionState = sqlOutcome.TransactionState,
             TargetConfidence = TargetConfidence.Unknown,
             RetentionLimitReached = sqlOutcome.RetentionLimitReached,
-            StopCause = sqlOutcome.StopCause
+            StopCause = sqlOutcome.StopCause,
+            RowsAffected = sqlOutcome.RowsAffected,
+            ClientElapsedMilliseconds = sqlOutcome.ClientElapsedMilliseconds
         };
     }
 

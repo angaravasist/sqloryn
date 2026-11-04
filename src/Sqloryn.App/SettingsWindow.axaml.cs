@@ -29,6 +29,7 @@ public partial class SettingsWindow : Window
                              "It limits how many retained rows the grid draws. When a set is cut off its tab says so: " +
                              "the server's total row count is not known, and exports contain only retained rows.";
         ThemeBox.SelectedIndex = Math.Max(0, Array.FindIndex(Themes, t => t.Value == settings.Theme));
+        ConnectTimeoutBox.Value = settings.ConnectTimeoutSeconds;
     }
 
     void OnCancel(object? sender, RoutedEventArgs e) => Close(false);
@@ -43,7 +44,8 @@ public partial class SettingsWindow : Window
                 EditorFontSize = (double)(FontSizeBox.Value ?? 13m),
                 ResultsMaxRows = (int)(MaxRowsBox.Value ?? AppSettings.MaxResultsMaxRows),
                 ConfirmDestructive = true,
-                Theme = Themes[Math.Clamp(ThemeBox.SelectedIndex, 0, Themes.Length - 1)].Value
+                Theme = Themes[Math.Clamp(ThemeBox.SelectedIndex, 0, Themes.Length - 1)].Value,
+                ConnectTimeoutSeconds = (int)(ConnectTimeoutBox.Value ?? AppSettings.DefaultConnectTimeoutSeconds)
             }).Normalize();
             AppServices.Settings.Save(settings);
             Saved = settings;
