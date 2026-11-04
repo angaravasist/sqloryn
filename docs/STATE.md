@@ -5,7 +5,7 @@ Owner: SQLoryn maintainer. Reviewed: 2026-11-04. Experimental; no release suppor
 ## Work under review
 
 Branch `codex/macos-database-studio` — Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7).
-Prior tip with hosted green checks: `78fba00`. Follow-up tip under push after D2–D8 + OE/plan merge.
+Prior tip with hosted green checks: `78fba00`. Integrated tip under push includes S-2, plan budget/SHOWPLAN discard, Core acceptance harness, offline journeys and catalogue realignment.
 
 ## Hosted checks on `78fba00`
 
@@ -34,7 +34,7 @@ Hosted checks for the post-merge tip are pending after push.
 | 14 | **Partial** | Keys/indexes/functions folders + truncation; live expand **unverified** |
 | 15 | **Partial** | PK create preview + estimated plan fakes prove INSERT never executes on deny/success path; S-1 unexpected exception now always attempts SHOWPLAN OFF + taints session (`estimate-plan-unexpected-exception-turns-off`); plan reads bounded per plan (4 Mi chars) and in total (8 Mi chars) with SHOWPLAN reset taint on unconfirmed OFF (`plan-reader-*`, `estimate-plan-total-budget*`); live SHOWPLAN **unverified**; S-2 date/money materialisation closed against **fixtures only** (`s2-*`), live reader behaviour **unverified** |
 | 16 | **Partial** | FD package + icon required |
-| 17 | **Open** | No VoiceOver / timings / screenshots (capture blocked) |
+| 17 | **Partial** | Process-start launch median/max recorded ([launch-arm64](evidence/launch-arm64.md)); large-script SetText/FindNext bound PASS; keyboard AutomationProperties source contract PASS; VoiceOver walk and screenshots still **blocked** (no Screen Recording) |
 | 18 | **Partial** | Inventory present; SPEC-003 CAP anchors realigned and the edit-row mapping now reaches CAP-124 (catalogue rows with evidence cite test names; rows without evidence returned to unassessed); J7 recorded as partial, not substituted by redaction; 140 of 192 catalogue rows remain unassessed and CAP-073/074/094 still say transport experiment only (no application evidence cited); sql-integration still skipped |
 
 ## Integrated local checks (post D2–D8 + OE/plan merge)
@@ -42,9 +42,9 @@ Hosted checks for the post-merge tip are pending after push.
 | Check | Result |
 |---|---|
 | `dotnet build SQLoryn.slnx -c Release` | 0 warnings / 0 errors |
-| Core component executable | **101 PASS lines** (100 named + summary), 0 FAIL (includes S-1 fix, offline journey/keyboard/large-script checks) |
+| Core component executable | **110 PASS lines** (109 named + summary), 0 FAIL (S-2, plan budget/bounded reader, SHOWPLAN taint+disconnect refuse, large-script, keyboard contract) |
 | SqlClientProbe.Tests | **35 PASS** |
-| Python tests | **43 OK** |
+| Python tests | **50 OK** |
 | `repo_preflight.py` | PASS |
 | `bash scripts/build_macos_app.sh` | arm64 FD `.app` |
 | Launch smoke | process started; `scripts/measure_app_launch.sh` median 127 ms / max 169 ms to process start on M3, 3 runs ([evidence](evidence/launch-arm64.md)); not window or input-ready |

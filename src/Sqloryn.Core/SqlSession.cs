@@ -130,7 +130,8 @@ public sealed class SqlSession : IAsyncDisposable
             Database = null;
             ServerVersion = null;
             _options = null;
-            _targetUnknown = false;
+            // Keep _targetUnknown: an unconfirmed SHOWPLAN reset (or other target-unknown
+            // state) must not be cleared by disconnect alone. Only ConnectAsync recovers.
         }
         finally
         {

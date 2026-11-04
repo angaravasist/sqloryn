@@ -2796,6 +2796,13 @@ Pass("explorer-ownership");
         try { await session.EstimatePlanAsync(Insert); throw new Exception("FAIL estimate after tainted estimate"); }
         catch (InvalidOperationException ex) { Check(ex.Message.Contains("target is unknown", StringComparison.OrdinalIgnoreCase), "sqlsession-tainted-estimate-message"); }
         Check(executed == 0 && runnerCreations == 1 && runner.DmlExecutions == 0, "sqlsession-tainted-refuses-everything");
+
+        // Disconnect alone must not clear the taint; recovery is ConnectAsync only.
+        await session.DisconnectAsync();
+        Check(session.TargetUnknown, "sqlsession-tainted-survives-disconnect");
+        try { await session.EstimatePlanAsync(Insert); throw new Exception("FAIL estimate after disconnect while tainted"); }
+        catch (InvalidOperationException ex) { Check(ex.Message.Contains("target is unknown", StringComparison.OrdinalIgnoreCase), "sqlsession-tainted-after-disconnect-message"); }
+        Check(runnerCreations == 1 && executed == 0, "sqlsession-tainted-disconnect-still-refuses");
     }
     Pass("sqlsession-estimate-tainted-refuses-until-reconnect");
 
