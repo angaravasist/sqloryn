@@ -57,6 +57,11 @@ public partial class MainWindow
             C("_Open…", () => OnOpen(this, e), Key.O, Primary),
             C("_Save", () => OnSave(this, e), Key.S, Primary),
             C("Save _As…", () => OnSaveAs(this, e), Key.S, Primary | KeyModifiers.Shift),
+            C("Recover _Unsaved Scripts…", () =>
+            {
+                _announceEmptyRecovery = true;
+                OnRecoverUnsaved(this, e);
+            }),
             C("_Close Tab", () => OnCloseTab(this, e), Key.W, Primary),
             null,
             C("_Import Flat File…", () => OnImportCsv(this, e)),
@@ -115,6 +120,7 @@ public partial class MainWindow
                     ? C("_Cancel", () => OnCancel(this, e), Key.OemPeriod, KeyModifiers.Meta)
                     : C("_Cancel", () => OnCancel(this, e), display: Key.Escape),
                 C("Run Current _Batch", () => OnRunCurrentBatch(this, e), Key.F5, KeyModifiers.Shift),
+                C("Execution _History…", () => OnExecutionHistory(this, e)),
                 C("Session _ANSI Settings…", () => OnSessionAnsi(this, e)),
                 null,
                 // Compiles under SET SHOWPLAN_XML; the SQL is never executed.

@@ -271,10 +271,10 @@ public static class ResultMaterializer
         if (typeName.Equals("uniqueidentifier", StringComparison.OrdinalIgnoreCase))
             return FormatGuid(source.GetGuid(ordinal));
 
-        if (IsCharacterType(typeName))
-            return ReadBoundedChars(source, ordinal);
         if (IsBinaryType(typeName))
             return ReadBoundedBinary(source, ordinal);
+        if (IsCharacterType(typeName))
+            return ReadBoundedChars(source, ordinal);
         if (typeName.Contains("datetimeoffset", StringComparison.OrdinalIgnoreCase))
             return CellValue.Text(source.GetDateTimeOffset(ordinal).ToString("o", CultureInfo.InvariantCulture), "datetimeoffset");
         if (source.TryGetDateTime(ordinal, out var dt))
@@ -351,6 +351,9 @@ public static class ResultMaterializer
             return CellValue.Null;
 
         var fieldType = reader.GetFieldType(ordinal);
+        var typeName = SafeTypeName(reader, ordinal);
+        if (BinaryDisplay.IsBinarySqlType(typeName) && fieldType != typeof(byte[]))
+            return CellValue.Text(BinaryDisplay.NotText, "binary");
         if (fieldType == typeof(string) || fieldType == typeof(char))
             return ReadBoundedCharsDb(reader, ordinal);
         if (fieldType == typeof(byte[]))
@@ -359,7 +362,6 @@ public static class ResultMaterializer
             return FormatSqlDecimal(reader.GetFieldValue<SqlDecimal>(ordinal));
         if (fieldType == typeof(SqlMoney))
         {
-            var typeName = SafeTypeName(reader, ordinal);
             IsMoneyType(typeName, out var kind);
             return FormatSqlMoney(reader.GetFieldValue<SqlMoney>(ordinal), kind.Length == 0 ? "money" : kind);
         }
@@ -425,7 +427,7 @@ public static class ResultMaterializer
             source.GetBytes(ordinal, 0, buffer, 0, take);
         var truncated = total > maxBytes;
         return CellValue.Text(
-            "0x" + Convert.ToHexString(buffer) + (truncated ? "…" : ""),
+            BinaryDisplay.FormatBytes(buffer) + (truncated ? "…" : ""),
             "binary",
             truncated);
     }
@@ -464,7 +466,7 @@ public static class ResultMaterializer
                 reader.GetBytes(ordinal, 0, buffer, 0, take);
             var truncated = total > maxBytes;
             return CellValue.Text(
-                "0x" + Convert.ToHexString(buffer) + (truncated ? "…" : ""),
+                BinaryDisplay.FormatBytes(buffer) + (truncated ? "…" : ""),
                 "binary",
                 truncated);
         }
@@ -475,7 +477,7 @@ public static class ResultMaterializer
             var truncated = bytes.Length > maxBytes;
             var take = Math.Min(bytes.Length, maxBytes);
             return CellValue.Text(
-                "0x" + Convert.ToHexString(bytes.AsSpan(0, take)) + (truncated ? "…" : ""),
+                BinaryDisplay.FormatBytes(bytes.AsSpan(0, take)) + (truncated ? "…" : ""),
                 "binary",
                 truncated);
         }

@@ -28,6 +28,7 @@ public partial class MainWindow
             ResultTabs.Items.Clear();
             var maxRows = Math.Max(1, _settings.ResultsMaxRows);
             var shownNote = new StringBuilder();
+            var notices = result is null ? "" : QueryOutcomeFormatter.DescribeNoticeSummary(result.Messages);
 
             if (result is null)
             {
@@ -60,11 +61,17 @@ public partial class MainWindow
                 ResultSummary.Text = $"{QueryOutcomeFormatter.DescribeStatus(result)} · {result.ResultSets.Count} result set(s)" +
                                      (affected.Length > 0 ? " · " + affected : "") +
                                      (elapsed.Length > 0 ? " · " + elapsed : "") +
+                                     (notices.Length > 0 ? " · " + notices : "") +
                                      (result.PartialResults || result.RetentionLimitReached ? " · output truncated" : "") +
                                      (shownNote.Length > 0 ? " · " + shownNote.ToString().TrimEnd() : "");
             }
 
-            var messagesTab = new TabItem { Header = "Messages", Tag = -1, Content = MessagesBox };
+            var messagesTab = new TabItem
+            {
+                Header = notices.Length == 0 ? "Messages" : "Messages (" + notices + ")",
+                Tag = -1,
+                Content = MessagesBox
+            };
             ResultTabs.Items.Add(messagesTab);
 
             var preferred = _active?.LastResultSetIndex ?? -1;
@@ -157,6 +164,7 @@ public partial class MainWindow
             var index = i;
             var name = set.Columns[i];
             headerNames[i] = string.IsNullOrEmpty(name) ? "(no column name)" : name;
+            var sqlType = i < set.SqlTypes.Count ? set.SqlTypes[i] : null;
             dataColumns[i] = new DataGridTemplateColumn
             {
                 Header = headerNames[i],
@@ -166,7 +174,7 @@ public partial class MainWindow
                 MaxWidth = 640,
                 Width = new DataGridLength(1, DataGridLengthUnitType.Auto),
                 ClipboardContentBinding = new Binding($"Cells[{index}].ClipboardText"),
-                CellTemplate = new FuncDataTemplate<ResultRow>((row, _) => BuildCell(row, index))
+                CellTemplate = new FuncDataTemplate<ResultRow>((row, _) => BuildCell(row, index, sqlType))
             };
             grid.Columns.Add(dataColumns[i]);
         }
@@ -384,9 +392,11 @@ public partial class MainWindow
         return one.Length <= 80 ? one : one[..80] + "…";
     }
 
-    static Control BuildCell(ResultRow? row, int index)
+    static Control BuildCell(ResultRow? row, int index, string? sqlType)
     {
         var cell = row is not null && index < row.Cells.Length ? row.Cells[index] : CellValue.Null;
+        var shown = BinaryDisplay.PresentColumn(sqlType, cell);
+        var binary = BinaryDisplay.IsBinarySqlType(sqlType) || cell.Kind.Equals("binary", StringComparison.OrdinalIgnoreCase);
         var text = new TextBlock
         {
             VerticalAlignment = VerticalAlignment.Center,
@@ -402,8 +412,10 @@ public partial class MainWindow
         }
         else
         {
-            text.Text = cell.Display.Length == 0 ? "" : cell.Display.Replace("\r\n", " ⏎ ").Replace('\n', '⏎').Replace('\r', '⏎');
-            if (cell.Display.Length == 0)
+            text.Text = shown.Length == 0 ? "" : shown.Replace("\r\n", " ⏎ ", StringComparison.Ordinal).Replace('\n', '⏎').Replace('\r', '⏎');
+            if (binary)
+                ToolTip.SetTip(text, "Hexadecimal (0x). Not decoded as text.");
+            else if (shown.Length == 0)
                 ToolTip.SetTip(text, "empty string");
             else if (cell.Truncated)
                 ToolTip.SetTip(text, "Value truncated for display");

@@ -11,11 +11,11 @@ public static class ResultTextFormatter
 {
     public const string NullMarker = "(null)";
 
-    public static string CellToken(CellValue cell)
+    public static string CellToken(CellValue cell, string? sqlType = null)
     {
         if (cell.IsNull)
             return NullMarker;
-        return cell.Display
+        return BinaryDisplay.PresentColumn(sqlType, cell)
             .Replace("\r\n", " ", StringComparison.Ordinal)
             .Replace('\n', ' ')
             .Replace('\r', ' ')
@@ -47,7 +47,8 @@ public static class ResultTextFormatter
             for (var c = 0; c < columns; c++)
             {
                 var cell = c < row.Count ? row[c] : CellValue.Null;
-                var token = CellToken(cell);
+                var sqlType = c < set.SqlTypes.Count ? set.SqlTypes[c] : null;
+                var token = CellToken(cell, sqlType);
                 tokens[r][c] = token;
                 if (token.Length > widths[c])
                     widths[c] = token.Length;
@@ -118,6 +119,56 @@ public static class ResultCopy
         foreach (var row in rows)
             sb.AppendLine(string.Join('\t', row.Select(FormatCell)));
         return sb.ToString();
+    }
+}
+
+/// <summary>
+/// varbinary, binary, image, timestamp and rowversion are hexadecimal. They are not decoded as text.
+/// </summary>
+public static class BinaryDisplay
+{
+    public const string NotText = "(binary; not shown as text)";
+
+    public static string FormatBytes(ReadOnlySpan<byte> bytes)
+        => "0x" + Convert.ToHexString(bytes);
+
+    public static bool IsBinarySqlType(string? typeName)
+    {
+        if (string.IsNullOrEmpty(typeName))
+            return false;
+        if (typeName.Contains("binary", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return typeName.Equals("image", StringComparison.OrdinalIgnoreCase)
+            || typeName.Equals("timestamp", StringComparison.OrdinalIgnoreCase)
+            || typeName.Equals("rowversion", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Visible text for one cell. A binary column whose display is not <c>0x</c> hex is refused rather than shown as text.
+    /// </summary>
+    public static string PresentColumn(string? sqlType, CellValue cell)
+    {
+        if (cell.IsNull)
+            return cell.Display;
+        var binary = IsBinarySqlType(sqlType) || cell.Kind.Equals("binary", StringComparison.OrdinalIgnoreCase);
+        if (!binary)
+            return cell.Display;
+        return IsHexLiteral(cell.Display) ? cell.Display : NotText;
+    }
+
+    static bool IsHexLiteral(string display)
+    {
+        if (!display.StartsWith("0x", StringComparison.Ordinal))
+            return false;
+        var end = display.EndsWith('…') ? display.Length - 1 : display.Length;
+        for (var i = 2; i < end; i++)
+        {
+            var c = display[i];
+            var hex = c is >= '0' and <= '9' or >= 'A' and <= 'F' or >= 'a' and <= 'f';
+            if (!hex)
+                return false;
+        }
+        return true;
     }
 }
 

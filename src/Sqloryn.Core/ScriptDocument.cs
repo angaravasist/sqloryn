@@ -36,6 +36,26 @@ public sealed class ScriptDocument
         _version++;
     }
 
+    /// <summary>Puts a recovered script back and leaves it dirty so it is not saved or discarded silently.</summary>
+    public void RestoreDirty(string? path, string text)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            FilePath = null;
+            _disk = null;
+        }
+        else
+        {
+            FilePath = path;
+            var resolved = SafeFileWriter.ResolveDestination(path);
+            _disk = new TrackedDiskState(resolved, FileFingerprint.TryCapture(resolved));
+        }
+
+        Text = text ?? "";
+        IsDirty = true;
+        _version++;
+    }
+
     public void SetText(string text)
     {
         if (Text == text)

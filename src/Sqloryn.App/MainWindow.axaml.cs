@@ -32,6 +32,10 @@ public partial class MainWindow : Window
     bool _closePromptInFlight;
     long _treeLoadGeneration;
     bool _suppressDatabaseChoice;
+    readonly HashSet<string> _adoptedRecoveryIds = new(StringComparer.Ordinal);
+    bool _persistingRecovery;
+    bool _suspendRecoveryPersist;
+    bool _announceEmptyRecovery;
 
     public MainWindow()
     {
@@ -60,6 +64,11 @@ public partial class MainWindow : Window
         WelcomePanel.OpenRequested += (_, e) => OnOpen(this, e);
         InitShell();
         AddTab();
+        Opened += (_, _) =>
+        {
+            _announceEmptyRecovery = false;
+            OnRecoverUnsaved(this, new RoutedEventArgs());
+        };
     }
 
     static AppSettings LoadSettings()
@@ -722,6 +731,7 @@ public partial class MainWindow : Window
         // Sync editor into active document before prompting.
         if (_active is not null)
             _active.Document.SetText(Editor.Text ?? "");
+        PersistRecovery();
 
         var docs = _tabs.Select(t => t.Document).ToList();
         var (ok, pending) = await DocumentLifecycle.ResolveAllDirtyDeferredAsync(
@@ -751,6 +761,7 @@ public partial class MainWindow : Window
                     Editor.Text = tab.Document.Text;
                 RefreshHeader(tab);
             }
+            PersistRecovery();
             return false;
         }
 
@@ -761,6 +772,7 @@ public partial class MainWindow : Window
                 Editor.Text = tab.Document.Text;
             RefreshHeader(tab);
         }
+        PersistRecovery();
 
         if (!disposeOnSuccess)
             return true;
@@ -835,6 +847,7 @@ public partial class MainWindow : Window
         _active.Document.SetText(Editor.Text ?? "");
         RefreshHeader(_active);
         UpdateWelcome();
+        PersistRecovery();
     }
 
     void CaptureSelection()

@@ -53,7 +53,7 @@ public static class QueryOutcomeFormatter
         if (!string.IsNullOrEmpty(result.ErrorSummary))
             msg.AppendLine(result.ErrorSummary);
         foreach (var m in result.Messages)
-            msg.AppendLine($"Msg {m.Number} (class {m.Class}): {m.Text}");
+            msg.AppendLine(DescribeNotice(m));
         if (result.PartialResults)
             msg.AppendLine("Partial or truncated output.");
         if (result.RetentionLimitReached)
@@ -94,6 +94,66 @@ public static class QueryOutcomeFormatter
         return "Client elapsed: " + ms.ToString(CultureInfo.InvariantCulture)
             + " ms (measured on this computer; not server statistics)";
     }
+
+    /// <summary>
+    /// SQL Server severity 0 and 10 are informational (PRINT is 0). Severities 1–9 are warnings.
+    /// Severity 11 and above is an error. The label matches that, rather than calling every notice an error.
+    /// </summary>
+    public static string DescribeNotice(QueryMessage message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        return NoticeKind(message.Class)
+            + " (severity " + message.Class.ToString(CultureInfo.InvariantCulture)
+            + ", message " + message.Number.ToString(CultureInfo.InvariantCulture)
+            + "): " + message.Text;
+    }
+
+    /// <summary>Short count for the results summary and the Messages tab. Empty when there are no notices.</summary>
+    public static string DescribeNoticeSummary(IReadOnlyList<QueryMessage> messages)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        var info = 0;
+        var warning = 0;
+        var error = 0;
+        foreach (var message in messages)
+        {
+            switch (NoticeKind(message.Class))
+            {
+                case "Warning":
+                    warning++;
+                    break;
+                case "Error":
+                    error++;
+                    break;
+                default:
+                    info++;
+                    break;
+            }
+        }
+
+        var parts = new List<string>();
+        if (warning == 1)
+            parts.Add("1 warning");
+        else if (warning > 1)
+            parts.Add(warning.ToString(CultureInfo.InvariantCulture) + " warnings");
+        if (info == 1)
+            parts.Add("1 info");
+        else if (info > 1)
+            parts.Add(info.ToString(CultureInfo.InvariantCulture) + " info");
+        if (error == 1)
+            parts.Add("1 error");
+        else if (error > 1)
+            parts.Add(error.ToString(CultureInfo.InvariantCulture) + " errors");
+        return string.Join(", ", parts);
+    }
+
+    static string NoticeKind(byte severity) => severity switch
+    {
+        0 => "Info",
+        < 10 => "Warning",
+        10 => "Info",
+        _ => "Error"
+    };
 
     /// <summary>Status, results and messages must name the same completion outcome.</summary>
     public static bool UiSurfacesAgree(QueryResult result, out string detail)

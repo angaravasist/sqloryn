@@ -9,11 +9,15 @@ static class AppServices
 {
     static readonly Lazy<ConnectionProfileStore> ProfilesLazy = new(() => new ConnectionProfileStore());
     static readonly Lazy<AppSettingsStore> SettingsLazy = new(() => new AppSettingsStore());
+    static readonly Lazy<DocumentRecoveryStore> RecoveryLazy = new(() => new DocumentRecoveryStore());
+    static readonly Lazy<ExecutionHistoryStore> HistoryLazy = new(() => new ExecutionHistoryStore());
     static readonly Lazy<ISecretStore> SecretsLazy = new(() =>
         MacKeychainSecretStore.IsSupported ? new MacKeychainSecretStore() : new MemorySecretStore());
 
     public static ConnectionProfileStore Profiles => ProfilesLazy.Value;
     public static AppSettingsStore Settings => SettingsLazy.Value;
+    public static DocumentRecoveryStore Recovery => RecoveryLazy.Value;
+    public static ExecutionHistoryStore History => HistoryLazy.Value;
     public static ISecretStore Secrets => SecretsLazy.Value;
     public static bool SecretsArePersistent => MacKeychainSecretStore.IsSupported;
 
