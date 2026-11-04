@@ -34,8 +34,8 @@ Counts are unequal statuses, not a percentage. Update this file when assigning o
 | WS7-T1 | Security | Logins/users/roles read + GRANT/DENY/REVOKE preview + confirmed transactional apply (SecurityWindow) | done-component | Restricted principal fixture for live; role-change check from separate principal; login/role-membership writes not built |
 | WS8-T1 | Operations | Backup/restore/CHECKDB plans + OperationsWindow (preview, confirm, honest outcome) | done-component | Disposable SQL Server fixture for live backup/restore/CHECKDB; VERIFYONLY/chain validation not built |
 | WS9-T1 | Agent/plans | Safe plan XML parse + Agent job list model | ready | Agent-enabled server |
-| WS10-T1 | HA/repl | Capability-gated incomplete shells | ready | Multi-node topology |
-| WS11-T1 | BI/cloud | Explicit unsupported gates | ready | Service auth |
+| WS10-T1 | HA/repl | Capability-gated incomplete shells (`GatedWorkspaceCatalog`, Tools menu) | done-component (shell only; feature stays incomplete) | Multi-node topology |
+| WS11-T1 | BI/cloud | Explicit unsupported gates (SSISDB/SSAS/SSRS/Fabric/Azure disabled) | done-component (shell only; feature stays incomplete) | Service protocol/auth |
 | CAP-176 | AI | Deferred | blocked | Product deferral |
 
 ## Integrated tip (this wave)

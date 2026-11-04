@@ -79,6 +79,11 @@ public partial class MainWindow
         tools.Add(C("_Backup, Restore and Check…", () => OnOperations(this, e)));
         tools.Add(C("SQL Server _Agent…", () => OnOpenAgent(this, e)));
         tools.Add(C("_Diagnostics Bundle…", () => OnDiagnostics(this, e)));
+        tools.Add(null);
+        // Honest gated shells (DELIVERY-CONTRACT §10-11): each opens a window that names what is missing; none connects or reads a server.
+        tools.Add(C("_High Availability (Incomplete)…", () => _ = new HighAvailabilityWorkspace().ShowDialog(this)));
+        tools.Add(C("_Replication (Incomplete)…", () => _ = new ReplicationWorkspace().ShowDialog(this)));
+        tools.Add(C("_BI and Cloud (Disabled)…", () => _ = new BiCloudWorkspace().ShowDialog(this)));
 
         var groups = new List<(string, Cmd?[])>
         {

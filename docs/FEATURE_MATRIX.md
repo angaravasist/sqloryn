@@ -14,8 +14,8 @@ This is an **initial outline, not a complete SSMS feature inventory**. Every men
 | Schema management | Compare, import/export, DACPAC, BACPAC | Preview (flat-file import only): File > Import Flat File… previews a delimited file (delimiter/header/encoding, quoted newlines, strict encoding, ISO-only date and `.`-only number guesses, formula-like cell warnings) and maps columns; preview and SQL preview never write. Confirm runs the whole file through validation first (bad values and in-file duplicate keys refused with row numbers), then ONE transaction: optional CREATE TABLE or counted DELETE (Replace), parameterised INSERT batches, commit; any error, server duplicate key or cancel rolls back. Component-tested with fakes only; live apply evidence pending. No Create-time keys, no DACPAC/BACPAC, no compare |
 | Operations | Backup/restore, server/database configuration | Not implemented |
 | Agent | Jobs, schedules, history, operators | Not implemented |
-| Advanced administration | Availability groups, replication, maintenance | Not implemented |
-| BI tooling | SSIS, SSAS and SSRS integration | Not implemented |
+| Advanced administration | Availability groups, replication, maintenance | Not implemented. Gated shell only: Tools > High Availability (Incomplete) and Replication (Incomplete) explain the missing multi-node fixture and show no health or topology; incomplete until a real multi-node topology and recovery are verified (CAP-157/158) |
+| BI tooling | SSIS, SSAS and SSRS integration | Not implemented. Gated shell only: Tools > BI and Cloud (Disabled) lists SSISDB, SSAS, SSRS, Fabric and Azure, each disabled and naming the missing protocol and authentication; no credentials collected and no cloud call; incomplete until each service is verified (CAP-163–168/170/171) |
 
 ## Reference coverage
 

@@ -3288,6 +3288,7 @@ await CsvImportTests.RunAsync();
 await SecurityTests.RunAsync();
 await OperationsTests.RunAsync();
 await AgentTests.RunAsync();
+GatedWorkspaceTests.Run();
 
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
 Console.WriteLine("NOTE: live SqlDataReader decimal(38) against SQL Server remains provider-only / live-host verification.");

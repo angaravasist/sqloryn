@@ -106,7 +106,7 @@ APP_KB="$(du -sk "$APP" | awk '{print $1}')"
   echo "## Limits"
   echo
   echo "- Unsigned and not notarised: internal candidate only."
-  echo "- Built and (separately) launched on the build machine only. **Not tested on a Mac without a .NET install**, so no clean-Mac claim is made for either mode."
+  echo "- Built on the build machine. Launch is **not** performed by this script. **Not tested on a Mac without a .NET install**, so no clean-Mac claim is made for either mode."
   echo "- Hashes identify this build output only; there is no reproducible-build claim."
 } > "$EVIDENCE"
 echo "Provenance: $EVIDENCE"
