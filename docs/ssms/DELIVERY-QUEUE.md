@@ -32,7 +32,7 @@ Counts are unequal statuses, not a percentage. Update this file when assigning o
 | WS1-T1 | Connections | Structured DB names; capability probe; auth gates; groups | done-component | Entra/Kerberos fixtures |
 | WS6-T1 | Import | CSV preview/plan/apply + ImportCsvWindow | done-component | Live INSERT on disposable SQL |
 | WS7-T1 | Security | Logins/users + GRANT preview | ready | Restricted principal fixture for live |
-| WS8-T1 | Operations | Backup/restore guided shell + Core models | ready | Disposable DB fixture |
+| WS8-T1 | Operations | Backup/restore/CHECKDB plans + OperationsWindow (preview, confirm, honest outcome) | done-component | Disposable SQL Server fixture for live backup/restore/CHECKDB; VERIFYONLY/chain validation not built |
 | WS9-T1 | Agent/plans | Safe plan XML parse + Agent job list model | ready | Agent-enabled server |
 | WS10-T1 | HA/repl | Capability-gated incomplete shells | ready | Multi-node topology |
 | WS11-T1 | BI/cloud | Explicit unsupported gates | ready | Service auth |
@@ -47,7 +47,7 @@ Local integrated checks (SHA recorded in STATE after commit): Release 0/0, Core 
 ## Next ready queue
 
 1. WS7 security admin Core + list UI (preview-only apply path).
-2. WS8 backup/restore models + guided window (no live restore without fixture).
+2. WS8 follow-ups: RESTORE VERIFYONLY/FILELISTONLY validation, files/filegroups, index maintenance; live round trip on a disposable server.
 3. WS9 plan XML safe parser + Agent job catalogue read model; wire Messages plan viewer stub.
 4. WS10/WS11 gated incomplete screens naming missing topology/service.
 5. Hosted `sql-integration` within existing licence consent; require CORE-PLAN-DENIED when login creation works.

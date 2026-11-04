@@ -133,14 +133,14 @@ CAP-131,Identity,Security administration,Credentials and proxies,integrator,,,mi
 CAP-132,Identity,Security administration,Schemas and ownership,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-133,Identity,Security administration,Object-level permissions,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-134,Identity,Security administration,Audit/security configuration,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-135,Operations,Administration & maintenance,Database backup,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-136,Operations,Administration & maintenance,Database restore,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
+CAP-135,Operations,Administration & maintenance,Database backup,integrator,,OperationsWindow;BackupRestorePlan.GeneratePreviewSql;OperationRunner,partial_code,OperationsTests,unverified,Disposable SQL Server fixture for live BACKUP,,Component only: preview + labelled server-side vs local Mac path + confirm-gated execute; no live backup run
+CAP-136,Operations,Administration & maintenance,Database restore,integrator,,OperationsWindow;BackupRestorePlan.GeneratePreviewSql;OperationRunner,partial_code,OperationsTests,unverified,Disposable SQL Server fixture + backup file on server host,,"Component only: overwrite needs flag, recovery/MOVE options; no VERIFYONLY/chain validation, no live restore"
 CAP-137,Operations,Administration & maintenance,Attach/detach database,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-138,Operations,Administration & maintenance,Database files and filegroups,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-139,Operations,Administration & maintenance,Recovery model,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-140,Operations,Administration & maintenance,Database compatibility level,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-141,Operations,Administration & maintenance,Index rebuild/reorganize,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-142,Operations,Administration & maintenance,DBCC/integrity checks,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
+CAP-142,Operations,Administration & maintenance,DBCC/integrity checks,integrator,,OperationsWindow;IntegrityCheckPlan.GeneratePreviewSql;OperationRunner,partial_code,OperationsTests,unverified,Disposable SQL Server fixture for live CHECKDB,,"Component only: read-only DBCC CHECKDB, no repair options; no live run"
 CAP-143,Operations,Administration & maintenance,Server properties/configuration,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-144,Observe,Administration & maintenance,Activity Monitor,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-145,"Explorer,Observe,Operations",Administration & maintenance,Server/database reports,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
