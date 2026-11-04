@@ -33,7 +33,16 @@ public sealed record TableDesignDraft
 public sealed record TableDesignPreview(string ExecutableSql, IReadOnlyList<string> Warnings)
 {
     public bool HasChanges => ExecutableSql.Length > 0;
+
+    /// <summary>
+    /// The same DDL as <see cref="ExecutableSql"/>, split into individually executable statements. Concatenating
+    /// <see cref="TableDesignStatement.Sql"/> in order yields <see cref="ExecutableSql"/> exactly.
+    /// </summary>
+    public IReadOnlyList<TableDesignStatement> Statements { get; init; } = [];
 }
+
+/// <summary>One executable DDL statement. <see cref="IsTransactional"/> is false for DDL SQL Server cannot run inside a transaction.</summary>
+public sealed record TableDesignStatement(string Sql, bool IsTransactional = true);
 
 /// <summary>Generates DDL text for review only. Nothing here executes SQL.</summary>
 public static partial class TableDesignSql
@@ -92,7 +101,7 @@ public static partial class TableDesignSql
                 .Append(")\n");
         }
         sb.Append(");\n");
-        return new TableDesignPreview(sb.ToString(), []);
+        return new TableDesignPreview(sb.ToString(), []) { Statements = [new TableDesignStatement(sb.ToString())] };
     }
 
     public static TableDesignPreview PreviewAlter(TableDesignDraft existing, TableDesignDraft desired)
@@ -114,12 +123,19 @@ public static partial class TableDesignSql
         var before = existing.Columns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
         var after = desired.Columns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
         var sb = new StringBuilder();
+        var statements = new List<TableDesignStatement>();
         var warnings = new List<string>();
+        // Every generated statement is column-level ALTER TABLE DDL, which SQL Server runs inside a transaction.
+        void Emit(string sql)
+        {
+            sb.Append(sql);
+            statements.Add(new TableDesignStatement(sql));
+        }
 
         foreach (var column in existing.Columns.Where(c => !after.ContainsKey(c.Name)))
         {
             warnings.Add($"DESTRUCTIVE: permanently removes column {DisplayName(column.Name)} and its data.");
-            sb.Append("ALTER TABLE ").Append(table).Append(" DROP COLUMN ").Append(SqlIdentity.QuoteIdentifier(column.Name)).Append(";\n");
+            Emit("ALTER TABLE " + table + " DROP COLUMN " + SqlIdentity.QuoteIdentifier(column.Name) + ";\n");
         }
 
         foreach (var column in desired.Columns)
@@ -128,7 +144,7 @@ public static partial class TableDesignSql
             {
                 if (!column.IsNullable)
                     warnings.Add($"NOTE: adding NOT NULL column {DisplayName(column.Name)} fails on a non-empty table unless a default is supplied.");
-                sb.Append("ALTER TABLE ").Append(table).Append(" ADD ").Append(ColumnClause(column)).Append(";\n");
+                Emit("ALTER TABLE " + table + " ADD " + ColumnClause(column) + ";\n");
                 continue;
             }
 
@@ -143,12 +159,11 @@ public static partial class TableDesignSql
             if (!string.Equals(old.Name, column.Name, StringComparison.Ordinal))
                 throw new ArgumentException("Column names differ only by case; renames are not supported.");
             warnings.Add($"NOTE: altering column {DisplayName(column.Name)} can fail or lose data if existing values do not fit.");
-            sb.Append("ALTER TABLE ").Append(table).Append(" ALTER COLUMN ")
-                .Append(SqlIdentity.QuoteIdentifier(column.Name)).Append(' ').Append(newType)
-                .Append(column.IsNullable ? " NULL" : " NOT NULL").Append(";\n");
+            Emit("ALTER TABLE " + table + " ALTER COLUMN " + SqlIdentity.QuoteIdentifier(column.Name) + " " + newType
+                 + (column.IsNullable ? " NULL" : " NOT NULL") + ";\n");
         }
 
-        return new TableDesignPreview(sb.ToString(), warnings);
+        return new TableDesignPreview(sb.ToString(), warnings) { Statements = statements };
     }
 
     /// <summary>Single-line, display-only rendering of an untrusted identifier. Never used in executable SQL.</summary>

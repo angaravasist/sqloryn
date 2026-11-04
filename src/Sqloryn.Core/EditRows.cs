@@ -153,6 +153,55 @@ public static class EditRowsSql
         return new EditCommand(sb.ToString(), parameters);
     }
 
+    /// <summary>
+    /// INSERT of one row. Only the columns in <paramref name="values"/> are written; every other column takes its
+    /// server default (or NULL). With no values the statement is <c>DEFAULT VALUES</c>. All values are parameters.
+    /// The caller decides which columns are writable (see <see cref="EditRowsPolicy.EvaluateInsert"/>): identity,
+    /// computed and rowversion columns must not be passed. Reports <c>@@ROWCOUNT</c> like the other builders.
+    /// </summary>
+    public static EditCommand BuildInsert(TableRef table, IReadOnlyDictionary<string, object?> values)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(values);
+
+        var parameters = new List<EditParameter>();
+        var sb = new StringBuilder();
+        sb.Append("SET NOCOUNT ON;").Append('\n');
+        sb.Append("INSERT INTO ").Append(table.Qualified);
+        if (values.Count == 0)
+        {
+            sb.Append(" DEFAULT VALUES");
+        }
+        else
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var names = new StringBuilder();
+            var placeholders = new StringBuilder();
+            var index = 0;
+            foreach (var (column, value) in values)
+            {
+                var quoted = SqlIdentity.QuoteIdentifier(column);
+                if (!seen.Add(column))
+                    throw new ArgumentException($"Duplicate insert column: {column}");
+                if (RawCellOmitted.IsOmitted(value))
+                    throw new ArgumentException($"Column {column} holds a value that was not fully loaded and cannot be written.");
+                var name = "@n" + index.ToString(CultureInfo.InvariantCulture);
+                if (index > 0)
+                {
+                    names.Append(", ");
+                    placeholders.Append(", ");
+                }
+                names.Append(quoted);
+                placeholders.Append(name);
+                parameters.Add(new EditParameter(name, value));
+                index++;
+            }
+            sb.Append(" (").Append(names).Append(") VALUES (").Append(placeholders).Append(')');
+        }
+        sb.Append(";\nSELECT @@ROWCOUNT AS [").Append(RowCountColumn).Append("];\n");
+        return new EditCommand(sb.ToString(), parameters);
+    }
+
     public static EditCommand BuildDelete(
         TableRef table,
         RowKey key,

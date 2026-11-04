@@ -21,6 +21,13 @@ public sealed record EditSupport(
     public static EditSupport Refuse(string reason) => new(false, reason, [], false);
 }
 
+/// <summary>Outcome of <see cref="EditRowsPolicy.EvaluateInsert"/> / <see cref="EditRowsPolicy.EvaluateDelete"/>.</summary>
+/// <param name="WritableColumns">For inserts: columns the user may supply (identity, computed, rowversion and uneditable types are excluded).</param>
+public sealed record EditOperationSupport(bool IsSupported, string? RefusalReason, IReadOnlyList<string> WritableColumns)
+{
+    public static EditOperationSupport Refuse(string reason) => new(false, reason, []);
+}
+
 /// <summary>
 /// Decides whether a table can be edited safely. An edit set is refused unless the row can be identified by a
 /// supported key and a dependable concurrency check exists (rowversion, or every non-key column comparable).
@@ -113,5 +120,48 @@ public static class EditRowsPolicy
                 "No dependable concurrency check: the table has no rowversion column and these columns cannot be compared exactly: " +
                 string.Join(", ", unsupported) + ".");
         return new EditSupport(true, null, concurrency, false, characters);
+    }
+
+    /// <summary>
+    /// Insert is allowed only where updates are (identifiable key, no INSTEAD OF trigger), and only when every column the
+    /// user cannot supply (identity, computed, rowversion) is server-generated and every other required column has a
+    /// type the grid can write. Column defaults are not visible to the policy, so a NOT NULL column of an uneditable
+    /// type is refused rather than guessed at; a NOT NULL column with no default still fails on the server and rolls back.
+    /// </summary>
+    public static EditOperationSupport EvaluateInsert(EditSupport rowSupport, IReadOnlyList<EditColumnInfo> columns)
+    {
+        ArgumentNullException.ThrowIfNull(rowSupport);
+        ArgumentNullException.ThrowIfNull(columns);
+        if (!rowSupport.IsSupported)
+            return EditOperationSupport.Refuse(rowSupport.RefusalReason ?? "Rows cannot be inserted into this table safely.");
+
+        var writable = new List<string>();
+        var blocked = new List<string>();
+        foreach (var column in columns)
+        {
+            if (column.IsIdentity || column.IsComputed || IsRowVersionType(column.SqlType))
+                continue;
+            if (IsEditableType(column.SqlType))
+                writable.Add(column.Name);
+            else if (!column.IsNullable)
+                blocked.Add($"{column.Name} ({column.SqlType})");
+        }
+        if (blocked.Count > 0)
+            return EditOperationSupport.Refuse(
+                "Insert is disabled: these required columns have types this grid cannot write: " + string.Join(", ", blocked) + ".");
+        return new EditOperationSupport(true, null, writable);
+    }
+
+    /// <summary>
+    /// Delete needs the same guarantees as update: the key must identify one row and a dependable concurrency check must
+    /// exist, so a row changed by someone else is a conflict rather than a silent delete. The count only reflects the
+    /// outer statement; cascading foreign keys can remove further rows, which the confirmation dialog must say.
+    /// </summary>
+    public static EditOperationSupport EvaluateDelete(EditSupport rowSupport)
+    {
+        ArgumentNullException.ThrowIfNull(rowSupport);
+        return rowSupport.IsSupported
+            ? new EditOperationSupport(true, null, [])
+            : EditOperationSupport.Refuse(rowSupport.RefusalReason ?? "Rows cannot be deleted from this table safely.");
     }
 }

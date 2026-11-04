@@ -30,6 +30,8 @@ public partial class TableDesignWindow : Window
     readonly ObservableCollection<DesignRow> _rows = [];
     TableDesignDraft? _existing;
     string? _previewedSql;
+    // Catalog fingerprint captured when the design was loaded; Apply refuses if the server's table no longer matches it.
+    string? _baselineFingerprint;
     bool _busy;
 
     public TableDesignWindow() : this(new SqlSession(), new TableRef("master", "dbo", "table"))
@@ -57,6 +59,7 @@ public partial class TableDesignWindow : Window
         ColumnGrid.ItemsSource = _rows;
         _rows.Add(new DesignRow { Name = "Id", DataType = "int", IsNullable = false, IsIdentity = true, IsPrimaryKey = true });
         _existing = null;
+        _baselineFingerprint = TableDesignFingerprint.Absent;
         ApplyMode();
         SetPreview(null, null);
         StatusText.Text = "New table. Name it, define columns, tick Primary key for the key columns, then Preview DDL.";
@@ -85,6 +88,8 @@ public partial class TableDesignWindow : Window
         try
         {
             StatusText.Text = "Loading columns…";
+            // Fingerprint first: if the catalog changes while loading, the baseline is older than the columns and Apply refuses (safe side).
+            var fingerprint = await _session.ReadTableFingerprintAsync(_table);
             var columns = await CatalogClient.ListColumnsAsync(_session, _table.Database, _table.Schema, _table.Name);
             var keyColumns = await CatalogClient.ListPrimaryKeyAsync(_session, _table.Database, _table.Schema, _table.Name);
             var keySet = new HashSet<string>(keyColumns, StringComparer.OrdinalIgnoreCase);
@@ -110,6 +115,7 @@ public partial class TableDesignWindow : Window
                 Columns = _rows.Select(ToDefinition).ToList(),
                 PrimaryKeyColumns = keyColumns
             };
+            _baselineFingerprint = fingerprint;
             SetPreview(null, null);
             StatusText.Text = columns.Count == 0
                 ? "No columns were returned. The object may not be a table you can see."
@@ -247,11 +253,16 @@ public partial class TableDesignWindow : Window
                 return;
             }
 
+            if (_baselineFingerprint is null)
+            {
+                StatusText.Text = "The table definition was not loaded; reload before applying.";
+                return;
+            }
             var summary = _isNew
-                ? "This statement creates a new table in one step; if it fails nothing is created."
+                ? "This statement creates a new table in one transaction; if it fails nothing is created."
                 : destructive
-                ? "This change can permanently remove data or alter column types. The statements run in order without a wrapping transaction; if one fails, earlier ones stay applied."
-                : "These statements run in order without a wrapping transaction; if one fails, earlier ones stay applied.";
+                ? "This change can permanently remove data or alter column types. All statements run in ONE transaction: if any fails, every change is rolled back. The table definition is re-checked first and the change is refused if someone else altered the table since it was loaded."
+                : "All statements run in ONE transaction: if any fails, every change is rolled back. The table definition is re-checked first and the change is refused if someone else altered the table since it was loaded.";
             if (currentPreview.Warnings.Count > 0)
                 summary += "\n\n" + string.Join("\n", currentPreview.Warnings.Select(w => "• " + w));
             var target = _isNew
@@ -267,36 +278,50 @@ public partial class TableDesignWindow : Window
             }
 
             StatusText.Text = "Applying…";
-            var result = await _session.ExecuteAsync(current);
-            Applied = true;
-            if (result.Completion == QueryCompletionKind.Succeeded)
+            var applyTable = _isNew ? new TableRef(currentDesired.Database, currentDesired.Schema, currentDesired.TableName) : _table;
+            var result = await _session.ApplyTableDesignAsync(applyTable, currentPreview.Statements, _baselineFingerprint);
+            switch (result.Outcome)
             {
-                if (_isNew)
-                {
-                    // From now on this window edits the table that now exists on the server.
-                    _table = new TableRef(currentDesired.Database, currentDesired.Schema, currentDesired.TableName);
-                    _isNew = false;
-                    ApplyMode();
-                }
-                StatusText.Text = "Applied. Reloading columns from the server…";
-                _busy = false;
-                await LoadAsync();
-                StatusText.Text = "Applied successfully. " + StatusText.Text;
-            }
-            else
-            {
-                StatusText.Text =
-                    "Apply did not fully succeed (" + QueryOutcomeFormatter.DescribeStatus(result) +
-                    "). Some statements may already have been applied; reload to see the current table.";
-                PreviewBox.Text = current + "\n" + QueryOutcomeFormatter.FormatMessages(result)
-                    .Split('\n').Select(l => "-- " + l.TrimEnd('\r')).Aggregate("", (a, b) => a + b + "\n");
-                ApplyButton.IsEnabled = false;
+                case TableDesignApplyOutcome.Committed:
+                    Applied = true;
+                    if (_isNew)
+                    {
+                        // From now on this window edits the table that now exists on the server.
+                        _table = applyTable;
+                        _isNew = false;
+                        ApplyMode();
+                    }
+                    StatusText.Text = "Applied. Reloading columns from the server…";
+                    _busy = false;
+                    await LoadAsync();
+                    StatusText.Text = "Applied successfully. " + StatusText.Text;
+                    break;
+                case TableDesignApplyOutcome.OutcomeUnknown:
+                    Applied = true;
+                    _baselineFingerprint = null;
+                    ApplyButton.IsEnabled = false;
+                    StatusText.Text = "Apply outcome unknown: " + Safe(result.Message);
+                    await Dialogs.ShowMessageAsync(this, "Apply outcome unknown",
+                        result.Message + "\n\nThe session may have been disconnected. Reconnect, then reload the table before designing again.");
+                    break;
+                case TableDesignApplyOutcome.RefusedStale:
+                    _baselineFingerprint = null;
+                    ApplyButton.IsEnabled = false;
+                    StatusText.Text = "Refused: " + Safe(result.Message);
+                    await Dialogs.ShowMessageAsync(this, "Table changed on the server",
+                        result.Message + (_isNew ? "" : "\n\nUse Reload to load the current definition; your draft is discarded on reload."));
+                    break;
+                default:
+                    StatusText.Text = "Nothing was changed. " + Safe(result.Message);
+                    PreviewBox.Text = current + "\n" + result.Message.Split('\n').Select(l => "-- " + l.TrimEnd('\r'))
+                        .Aggregate("", (a, b) => a + b + "\n");
+                    ApplyButton.IsEnabled = false;
+                    break;
             }
         }
         catch (Exception ex)
         {
-            StatusText.Text = "Apply failed: " + Safe(ex.Message) +
-                              " Reload to see the current table; earlier statements may have been applied.";
+            StatusText.Text = "Apply failed: " + Safe(ex.Message) + " Reload to see the current table.";
         }
         finally
         {

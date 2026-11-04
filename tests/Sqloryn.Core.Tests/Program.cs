@@ -2910,6 +2910,209 @@ Pass("explorer-ownership");
     Pass("a11y-keyboard-contract-source-scan");
 }
 
+// WS5-T1: transactional designer apply + schema freshness (fakes only; live SQL is separate acceptance)
+{
+    var ordersTable = new TableRef("App", "dbo", "Orders");
+    TableDesignStatement S(string sql) => new(sql);
+    var s1 = S("ALTER TABLE [App].[dbo].[Orders] ADD [A] int NULL;\n");
+    var s2 = S("ALTER TABLE [App].[dbo].[Orders] ADD [B] int NULL;\n");
+    var s3 = S("ALTER TABLE [App].[dbo].[Orders] DROP COLUMN [C];\n");
+
+    // success commits, in order, inside begin ... commit, after the freshness read
+    var ok = new FakeSchemaTransactionFactory();
+    var okResult = await TableDesignApply.ApplyAsync(ok, ordersTable, [s1, s2, s3], "fp-1");
+    Check(okResult.Outcome == TableDesignApplyOutcome.Committed && okResult.Committed && okResult.StatementsExecuted == 3, "design-apply-commits");
+    Check(string.Join(",", ok.Log) == "begin,fingerprint,exec,exec,exec,commit,dispose", "design-apply-order:" + string.Join(",", ok.Log));
+    Check(ok.Durable.Count == 3 && ok.Durable[0] == s1.Sql && ok.Durable[2] == s3.Sql, "design-apply-durable-after-commit");
+
+    // failure on statement 2 rolls everything back: no partial schema, statement 3 never runs
+    var boom = new FakeSchemaTransactionFactory(null, new InvalidOperationException("synthetic ALTER failure"), null);
+    var boomResult = await TableDesignApply.ApplyAsync(boom, ordersTable, [s1, s2, s3], "fp-1");
+    Check(boomResult.Outcome == TableDesignApplyOutcome.RolledBackError && !boomResult.Committed, "design-apply-failure-rolls-back");
+    Check(boomResult.FailedIndex == 1 && boomResult.StatementsExecuted == 1, "design-apply-failed-index");
+    Check(boom.Log.Contains("rollback") && !boom.Log.Contains("commit") && boom.Durable.Count == 0, "design-apply-no-partial");
+    Check(boom.Log.Count(l => l == "exec") == 2, "design-apply-stops-after-failure");
+    Check(boomResult.Message.Contains("rolled back", StringComparison.OrdinalIgnoreCase) && !boomResult.RequiresReload, "design-apply-failure-message");
+
+    // freshness mismatch refuses before any statement runs
+    var stale = new FakeSchemaTransactionFactory { Fingerprint = "fp-CHANGED" };
+    var staleResult = await TableDesignApply.ApplyAsync(stale, ordersTable, [s1], "fp-1");
+    Check(staleResult.Outcome == TableDesignApplyOutcome.RefusedStale && !staleResult.Committed, "design-apply-stale-refused");
+    Check(!stale.Log.Contains("exec") && !stale.Log.Contains("commit") && stale.Log.Contains("rollback"), "design-apply-stale-no-exec");
+    Check(staleResult.Message.Contains("changed", StringComparison.OrdinalIgnoreCase), "design-apply-stale-message");
+
+    // fingerprint read failure rolls back, nothing executed
+    var fpFail = new FakeSchemaTransactionFactory { FingerprintFails = new InvalidOperationException("no catalog") };
+    var fpFailResult = await TableDesignApply.ApplyAsync(fpFail, ordersTable, [s1], "fp-1");
+    Check(fpFailResult.Outcome == TableDesignApplyOutcome.RolledBackError && !fpFail.Log.Contains("exec") && fpFail.Log.Contains("rollback"), "design-apply-fingerprint-error");
+
+    // mixed or unrecognised batches are refused without opening a transaction
+    var mixed = new FakeSchemaTransactionFactory();
+    var mixedResult = await TableDesignApply.ApplyAsync(mixed, ordersTable, [s1, new TableDesignStatement("DROP DATABASE [App];", false)], "fp-1");
+    Check(mixedResult.Outcome == TableDesignApplyOutcome.RefusedNonTransactional && mixed.Log.Count == 0, "design-apply-refuses-mixed");
+    var notDdl = new FakeSchemaTransactionFactory();
+    var notDdlResult = await TableDesignApply.ApplyAsync(notDdl, ordersTable, [new TableDesignStatement("DELETE FROM [App].[dbo].[Orders];", true)], "fp-1");
+    Check(notDdlResult.Outcome == TableDesignApplyOutcome.RefusedNonTransactional && notDdl.Log.Count == 0, "design-apply-refuses-unrecognised-statement");
+    var goBatch = new FakeSchemaTransactionFactory();
+    var goResult = await TableDesignApply.ApplyAsync(goBatch, ordersTable, [S("ALTER TABLE [App].[dbo].[Orders] ADD [A] int NULL;\nGO\nDROP TABLE [x];")], "fp-1");
+    Check(goResult.Outcome == TableDesignApplyOutcome.RefusedNonTransactional && goBatch.Log.Count == 0, "design-apply-refuses-go-batch");
+
+    // argument validation
+    foreach (var (label, act) in new (string, Func<Task>)[]
+    {
+        ("empty", () => TableDesignApply.ApplyAsync(new FakeSchemaTransactionFactory(), ordersTable, [], "fp-1")),
+        ("no-fingerprint", () => TableDesignApply.ApplyAsync(new FakeSchemaTransactionFactory(), ordersTable, [s1], " ")),
+    })
+    {
+        try { await act(); throw new Exception("FAIL design-apply-args-" + label); }
+        catch (ArgumentException) { }
+    }
+
+    // begin failure: nothing written; rollback failure and commit failure never claim a clean state
+    var beginFail = new FakeSchemaTransactionFactory { BeginFails = new InvalidOperationException("no connection") };
+    var beginFailResult = await TableDesignApply.ApplyAsync(beginFail, ordersTable, [s1], "fp-1");
+    Check(beginFailResult.Outcome == TableDesignApplyOutcome.RolledBackError && beginFailResult.StatementsExecuted == 0, "design-apply-begin-failure");
+    var rbFail = new FakeSchemaTransactionFactory(new InvalidOperationException("x")) { RollbackFails = new InvalidOperationException("link down") };
+    var rbFailResult = await TableDesignApply.ApplyAsync(rbFail, ordersTable, [s1], "fp-1");
+    Check(rbFailResult.Outcome == TableDesignApplyOutcome.OutcomeUnknown && rbFailResult.RequiresReload, "design-apply-rollback-failure-unknown");
+    var commitFail = new FakeSchemaTransactionFactory { CommitFails = new InvalidOperationException("link down") };
+    var commitFailResult = await TableDesignApply.ApplyAsync(commitFail, ordersTable, [s1], "fp-1");
+    Check(commitFailResult.Outcome == TableDesignApplyOutcome.OutcomeUnknown && !commitFailResult.Committed
+          && !commitFailResult.Message.Contains("rolled back", StringComparison.OrdinalIgnoreCase), "design-apply-commit-failure-unknown");
+    var disposeFail = new FakeSchemaTransactionFactory { DisposeFails = new InvalidOperationException("dispose") };
+    var disposeFailResult = await TableDesignApply.ApplyAsync(disposeFail, ordersTable, [s1], "fp-1");
+    Check(disposeFailResult.Outcome == TableDesignApplyOutcome.OutcomeUnknown, "design-apply-dispose-failure-after-commit");
+
+    // cancellation mid-way still rolls back
+    using var cts = new CancellationTokenSource();
+    cts.Cancel();
+    var cancelled = new FakeSchemaTransactionFactory();
+    var cancelledResult = await TableDesignApply.ApplyAsync(cancelled, ordersTable, [s1, s2], "fp-1", cts.Token);
+    Check(cancelledResult.Outcome == TableDesignApplyOutcome.RolledBackError && cancelled.Log.Contains("rollback") && !cancelled.Log.Contains("commit"), "design-apply-cancel-rolls-back");
+
+    // the generators now expose per-statement transactional DDL that Apply accepts
+    var id = new ColumnDefinition { Name = "Id", DataType = "int", IsNullable = false };
+    var note = new ColumnDefinition { Name = "Note", DataType = "nvarchar(20)" };
+    var existingDraft = new TableDesignDraft { Database = "App", Schema = "dbo", TableName = "Orders", Columns = [id, note], PrimaryKeyColumns = ["Id"] };
+    var desiredDraft = existingDraft with { Columns = [id, new ColumnDefinition { Name = "Qty", DataType = "int" }] };
+    var alter = TableDesignSql.PreviewAlter(existingDraft, desiredDraft);
+    Check(alter.Statements.Count == 2 && alter.Statements.All(s => s.IsTransactional)
+          && string.Concat(alter.Statements.Select(s => s.Sql)) == alter.ExecutableSql, "design-preview-statements-match-executable");
+    var create = TableDesignSql.PreviewCreate(existingDraft);
+    Check(create.Statements.Count == 1 && create.Statements[0].Sql == create.ExecutableSql, "design-create-statement-single");
+    var viaGenerator = new FakeSchemaTransactionFactory();
+    Check((await TableDesignApply.ApplyAsync(viaGenerator, ordersTable, alter.Statements, "fp-1")).Committed, "design-apply-generated-statements");
+
+    // fingerprint: stable, sensitive to column definition, absent ordersTable recognised
+    var header = new[] { "modified", "column_id", "name", "type_name", "max_length", "precision", "scale", "is_nullable", "is_identity", "is_computed", "pk_ordinal" };
+    var types = header.Select(_ => "x").ToArray();
+    RawRows Rows(params object?[][] rows) => new(header, types, rows, false);
+    object?[] Col(int id, string name, string type, bool nullable = true, string modified = "2026-01-01T00:00:00.000")
+        => [modified, id, name, type, (short)4, (byte)10, (byte)0, nullable, false, false, null];
+    var baseline = TableDesignFingerprint.FromRows(Rows(Col(1, "Id", "int", false), Col(2, "Qty", "int")));
+    Check(baseline == TableDesignFingerprint.FromRows(Rows(Col(1, "Id", "int", false), Col(2, "Qty", "int"))), "fingerprint-stable");
+    Check(baseline != TableDesignFingerprint.FromRows(Rows(Col(1, "Id", "int", false), Col(2, "Qty", "bigint"))), "fingerprint-type-change");
+    Check(baseline != TableDesignFingerprint.FromRows(Rows(Col(1, "Id", "int", false), Col(2, "Qty", "int", false))), "fingerprint-nullability-change");
+    Check(baseline != TableDesignFingerprint.FromRows(Rows(Col(1, "Id", "int", false), Col(2, "Qty", "int"), Col(3, "New", "int"))), "fingerprint-added-column");
+    Check(baseline != TableDesignFingerprint.FromRows(Rows(Col(1, "Id", "int", false, "2026-02-02T00:00:00.000"), Col(2, "Qty", "int", true, "2026-02-02T00:00:00.000"))), "fingerprint-modify-date");
+    Check(TableDesignFingerprint.FromRows(Rows()) == TableDesignFingerprint.Absent && baseline != TableDesignFingerprint.Absent, "fingerprint-absent");
+    var fpQuery = TableDesignFingerprint.BuildQuery(new TableRef("A]pp", "dbo", "Ord]ers"));
+    Check(fpQuery.CommandText.Contains("[A]]pp].sys.objects", StringComparison.Ordinal) && !fpQuery.CommandText.Contains("Ord]ers", StringComparison.Ordinal)
+          && fpQuery.Parameters.Count == 1 && (string)fpQuery.Parameters[0].Value! == "[A]]pp].[dbo].[Ord]]ers]", "fingerprint-query-quoted-and-parameterised");
+    Pass("design-transactional-apply");
+}
+
+// WS5-T2: Edit Rows insert/delete (policy, SQL builders and atomic batches with fakes)
+{
+    var tbl = new TableRef("App", "dbo", "Orders");
+    EditColumnInfo C(string n, string t, bool nullable = true, bool identity = false, bool computed = false) => new(n, t, nullable, identity, computed);
+
+    // BuildInsert
+    var ins = EditRowsSql.BuildInsert(tbl, new Dictionary<string, object?> { ["Qty"] = 5, ["Note"] = null, ["Na]me"] = "x" });
+    Check(ins.CommandText.StartsWith("SET NOCOUNT ON;\nINSERT INTO [App].[dbo].[Orders] ([Qty], [Note], [Na]]me]) VALUES (@n0, @n1, @n2);", StringComparison.Ordinal), "insert-text:" + ins.CommandText);
+    Check(ins.CommandText.Contains($";\nSELECT @@ROWCOUNT AS [{EditRowsSql.RowCountColumn}];", StringComparison.Ordinal), "insert-rowcount-immediate");
+    Check(ins.Parameters.Count == 3 && ins.Parameters[0].Value is 5 && ins.Parameters[1].Value is null && !ins.CommandText.Contains("'x'", StringComparison.Ordinal), "insert-parameterised");
+    var defaults = EditRowsSql.BuildInsert(tbl, new Dictionary<string, object?>());
+    Check(defaults.CommandText.Contains("INSERT INTO [App].[dbo].[Orders] DEFAULT VALUES;", StringComparison.Ordinal) && defaults.Parameters.Count == 0, "insert-default-values");
+    try { EditRowsSql.BuildInsert(tbl, new Dictionary<string, object?> { ["Body"] = new RawCellOmitted("too large", null, 1) }); throw new Exception("FAIL insert-omitted"); }
+    catch (ArgumentException) { }
+    try { EditRowsSql.BuildInsert(tbl, new Dictionary<string, object?> { [""] = 1 }); throw new Exception("FAIL insert-bad-name"); }
+    catch (ArgumentException) { }
+
+    // Policy: insert
+    var support = EditRowsPolicy.Evaluate(["Id"],
+        [C("Id", "int", false, identity: true), C("Qty", "int"), C("Total", "int", computed: true), C("Ver", "timestamp"), C("Name", "nvarchar")], false);
+    var insertOk = EditRowsPolicy.EvaluateInsert(support,
+        [C("Id", "int", false, identity: true), C("Qty", "int"), C("Total", "int", computed: true), C("Ver", "timestamp"), C("Name", "nvarchar")]);
+    Check(insertOk.IsSupported && insertOk.WritableColumns.SequenceEqual(["Qty", "Name"]), "policy-insert-skips-identity-computed-rowversion:" + string.Join(",", insertOk.WritableColumns));
+    var insertNoKey = EditRowsPolicy.EvaluateInsert(EditRowsPolicy.Evaluate([], [C("a", "int")], false), [C("a", "int")]);
+    Check(!insertNoKey.IsSupported && !string.IsNullOrEmpty(insertNoKey.RefusalReason), "policy-insert-refused-without-key");
+    var insertInstead = EditRowsPolicy.EvaluateInsert(
+        EditRowsPolicy.Evaluate(["Id"], [C("Id", "int", false)], true), [C("Id", "int", false)]);
+    Check(!insertInstead.IsSupported, "policy-insert-refused-instead-of-trigger");
+    var unwritable = EditRowsPolicy.EvaluateInsert(
+        EditRowsPolicy.Evaluate(["Id"], [C("Id", "int", false), C("At", "datetime2", false)], false),
+        [C("Id", "int", false), C("At", "datetime2", false)]);
+    Check(!unwritable.IsSupported && unwritable.RefusalReason!.Contains("At", StringComparison.Ordinal), "policy-insert-refuses-required-unwritable-column");
+    var nullableUnwritable = EditRowsPolicy.EvaluateInsert(
+        EditRowsPolicy.Evaluate(["Id"], [C("Id", "int", false), C("Doc", "xml")], false),
+        [C("Id", "int", false), C("Doc", "xml")]);
+    Check(!nullableUnwritable.IsSupported || !nullableUnwritable.WritableColumns.Contains("Doc"), "policy-insert-never-writes-uneditable-type");
+    // Policy: delete
+    Check(EditRowsPolicy.EvaluateDelete(support).IsSupported, "policy-delete-allowed-with-key");
+    var deleteNoKey = EditRowsPolicy.EvaluateDelete(EditRowsPolicy.Evaluate([], [C("a", "int")], false));
+    Check(!deleteNoKey.IsSupported && !string.IsNullOrEmpty(deleteNoKey.RefusalReason), "policy-delete-refused-without-key");
+    Check(!EditRowsPolicy.EvaluateDelete(EditRowsPolicy.Evaluate(["Id"], [C("Id", "int")], true)).IsSupported, "policy-delete-refused-instead-of-trigger");
+
+    var insert = EditRowsSql.BuildInsert(tbl, new Dictionary<string, object?> { ["Qty"] = 1 });
+    var delete = EditRowsSql.BuildDelete(tbl, new RowKey(["Id"], [9]), new Dictionary<string, object?> { ["Qty"] = 4 });
+    var update = EditRowsSql.BuildUpdate(tbl, new RowKey(["Id"], [2]), new Dictionary<string, object?> { ["Qty"] = 6 });
+
+    // insert then conflicting update: whole set rolled back, nothing durable
+    var insertThenConflict = new FakeEditTransactionFactory(1, 0);
+    var r1 = await EditRowsBatch.ApplyAsync(insertThenConflict, [insert, update]);
+    Check(r1.Outcome == EditBatchOutcome.RolledBackConflict && r1.FailedIndex == 1 && r1.WritesValidated == 1, "insert-then-conflict-outcome");
+    Check(insertThenConflict.Log.Contains("rollback") && !insertThenConflict.Log.Contains("commit"), "insert-then-conflict-rolled-back");
+
+    // delete conflict (row already gone / changed): zero rows rolls back
+    var deleteConflict = new FakeEditTransactionFactory(0);
+    var r2 = await EditRowsBatch.ApplyAsync(deleteConflict, [delete]);
+    Check(r2.Outcome == EditBatchOutcome.RolledBackConflict && r2.FailedIndex == 0 && !deleteConflict.Log.Contains("commit"), "delete-conflict-rolls-back");
+
+    // delete that touches more than one row (key not unique) rolls back
+    var deleteMany = new FakeEditTransactionFactory(2);
+    var r3 = await EditRowsBatch.ApplyAsync(deleteMany, [delete]);
+    Check(r3.Outcome == EditBatchOutcome.RolledBackWrongRowCount && !deleteMany.Log.Contains("commit"), "delete-wrong-rowcount-rolls-back");
+
+    // duplicate-key insert raises a provider error: earlier delete+insert are rolled back
+    var dupKey = new FakeEditTransactionFactory(1, 1, new InvalidOperationException("Violation of PRIMARY KEY constraint"));
+    var r4 = await EditRowsBatch.ApplyAsync(dupKey, [delete, update, insert]);
+    Check(r4.Outcome == EditBatchOutcome.RolledBackError && r4.FailedIndex == 2 && dupKey.Log.Contains("rollback") && !dupKey.Log.Contains("commit"), "insert-duplicate-key-rolls-back-batch");
+
+    // mixed delete/update/insert success commits once
+    var good = new FakeEditTransactionFactory(1, 1, 1);
+    var r5 = await EditRowsBatch.ApplyAsync(good, [delete, update, insert]);
+    Check(r5.Committed && r5.WritesValidated == 3 && good.Log.Count(l => l == "commit") == 1, "mixed-insert-update-delete-commits");
+
+    // the insert statement itself must report exactly one row
+    var insertZero = new FakeEditTransactionFactory(0);
+    Check((await EditRowsBatch.ApplyAsync(insertZero, [insert])).Outcome == EditBatchOutcome.RolledBackConflict && !insertZero.Log.Contains("commit"), "insert-zero-rows-rolls-back");
+
+    // View code contains no raw SQL for the new operations (kept in Core)
+    static string FindRepoRoot()
+    {
+        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
+            if (File.Exists(Path.Combine(d.FullName, "SQLoryn.slnx")))
+                return d.FullName;
+        throw new Exception("FAIL repo root (SQLoryn.slnx) not found from test base directory");
+    }
+    var editWindow = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Sqloryn.App", "EditRowsWindow.axaml.cs"));
+    var designWindow = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Sqloryn.App", "TableDesignWindow.axaml.cs"));
+    Check(!editWindow.Contains("INSERT INTO", StringComparison.Ordinal) && !editWindow.Contains("DELETE FROM", StringComparison.Ordinal), "edit-window-no-raw-sql");
+    Check(designWindow.Contains("ApplyTableDesignAsync", StringComparison.Ordinal) && !designWindow.Contains("_session.ExecuteAsync(current)", StringComparison.Ordinal), "design-window-uses-core-apply");
+    Pass("edit-rows-insert-delete");
+}
+
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
 Console.WriteLine("NOTE: live SqlDataReader decimal(38) against SQL Server remains provider-only / live-host verification.");
 return 0;
