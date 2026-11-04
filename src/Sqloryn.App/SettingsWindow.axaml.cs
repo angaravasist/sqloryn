@@ -25,6 +25,9 @@ public partial class SettingsWindow : Window
         FontSizeBox.Value = (decimal)settings.EditorFontSize;
         MaxRowsBox.Maximum = AppSettings.MaxResultsMaxRows;
         MaxRowsBox.Value = settings.ResultsMaxRows;
+        RetentionText.Text = $"SQLoryn retains at most {AppSettings.MaxResultsMaxRows:N0} rows per result set, so this value cannot exceed that. " +
+                             "It limits how many retained rows the grid draws. When a set is cut off its tab says so: " +
+                             "the server's total row count is not known, and exports contain only retained rows.";
         ThemeBox.SelectedIndex = Math.Max(0, Array.FindIndex(Themes, t => t.Value == settings.Theme));
     }
 

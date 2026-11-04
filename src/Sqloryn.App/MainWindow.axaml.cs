@@ -62,6 +62,9 @@ public partial class MainWindow : Window
         Editor.KeyUp += (_, _) => CaptureSelection();
         Closing += OnWindowClosing;
         ApplySettings(_settings);
+        WelcomePanel.ConnectRequested += (_, e) => OnConnect(this, e);
+        WelcomePanel.NewQueryRequested += (_, e) => OnWelcomeNewQuery(this, e);
+        WelcomePanel.OpenRequested += (_, e) => OnOpen(this, e);
         InitShell();
         AddTab();
     }
@@ -226,12 +229,14 @@ public partial class MainWindow : Window
         if (_active is null)
         {
             StatusBar.Text = "No tab.";
+            ConnectionLabel.Classes.Set("connected", false);
             ConnectionLabel.Text = "Not connected";
             UpdateWelcome();
             return;
         }
         UpdateCommandState(_active);
         var session = _active.Session;
+        ConnectionLabel.Classes.Set("connected", session.IsConnected && !session.TargetUnknown);
         ConnectionLabel.Text = !session.IsConnected
             ? "Not connected"
             : session.TargetUnknown
@@ -256,7 +261,6 @@ public partial class MainWindow : Window
         ExportJsonButton.IsEnabled = hasSets;
         ExportCsvButton.IsVisible = hasSets;
         ExportJsonButton.IsVisible = hasSets;
-        ExportSeparator.IsVisible = hasSets;
     }
 
     void ReportError(string message)

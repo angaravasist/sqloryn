@@ -8,6 +8,8 @@
     <RootNamespace>Sqloryn</RootNamespace>
     <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
     <PublishTrimmed>false</PublishTrimmed>
+    <!-- Declared so one restore covers both Mac architectures and self-contained publish (-r) is valid. -->
+    <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Sqloryn.Core\Sqloryn.Core.csproj" />
