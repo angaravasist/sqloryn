@@ -824,9 +824,13 @@ sealed class AcceptanceRun
             RequireEqual(CsvSqlType.Decimal, amountMap.Type, "create amount type");
             RequireEqual(9, amountMap.Scale ?? -1, "create amount scale");
             _tables.Add(createdName);
-            var created = await session.ApplyCsvImportAsync(createPlan, CsvImportSource.FromFile(path, options), null, ct);
+            var createSource = CsvImportSource.LoadImmutable(path, options);
+            var created = await session.ApplyCsvImportAsync(createPlan, createSource, null, ct);
             RequireEqual(CsvImportOutcome.Committed, created.Outcome, "create import outcome (" + created.Message + ")");
             RequireEqual(3L, created.RowsInserted, "create rows inserted");
+            // CREATE DDL must keep scale 9 (never clamp to 18); second session reads exact text.
+            Require(createPlan.GetPrepareStatements()[0].Contains("decimal(38, 9)", StringComparison.Ordinal),
+                "CREATE DDL must emit decimal(38, 9) for the observed scale");
 
             await using var other = await ConnectAsync(ct);
             await RequireCsvRowsAsync(other, Table(createdName), includeSentinel: false, ct);
@@ -841,11 +845,96 @@ sealed class AcceptanceRun
                 (9, N'sentinel-keep', CONVERT(decimal(38, 9), '7.125'), CONVERT(datetime2(7), '2019-03-04T05:06:07.0000001', 126),
                  CONVERT(uniqueidentifier, 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'));
                 """, ct);
-            var appendPlan = CsvImportPlan.FromPreview(preview, appendRef, CsvImportMode.Append);
-            var appended = await session.ApplyCsvImportAsync(appendPlan, CsvImportSource.FromFile(path, options), null, ct);
+            // Append carries destination metadata so lossy cells are refused before any write.
+            var appendMappings = preview.Columns.Select(c =>
+            {
+                var guessed = c.GuessedType;
+                CsvDestinationType? dest = guessed switch
+                {
+                    CsvSqlType.Decimal => new CsvDestinationType("decimal", Precision: 38, Scale: c.MaxScale),
+                    CsvSqlType.NVarChar => new CsvDestinationType("nvarchar", MaxLength: 4000),
+                    CsvSqlType.DateTime2 => new CsvDestinationType("datetime2", Scale: 7),
+                    CsvSqlType.UniqueIdentifier => new CsvDestinationType("uniqueidentifier"),
+                    CsvSqlType.Int => new CsvDestinationType("int"),
+                    _ => new CsvDestinationType("nvarchar", MaxLength: 4000)
+                };
+                return new CsvColumnMapping(c.Index, c.Name, guessed,
+                    guessed == CsvSqlType.NVarChar ? CsvImportPlan.SuggestTextLength(c.MaxLength, preview.ScanTruncated) : null,
+                    guessed == CsvSqlType.Decimal ? c.MaxScale : null,
+                    dest);
+            }).ToList();
+            var appendPlan = new CsvImportPlan(appendRef, CsvImportMode.Append, appendMappings, null, false);
+            var appendSource = CsvImportSource.LoadImmutable(path, options);
+            var appended = await session.ApplyCsvImportAsync(appendPlan, appendSource, null, ct);
             RequireEqual(CsvImportOutcome.Committed, appended.Outcome, "append import outcome (" + appended.Message + ")");
             RequireEqual(3L, appended.RowsInserted, "append rows inserted");
             await RequireCsvRowsAsync(other, Table(appendName), includeSentinel: true, ct);
+
+            // Same row count, different content: fingerprint refuse; Replace must leave the sentinel.
+            const string replaceName = "t_csv_rep";
+            var replaceRef = new TableRef(_database, _schema, replaceName);
+            var replaceDdl = CsvImportPlan.FromPreview(preview, replaceRef, CsvImportMode.Create);
+            await ExecAsync(session, replaceDdl.GetPrepareStatements()[0], ct);
+            _tables.Add(replaceName);
+            await ExecAsync(session, $"""
+                INSERT INTO {Table(replaceName)} (id, label, amount, when_utc, token) VALUES
+                (9, N'sentinel-keep', CONVERT(decimal(38, 9), '7.125'), CONVERT(datetime2(7), '2019-03-04T05:06:07.0000001', 126),
+                 CONVERT(uniqueidentifier, 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'));
+                """, ct);
+            var replacePath = path;
+            var replaceSource = CsvImportSource.LoadImmutable(replacePath, options);
+            // Mutate disk to same row count after the snapshot was taken.
+            await File.WriteAllTextAsync(replacePath,
+                "id,label,amount,when_utc,token\n"
+                + "1,mut-a,1.0,2024-01-01,6f9619ff-8b86-d011-b42d-00c04fc964ff\n"
+                + "2,mut-b,2.0,2024-01-02,00000000-0000-0000-0000-000000000000\n"
+                + "3,mut-c,3.0,2024-01-03,11111111-2222-3333-4444-555555555555\n",
+                new UTF8Encoding(false), ct);
+            var replacePlan = new CsvImportPlan(replaceRef, CsvImportMode.Replace, appendMappings, null, false);
+            var refused = await session.ApplyCsvImportAsync(replacePlan, replaceSource, null, ct);
+            RequireEqual(CsvImportOutcome.RefusedInvalidData, refused.Outcome, "fingerprint mismatch must refuse");
+            var afterRefuse = await other.QueryRawAsync(
+                $"SELECT COUNT(*) FROM {Table(replaceName)};", null, 5, ct);
+            RequireEqual(1, Convert.ToInt32(afterRefuse.Rows[0][0], CultureInfo.InvariantCulture),
+                "Replace fingerprint refuse must leave the old row");
+
+            // Lossy Append against decimal(10,2) refuses before begin; destination unchanged.
+            const string tightName = "t_csv_tight";
+            await ExecAsync(session, $"""
+                CREATE TABLE {Table(tightName)} (
+                  id int NULL,
+                  amount decimal(10, 2) NULL
+                );
+                """, ct);
+            _tables.Add(tightName);
+            await ExecAsync(session, $"INSERT INTO {Table(tightName)} (id, amount) VALUES (1, CONVERT(decimal(10, 2), '1.00'));", ct);
+            var lossyPath = Path.Combine(Path.GetTempPath(), "sqloryn-acc-lossy-" + Guid.NewGuid().ToString("N") + ".csv");
+            await File.WriteAllTextAsync(lossyPath, "id,amount\n2,1.234\n", new UTF8Encoding(false), ct);
+            try
+            {
+                var lossyPlan = new CsvImportPlan(
+                    new TableRef(_database, _schema, tightName),
+                    CsvImportMode.Append,
+                    [
+                        new CsvColumnMapping(0, "id", CsvSqlType.Int, Destination: new CsvDestinationType("int")),
+                        new CsvColumnMapping(1, "amount", CsvSqlType.Decimal, Scale: 2,
+                            Destination: new CsvDestinationType("decimal", Precision: 10, Scale: 2))
+                    ],
+                    null,
+                    false);
+                var lossy = await session.ApplyCsvImportAsync(
+                    lossyPlan, CsvImportSource.LoadImmutable(lossyPath, new CsvImportOptions()), null, ct);
+                RequireEqual(CsvImportOutcome.RefusedInvalidData, lossy.Outcome, "lossy decimal must refuse");
+                var tightRows = await other.QueryRawAsync(
+                    $"SELECT COUNT(*), CONVERT(varchar(20), MAX(amount)) FROM {Table(tightName)};", null, 5, ct);
+                RequireEqual(1, Convert.ToInt32(tightRows.Rows[0][0], CultureInfo.InvariantCulture), "lossy refuse row count");
+                RequireEqual("1.00", Convert.ToString(tightRows.Rows[0][1], CultureInfo.InvariantCulture) ?? "", "lossy refuse amount");
+            }
+            finally
+            {
+                try { File.Delete(lossyPath); } catch { /* synthetic */ }
+            }
+
             Require(session.IsConnected, "Import session dropped after a committed import.");
         }
         finally
