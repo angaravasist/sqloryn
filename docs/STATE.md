@@ -39,6 +39,7 @@ Full delivery contract active on tip `496b503`. Linux Core live: **12/12** scena
 | `06bc2ad` | probe-components ×3 PASS · repo-safeguards PASS · CodeQL PASS · sql-integration SKIPPED — [components](https://github.com/angaravasist/sqloryn/actions/runs/41750374026) · [CodeQL](https://github.com/angaravasist/sqloryn/actions/runs/41750368912) |
 | `0af9108` | probe-components ×3 PASS · repo-safeguards PASS · CodeQL PASS · **sql-integration PASS** (six CORE scenarios, cleanup) — [run 41793052872](https://github.com/angaravasist/sqloryn/actions/runs/41793052872) |
 | `496b503` | probe-components ×3 PASS · repo-safeguards PASS · **sql-integration PASS** (twelve CORE scenarios, pass=12 skip=0 fail=0, cleanup) — [run 41807915637](https://github.com/angaravasist/sqloryn/actions/runs/41807915637) | Independent verifier: Release 0/0, Core **227 PASS** |
+| `11c992b` | Continues from `496b503` with CAP-040/054/060/071 + CAP-084/075/087/099/014; Core **234 PASS** locally; SQL evidence still the twelve scenarios on `496b503` until re-run |
 
 ## PR #7 finding dispositions
 
