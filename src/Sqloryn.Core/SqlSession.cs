@@ -22,6 +22,8 @@ public sealed class SqlSession : IAsyncDisposable
     public string? ServerDisplay { get; private set; }
     public string? Database { get; private set; }
     public string? ServerVersion { get; private set; }
+    /// <summary>Version-only until <see cref="ProbeCapabilitiesAsync"/> runs; permissions and services stay unknown, never assumed.</summary>
+    public ConnectionCapabilities Capabilities { get; private set; } = ConnectionCapabilities.Unprobed(null);
     public bool HasActiveCommand => Volatile.Read(ref _inFlight) > 0;
     /// <summary>True when the last batch's target could not be verified; further execution is blocked.</summary>
     public bool TargetUnknown => _targetUnknown;
@@ -47,6 +49,7 @@ public sealed class SqlSession : IAsyncDisposable
                 if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                     throw new InvalidOperationException("Server identity query returned no rows.");
                 ServerVersion = reader.GetString(0);
+                Capabilities = ConnectionCapabilities.Unprobed(ServerVersion);
                 Database = reader.IsDBNull(1) ? options.Database : reader.GetString(1);
                 ServerDisplay = options.DisplayTarget;
                 _options = options;
@@ -90,6 +93,48 @@ public sealed class SqlSession : IAsyncDisposable
         };
     }
 
+    /// <summary>
+    /// Optional, read-only capability probe on this session's connection. Permission denial or any probe failure
+    /// leaves that capability unknown and never disconnects or faults the session. Only caller cancellation throws.
+    /// Skipped (current capabilities returned) while a command is running or the session is not connected.
+    /// </summary>
+    public async Task<ConnectionCapabilities> ProbeCapabilitiesAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_connection is not { State: ConnectionState.Open } || _options is null || HasActiveCommand)
+                return Capabilities;
+            var runner = new SqlCapabilityRunner(_connection, Math.Min(_options.CommandTimeoutSeconds, 15));
+            Capabilities = await ConnectionCapabilities.ProbeAsync(runner, ServerVersion, cancellationToken).ConfigureAwait(false);
+            return Capabilities;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    sealed class SqlCapabilityRunner(SqlConnection connection, int timeoutSeconds) : ICapabilityQueryRunner
+    {
+        public async Task<IReadOnlyList<object?[]>> QueryAsync(string sql, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = timeoutSeconds;
+            var rows = new List<object?[]>();
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (rows.Count < 4 && await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var row = new object?[reader.FieldCount];
+                reader.GetValues(row);
+                rows.Add(row);
+            }
+            return rows;
+        }
+    }
+
     public async Task ChangeDatabaseAsync(string database, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -129,6 +174,7 @@ public sealed class SqlSession : IAsyncDisposable
             ServerDisplay = null;
             Database = null;
             ServerVersion = null;
+            Capabilities = ConnectionCapabilities.Unprobed(null);
             _options = null;
             // Keep _targetUnknown: an unconfirmed SHOWPLAN reset (or other target-unknown
             // state) must not be cleared by disconnect alone. Only ConnectAsync recovers.

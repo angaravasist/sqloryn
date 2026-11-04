@@ -25,6 +25,9 @@ public partial class ConnectWindow : Window
 
     public string ProfileName { get; private set; } = "";
 
+    /// <summary>Optional display group for the saved profile; null when blank.</summary>
+    public string? ProfileGroup { get; private set; }
+
     public ConnectWindow()
     {
         InitializeComponent();
@@ -44,6 +47,15 @@ public partial class ConnectWindow : Window
         {
             ShowError("Could not read saved profiles: " + ex.Message);
         }
+        UpdateTlsSummary();
+    }
+
+    void UpdateTlsSummary()
+    {
+        // Endpoint events can fire while InitializeComponent is still resolving named controls.
+        if (TlsSummaryText is null || TrustBox is null || PinBox is null)
+            return;
+        TlsSummaryText.Text = TlsSummary.Describe(TrustBox.IsChecked == true, PinBox.Text);
     }
 
     void OnCancel(object? sender, RoutedEventArgs e)
@@ -56,6 +68,7 @@ public partial class ConnectWindow : Window
     {
         var save = SaveProfileBox.IsChecked == true;
         ProfileNameBox.IsEnabled = save;
+        GroupBox.IsEnabled = save;
         RememberBox.IsEnabled = save;
         if (!save)
             RememberBox.IsChecked = false;
@@ -78,6 +91,7 @@ public partial class ConnectWindow : Window
             PinBox.Text = profile.ServerCertificatePath ?? "";
             SaveProfileBox.IsChecked = true;
             ProfileNameBox.Text = profile.Name;
+            GroupBox.Text = profile.Group ?? "";
             RememberBox.IsChecked = profile.RememberPassword;
             // SelectProfile -> BeginLookup(generation); the box starts empty.
             generation = _autofill.SelectProfile(profile);
@@ -143,6 +157,7 @@ public partial class ConnectWindow : Window
 
     void OnEndpointEdited()
     {
+        UpdateTlsSummary();
         if (_loadingProfile)
             return;
         if (_autofill.UserChangedEndpoint(CurrentEndpoint()))
@@ -197,6 +212,9 @@ public partial class ConnectWindow : Window
                 : ProfileNameBox.Text.Trim();
             if (ProfileName.Length > 128)
                 throw new ArgumentException("Profile name must be 128 characters or fewer.");
+            ProfileGroup = SaveProfile && !string.IsNullOrWhiteSpace(GroupBox.Text) ? GroupBox.Text.Trim() : null;
+            if (ProfileGroup is { Length: > 128 } || (ProfileGroup?.Any(char.IsControl) ?? false))
+                throw new ArgumentException("Profile group must be 128 characters or fewer with no control characters.");
 
             Result = options;
             _autofill.Forget();

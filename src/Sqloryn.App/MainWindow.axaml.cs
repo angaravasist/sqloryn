@@ -323,6 +323,7 @@ public partial class MainWindow : Window
             {
                 Id = dialog.ProfileId,
                 Name = dialog.ProfileName,
+                Group = dialog.ProfileGroup,
                 Server = options.Server,
                 Port = options.Port,
                 Database = options.Database,

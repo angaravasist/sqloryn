@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Sqloryn.ConnectWindow"
         Title="Connect — SQLoryn"
-        Width="500" Height="640"
+        Width="500" Height="740"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
   <ScrollViewer>
@@ -25,6 +25,17 @@
       </Grid>
       <TextBox Name="DatabaseBox" PlaceholderText="Database" Text="master" AutomationProperties.Name="Database" />
 
+      <TextBlock Classes="caption" Text="AUTHENTICATION" Margin="0,6,0,0" />
+      <ComboBox Name="AuthBox" HorizontalAlignment="Stretch" SelectedIndex="0"
+                AutomationProperties.Name="Authentication method">
+        <ComboBoxItem Content="SQL Server Authentication"
+                      ToolTip.Tip="Login and password sent over the mandatory TLS channel." />
+        <ComboBoxItem Content="Microsoft Entra ID (unavailable)" IsEnabled="False" ToolTip.ShowOnDisabled="True"
+                      ToolTip.Tip="Not available: needs the Azure authentication extension for Microsoft.Data.SqlClient (Azure.Identity / MSAL) and a sign-in flow, which SQLoryn does not bundle yet." />
+        <ComboBoxItem Content="Integrated / Kerberos (unavailable)" IsEnabled="False" ToolTip.ShowOnDisabled="True"
+                      ToolTip.Tip="Not available: needs a Kerberos (GSSAPI) ticket from kinit on this Mac and a login-less connection model, which SQLoryn does not implement yet." />
+      </ComboBox>
+
       <TextBlock Classes="caption" Text="CREDENTIALS" Margin="0,6,0,0" />
       <TextBox Name="UserBox" TextChanged="OnEndpointTextChanged" PlaceholderText="Login" AutomationProperties.Name="Login" />
       <TextBox Name="PasswordBox" TextChanged="OnPasswordTextChanged" PlaceholderText="Password" PasswordChar="•"
@@ -35,6 +46,8 @@
                 AutomationProperties.Name="Trust server certificate" />
       <TextBox Name="PinBox" TextChanged="OnEndpointTextChanged" PlaceholderText="Optional lab certificate pin path (.cer/.crt)"
                AutomationProperties.Name="Certificate pin path" />
+      <TextBlock Name="TlsSummaryText" Classes="muted" FontSize="11" TextWrapping="Wrap"
+                 AutomationProperties.Name="TLS summary" />
 
       <TextBlock Classes="caption" Text="PROFILE" Margin="0,6,0,0" />
       <CheckBox Name="SaveProfileBox" Content="Save profile (non-secret settings only)"
@@ -42,6 +55,8 @@
                 AutomationProperties.Name="Save profile" />
       <TextBox Name="ProfileNameBox" PlaceholderText="Profile name" IsEnabled="False"
                AutomationProperties.Name="Profile name" />
+      <TextBox Name="GroupBox" PlaceholderText="Group (optional)" IsEnabled="False"
+               AutomationProperties.Name="Profile group" />
       <CheckBox Name="RememberBox" Content="Remember password (macOS Keychain)" IsEnabled="False"
                 AutomationProperties.Name="Remember password" />
       <TextBlock Name="KeychainNote" Classes="muted" FontSize="11" TextWrapping="Wrap" />

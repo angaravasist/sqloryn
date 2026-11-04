@@ -16,6 +16,8 @@ public sealed record ConnectionProfile
     public string? ServerCertificatePath { get; init; }
     public bool RememberPassword { get; init; }
     public DateTimeOffset? LastUsedUtc { get; init; }
+    /// <summary>Optional display folder. Null in files written before groups existed; secret-free.</summary>
+    public string? Group { get; init; }
 }
 
 public sealed class ConnectionProfileStore
@@ -113,6 +115,8 @@ public sealed class ConnectionProfileStore
             throw new ArgumentException("Profile id is required.");
         if (string.IsNullOrWhiteSpace(profile.Name) || profile.Name.Length > 128)
             throw new ArgumentException("Profile name is required.");
+        if (profile.Group is { } group && (group.Length > 128 || group.Any(char.IsControl)))
+            throw new ArgumentException("Profile group must be 128 characters or fewer with no control characters.");
     }
 
     sealed class ProfilesFile

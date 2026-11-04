@@ -92,6 +92,17 @@ are materialised by `ResultMaterializer` and covered by fixture tests (`s2-date-
 behaviour against SQL Server for these types is not yet evidenced; `time`, `uniqueidentifier`, `sql_variant` etc.
 remain unsupported (throw `NotSupportedException`).
 
+## WS1-T1 connections (component-verified only)
+
+- Database names are passed only via `SqlConnectionStringBuilder` and round-trip checked; brackets, spaces, Unicode,
+  quotes, `;` and `=` are accepted. Remaining exclusions: empty/whitespace-only, over 128 characters, control characters.
+- `ConnectionCapabilities.ProbeAsync` / `SqlSession.ProbeCapabilitiesAsync` (opt-in, not run by connect): SHOWPLAN
+  permission and SQL Server Agent are `null` (unknown) until observed; denial or failure never faults the session.
+  No live SQL Server evidence yet.
+- ConnectWindow shows a TLS summary and an auth dropdown: SQL auth enabled; Entra ID and Integrated/Kerberos disabled
+  with tooltips naming the missing dependency (no provider implemented).
+- `ConnectionProfile.Group` is optional; legacy `profiles.json` loads with `Group = null`.
+
 ## Explicit non-claims
 
 Not SSMS-compatible; not signed/notarised; AI assistant deferred; no Windows SSH product path.
