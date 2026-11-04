@@ -132,6 +132,88 @@ Check(cell38.Display == probe38 && cell38.Kind == "decimal" && !cell38.Truncated
 Check(ResultMaterializer.FormatSqlDecimal(SqlDecimal.Parse(probe38)).Display == probe38, "sqldecimal-direct");
 Pass("numeric-38-production-path");
 
+// --- S-2: date / money / smallmoney through the production typed path ---
+{
+    var typedS2 = new FakeSqlTypedCellSource(
+        ["date", "money", "smallmoney", "date", "money", "smallmoney", "money", "smallmoney"],
+        [new DateTime(2024, 2, 29, 13, 45, 0), new SqlMoney(-12.3456m), new SqlMoney(214748.3647m),
+         null, null, null, new SqlMoney(5m), new SqlMoney(-0.0001m)]);
+    var dateCell = ResultMaterializer.FormatSqlTypedCell(typedS2, 0);
+    Check(dateCell.Display == "2024-02-29" && dateCell.Kind == "date", "s2-date-iso-kind");
+    var moneyCell = ResultMaterializer.FormatSqlTypedCell(typedS2, 1);
+    Check(moneyCell.Display == "-12.3456" && moneyCell.Kind == "money", "s2-money-negative-exact");
+    var smallCell = ResultMaterializer.FormatSqlTypedCell(typedS2, 2);
+    Check(smallCell.Display == "214748.3647" && smallCell.Kind == "smallmoney", "s2-smallmoney-exact");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 3).IsNull, "s2-null-date");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 4).IsNull, "s2-null-money");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 5).IsNull, "s2-null-smallmoney");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 6).Display == "5.0000", "s2-money-fixed-scale");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 7).Display == "-0.0001", "s2-smallmoney-negative-fraction");
+
+    var prevCulture = System.Globalization.CultureInfo.CurrentCulture;
+    try
+    {
+        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+        Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 1).Display == "-12.3456", "s2-money-culture-invariant");
+    }
+    finally { System.Globalization.CultureInfo.CurrentCulture = prevCulture; }
+
+    var s2Set = new ResultSet
+    {
+        Columns = ["d", "m", "sm", "dn", "mn"],
+        SqlTypes = ["date", "money", "smallmoney", "date", "money"],
+        Rows =
+        [[
+            ResultMaterializer.FormatSqlTypedCell(typedS2, 0),
+            ResultMaterializer.FormatSqlTypedCell(typedS2, 1),
+            ResultMaterializer.FormatSqlTypedCell(typedS2, 7),
+            ResultMaterializer.FormatSqlTypedCell(typedS2, 3),
+            ResultMaterializer.FormatSqlTypedCell(typedS2, 4)
+        ]]
+    };
+    var s2View = ResultSetView.FromResultSet(s2Set);
+    var plainCsv = CsvExporter.ToCsv(s2View);
+    Check(plainCsv.Split("\r\n")[1] == "2024-02-29,-12.3456,-0.0001,,", "s2-csv-plain");
+    var safeCsv = CsvExporter.ToCsv(s2View, new CsvOptions { SpreadsheetSafe = true });
+    Check(safeCsv.Split("\r\n")[1] == "2024-02-29,-12.3456,-0.0001,,", "s2-csv-spreadsheet-safe-money-unprefixed");
+    var s2Json = System.Text.Json.JsonDocument.Parse(JsonExporter.ToJson(s2View)).RootElement
+        .GetProperty("resultSets")[0].GetProperty("rows")[0];
+    Check(s2Json[0].ValueKind == System.Text.Json.JsonValueKind.String && s2Json[0].GetString() == "2024-02-29", "s2-json-date-string");
+    Check(s2Json[1].ValueKind == System.Text.Json.JsonValueKind.String && s2Json[1].GetString() == "-12.3456", "s2-json-money-string");
+    Check(s2Json[2].ValueKind == System.Text.Json.JsonValueKind.String && s2Json[2].GetString() == "-0.0001", "s2-json-smallmoney-string");
+    Check(s2Json[3].ValueKind == System.Text.Json.JsonValueKind.Null && s2Json[4].ValueKind == System.Text.Json.JsonValueKind.Null, "s2-json-null");
+
+    // Kind-only (no provider SqlTypes): money/date kinds must still export spreadsheet-safe.
+    var kindOnly = ResultSetView.FromResultSet(new ResultSet
+    {
+        Columns = ["m", "d"],
+        Rows = [[CellValue.Text("-12.3456", "money"), CellValue.Text("2024-02-29", "date")]]
+    });
+    Check(kindOnly.Columns[0].SqlType == "money" && kindOnly.Columns[1].SqlType == "date", "s2-kind-infers-money-date");
+    Check(CsvExporter.ToCsv(kindOnly, new CsvOptions { SpreadsheetSafe = true }).Contains("-12.3456", StringComparison.Ordinal)
+          && !CsvExporter.ToCsv(kindOnly, new CsvOptions { SpreadsheetSafe = true }).Contains("'-12.3456", StringComparison.Ordinal), "s2-kind-money-safe-csv");
+
+    // ReadResultSetAsync with typed fixture reader (fallback path for non-SqlDataReader).
+    using var s2Reader = new TypedValueReader(
+        ["d", "m", "sm"],
+        ["date", "money", "smallmoney"],
+        [typeof(DateTime), typeof(SqlMoney), typeof(SqlMoney)],
+        [
+            [new DateTime(2024, 2, 29, 23, 59, 59), new SqlMoney(-12.3456m), new SqlMoney(7.5m)],
+            [null, null, null]
+        ]);
+    var s2Outcome = await ResultMaterializer.ReadResultSetAsync(s2Reader, new ResultBudget(), CancellationToken.None);
+    Check(s2Outcome.RowFailure is null && s2Outcome.Set.Rows.Count == 2, "s2-read-resultset-no-failure");
+    var r0Cells = s2Outcome.Set.Rows[0];
+    Check(r0Cells[0].Display == "2024-02-29" && r0Cells[0].Kind == "date", "s2-read-resultset-date");
+    Check(r0Cells[1].Display == "-12.3456" && r0Cells[1].Kind == "money", "s2-read-resultset-money");
+    Check(r0Cells[2].Display == "7.5000" && r0Cells[2].Kind == "smallmoney", "s2-read-resultset-smallmoney");
+    Check(s2Outcome.Set.Rows[1].All(c => c.IsNull), "s2-read-resultset-nulls");
+    var s2ReadView = ResultSetView.FromResultSet(s2Outcome.Set);
+    Check(s2ReadView.Columns[1].SqlType == "money", "s2-read-resultset-sqltype");
+    Pass("s2-date-money-types");
+}
+
 // --- 2. Budget exhausted mid-row; omit incomplete row; display shows intact rows + marker ---
 var wide = new DataTable();
 wide.Columns.Add("a", typeof(string));

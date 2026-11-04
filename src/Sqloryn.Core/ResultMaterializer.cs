@@ -55,6 +55,10 @@ public interface ISqlTypedCellSource
     string GetDataTypeName(int ordinal);
     SqlDecimal GetSqlDecimal(int ordinal);
     DateTimeOffset GetDateTimeOffset(int ordinal);
+    /// <summary>money/smallmoney via SqlMoney (never System.Decimal / double).</summary>
+    SqlMoney GetSqlMoney(int ordinal);
+    /// <summary>SQL <c>date</c> column value (time-of-day component is meaningless and ignored).</summary>
+    DateTime GetDate(int ordinal);
     long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length);
     long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length);
     bool TryGetBoolean(int ordinal, out bool value);
@@ -70,6 +74,8 @@ public sealed class SqlDataReaderCellSource(SqlDataReader reader) : ISqlTypedCel
     public string GetDataTypeName(int ordinal) => reader.GetDataTypeName(ordinal);
     public SqlDecimal GetSqlDecimal(int ordinal) => reader.GetSqlDecimal(ordinal);
     public DateTimeOffset GetDateTimeOffset(int ordinal) => reader.GetDateTimeOffset(ordinal);
+    public SqlMoney GetSqlMoney(int ordinal) => reader.GetSqlMoney(ordinal);
+    public DateTime GetDate(int ordinal) => reader.GetDateTime(ordinal);
     public long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
         => reader.GetChars(ordinal, dataOffset, buffer, bufferOffset, length);
     public long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length)
@@ -244,6 +250,15 @@ public static class ResultMaterializer
             return FormatSqlDecimal(sqlDecimal);
         }
 
+        if (IsMoneyType(typeName, out var moneyKind))
+        {
+            var money = source.GetSqlMoney(ordinal);
+            return money.IsNull ? CellValue.Null : FormatSqlMoney(money, moneyKind);
+        }
+
+        if (typeName.Equals("date", StringComparison.OrdinalIgnoreCase))
+            return FormatDate(source.GetDate(ordinal));
+
         if (IsCharacterType(typeName))
             return ReadBoundedChars(source, ordinal);
         if (IsBinaryType(typeName))
@@ -266,6 +281,30 @@ public static class ResultMaterializer
     public static CellValue FormatSqlDecimal(SqlDecimal value)
         => CellValue.Text(value.ToString(), "decimal");
 
+    /// <summary>money/smallmoney with exactly four fractional digits, invariant formatting, sign preserved.</summary>
+    public static CellValue FormatSqlMoney(SqlMoney value, string kind = "money")
+        => CellValue.Text(value.ToSqlDecimal().ToString(), kind);
+
+    /// <summary>SQL <c>date</c> as ISO yyyy-MM-dd (no time component).</summary>
+    public static CellValue FormatDate(DateTime value)
+        => CellValue.Text(value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), "date");
+
+    static bool IsMoneyType(string typeName, out string kind)
+    {
+        if (typeName.Equals("smallmoney", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = "smallmoney";
+            return true;
+        }
+        if (typeName.Equals("money", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = "money";
+            return true;
+        }
+        kind = "";
+        return false;
+    }
+
     /// <summary>Non-SqlClient readers (unit fixtures only). Not used for live SqlDataReader decimal(38).</summary>
     internal static CellValue FormatCell(DbDataReader reader, int ordinal)
         => reader is SqlDataReader sql
@@ -284,8 +323,16 @@ public static class ResultMaterializer
             return ReadBoundedBinaryDb(reader, ordinal);
         if (fieldType == typeof(SqlDecimal))
             return FormatSqlDecimal(reader.GetFieldValue<SqlDecimal>(ordinal));
+        if (fieldType == typeof(SqlMoney))
+        {
+            var typeName = SafeTypeName(reader, ordinal);
+            IsMoneyType(typeName, out var kind);
+            return FormatSqlMoney(reader.GetFieldValue<SqlMoney>(ordinal), kind.Length == 0 ? "money" : kind);
+        }
         if (fieldType == typeof(bool))
             return CellValue.Text(reader.GetBoolean(ordinal) ? "true" : "false", "bool");
+        if (fieldType == typeof(DateTime) && SafeTypeName(reader, ordinal).Equals("date", StringComparison.OrdinalIgnoreCase))
+            return FormatDate(reader.GetDateTime(ordinal));
         if (fieldType == typeof(DateTimeOffset))
             return CellValue.Text(reader.GetFieldValue<DateTimeOffset>(ordinal).ToString("o", CultureInfo.InvariantCulture), "datetimeoffset");
         if (fieldType == typeof(DateTime))
@@ -300,6 +347,12 @@ public static class ResultMaterializer
         // No System.Decimal path for 38-digit fidelity — fixtures must supply SqlDecimal or use ISqlTypedCellSource.
         throw new NotSupportedException(
             $"Fallback reader cannot format '{fieldType.Name}' without a bounded typed accessor.");
+    }
+
+    static string SafeTypeName(DbDataReader reader, int ordinal)
+    {
+        try { return reader.GetDataTypeName(ordinal) ?? ""; }
+        catch (Exception) { return ""; }
     }
 
     static bool IsCharacterType(string typeName)

@@ -33,6 +33,8 @@ sealed class FakeSqlTypedCellSource : ISqlTypedCellSource
     }
 
     public DateTimeOffset GetDateTimeOffset(int ordinal) => (DateTimeOffset)_values[ordinal]!;
+    public SqlMoney GetSqlMoney(int ordinal) => (SqlMoney)_values[ordinal]!;
+    public DateTime GetDate(int ordinal) => (DateTime)_values[ordinal]!;
     public long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
     {
         var s = (string)_values[ordinal]!;
@@ -378,4 +380,68 @@ sealed class HangAfterFirstRowReader : DbDataReader
     public override int GetInt32(int ordinal) => throw new NotSupportedException();
     public override long GetInt64(int ordinal) => throw new NotSupportedException();
     public override string GetString(int ordinal) => (string)GetValue(ordinal);
+}
+
+/// <summary>
+/// Typed non-SqlClient reader: SqlMoney / DateTime cells with provider type names (date, money, smallmoney).
+/// Exercises ResultMaterializer.ReadResultSetAsync fallback path.
+/// </summary>
+sealed class TypedValueReader : DbDataReader
+{
+    readonly string[] _columns;
+    readonly string[] _typeNames;
+    readonly Type[] _fieldTypes;
+    readonly object?[][] _rows;
+    int _rowIndex = -1;
+
+    public TypedValueReader(string[] columns, string[] typeNames, Type[] fieldTypes, object?[][] rows)
+    {
+        _columns = columns;
+        _typeNames = typeNames;
+        _fieldTypes = fieldTypes;
+        _rows = rows;
+    }
+
+    public override int FieldCount => _columns.Length;
+    public override bool HasRows => _rows.Length > 0;
+    public override bool IsClosed => false;
+    public override int RecordsAffected => 0;
+    public override int Depth => 0;
+    public override object this[int ordinal] => GetValue(ordinal);
+    public override object this[string name] => GetValue(GetOrdinal(name));
+    public override bool Read() => ++_rowIndex < _rows.Length;
+    public override Task<bool> ReadAsync(CancellationToken cancellationToken) => Task.FromResult(Read());
+    public override bool NextResult() => false;
+    public override Task<bool> NextResultAsync(CancellationToken cancellationToken) => Task.FromResult(false);
+    public override string GetName(int ordinal) => _columns[ordinal];
+    public override int GetOrdinal(string name) => Array.IndexOf(_columns, name);
+    public override Type GetFieldType(int ordinal) => _fieldTypes[ordinal];
+    public override string GetDataTypeName(int ordinal) => _typeNames[ordinal];
+    public override bool IsDBNull(int ordinal) => _rows[_rowIndex][ordinal] is null or DBNull;
+    public override object GetValue(int ordinal) => _rows[_rowIndex][ordinal] ?? DBNull.Value;
+    public override int GetValues(object[] values)
+    {
+        for (var i = 0; i < FieldCount; i++)
+            values[i] = GetValue(i);
+        return FieldCount;
+    }
+    public override DateTime GetDateTime(int ordinal) => (DateTime)_rows[_rowIndex][ordinal]!;
+    public override void Close() { }
+    public override DataTable GetSchemaTable() => throw new NotSupportedException();
+    public override IEnumerator GetEnumerator() => throw new NotSupportedException();
+    public override bool GetBoolean(int ordinal) => throw new NotSupportedException();
+    public override byte GetByte(int ordinal) => throw new NotSupportedException();
+    public override long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length)
+        => throw new NotSupportedException();
+    public override char GetChar(int ordinal) => throw new NotSupportedException();
+    public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
+        => throw new NotSupportedException();
+    public override decimal GetDecimal(int ordinal) => throw new NotSupportedException();
+    public override double GetDouble(int ordinal) => throw new NotSupportedException();
+    public override float GetFloat(int ordinal) => throw new NotSupportedException();
+    public override Guid GetGuid(int ordinal) => throw new NotSupportedException();
+    public override short GetInt16(int ordinal) => throw new NotSupportedException();
+    public override int GetInt32(int ordinal) => throw new NotSupportedException();
+    public override long GetInt64(int ordinal) => throw new NotSupportedException();
+    public override string GetString(int ordinal) => throw new NotSupportedException();
 }

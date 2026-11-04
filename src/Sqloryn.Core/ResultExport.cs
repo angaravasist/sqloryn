@@ -58,7 +58,7 @@ public sealed class ResultSetView
             {
                 "number" => "int",
                 "bool" => "bit",
-                "datetime" or "datetimeoffset" => row[ordinal].Kind,
+                "datetime" or "datetimeoffset" or "date" or "money" or "smallmoney" => row[ordinal].Kind,
                 "empty-string" or "text" => "nvarchar",
                 "binary" => "varbinary",
                 "null" => "",

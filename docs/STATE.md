@@ -63,6 +63,13 @@ bash scripts/build_macos_app.sh
 open artifacts/macos/osx-arm64/SQLoryn.app
 ```
 
+## Result type coverage (S-2)
+
+`date` (ISO `yyyy-MM-dd`), `money` and `smallmoney` (four fractional digits via `SqlMoney`, invariant, sign preserved)
+are materialised by `ResultMaterializer` and covered by fixture tests (`s2-date-money-types`). Live `SqlDataReader`
+behaviour against SQL Server for these types is not yet evidenced; `time`, `uniqueidentifier`, `sql_variant` etc.
+remain unsupported (throw `NotSupportedException`).
+
 ## Explicit non-claims
 
 Not SSMS-compatible; not signed/notarised; AI assistant deferred; no Windows SSH product path.
