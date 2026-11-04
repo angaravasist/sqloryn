@@ -44,7 +44,7 @@ CAP-042,Explorer,Object Explorer,Context menu scripting,integrator,,,partial_cod
 CAP-043,Explorer,Object Explorer,Object properties,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-044,Editor,Editor & SQL scripting,Multiple query tabs,integrator,,,partial_code,,unverified,,,SPEC-003: multi-tab ScriptDocument with per-tab SQL isolation (script-document; tab-sql-isolation); Core-tested
 CAP-045,Editor,Editor & SQL scripting,New/open/save/save as,integrator,,,partial_code,,unverified,,,SPEC-003: Open/Save/Save As UTF-8 .sql with staged replace and external-edit refusal (d2-*; script-save-*); Core-tested; native Save sheet unverified
-CAP-046,Editor,Editor & SQL scripting,Unsaved document recovery,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
+CAP-046,Editor,Editor & SQL scripting,Unsaved document recovery,integrator,File > Recover Unsaved Scripts…,DocumentRecovery;DocumentRecoveryStore,partial_code,cap046-*,unverified,,,"Dirty query text is copied under Application Support. Credential-like text is redacted. No connection secrets. Relaunch offers Restore, Discard or keep. Closing the sheet does not delete the copies. Native sheet unverified. Queue status done-component."
 CAP-047,Editor,Editor & SQL scripting,T-SQL syntax and semantics,integrator,,,partial_code,EditorTests ws3-*,unverified,,badb0bb,AvaloniaEdit line numbers+highlight; native UI unverified
 CAP-048,Editor,Editor & SQL scripting,Autocomplete and IntelliSense,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-049,Editor,Editor & SQL scripting,Error annotations,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
@@ -62,7 +62,7 @@ CAP-060,Engine,Editor & SQL scripting,Connection switching per tab,integrator,To
 CAP-061,Editor,Editor & SQL scripting,Keyboard shortcuts,integrator,,,partial_code,,unverified,,,SPEC-003: F5 run and Escape cancel plus Cmd+Return run declared in source (keyboard-*; source scan only); native menu/shortcut evidence pending
 CAP-062,Editor,Editor & SQL scripting,Editor formatting,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-063,"Deploy,Editor",Editor & SQL scripting,SQL project/source association,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-064,Editor,Editor & SQL scripting,Execution history and recall,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
+CAP-064,Editor,Editor & SQL scripting,Execution history and recall,integrator,Query > Execution History…,ExecutionHistory;ExecutionHistoryStore,partial_code,cap064-*,unverified,,,"Bounded local history of batch text, outcome and client elapsed time. Result rows and server names are not stored. Open in Editor does not run the SQL. Native window unverified. Queue status done-component."
 CAP-065,BI,Editor & SQL scripting,Multiple language modes when relevant,integrator,,,missing,,unverified,No approved language mode besides T-SQL. Blocks extra language modes only.,,Unassessed candidate; not implemented
 CAP-066,Engine,Query execution,Execute user-authored T-SQL,integrator,,,partial_code,ws4-time-guid-types,unverified,,badb0bb,time+uniqueidentifier fixtures; live unverified
 CAP-067,Engine,Query execution,Execution progress and latency,integrator,,,partial_code,,unverified,,,SPEC-003: cancel/timeout/unobserved outcomes; Core-tested (DP0+)
@@ -79,7 +79,7 @@ CAP-077,Engine,Query execution,Query execution without DB privilege,integrator,,
 CAP-078,Engine,Query execution,Long-running operation status,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-079,Engine,Query execution,Query tabs during server restart,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-080,Engine,Query execution,Parameterised app-generated SQL,integrator,,,partial_code,,unverified,,,SPEC-003: edit-row SQL uses typed parameters not inline values (edit-update-params; edit-update-no-inline-values; d3-update-still-parameterised); live pending
-CAP-081,Engine,Query execution,Explicit user SQL warnings,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
+CAP-081,Engine,Query execution,Explicit user SQL warnings,integrator,Results Messages tab and summary,QueryOutcomeFormatter.DescribeNotice,partial_code,cap081-*,unverified,,,"Messages label severity 0 and 10 as Info, 1-9 as Warning and 11+ as Error. The result summary counts them. Live PRINT unverified. Queue status done-component."
 CAP-082,Engine,Query execution,Batch transaction state,integrator,,QueryOutcomeFormatter.FormatMessages,partial_code,,unverified,,,Messages include XACT_STATE when the batch recorded one. The editor label is CAP-059. No transaction commands.
 CAP-083,Results,"Results, export & data types",Grid output,integrator,,,partial_code,,unverified,,,SPEC-003: Avalonia DataGrid results; live fidelity pending
 CAP-084,Results,"Results, export & data types",Results as text,integrator,Results menu,ResultTextFormatter;MainWindow.OnResultsAsText,partial_code,cap084-*,unverified,,,"Results as Text formats retained rows as aligned monospace text. SQL NULL is (null), distinct from a blank empty string and from the word NULL. Does not re-query. Native menu unverified. Queue status done-component."
@@ -89,7 +89,7 @@ CAP-087,Results,"Results, export & data types",Copy cells/rows/headers,integrato
 CAP-088,Results,"Results, export & data types",CSV export,integrator,,,partial_code,,unverified,,,SPEC-003: CsvExporter NULL vs empty; unit-tested
 CAP-089,Results,"Results, export & data types",JSON export,integrator,,,partial_code,,unverified,,,SPEC-003: JsonExporter; unit-tested
 CAP-090,Results,"Results, export & data types",Large result paging/virtualization,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-091,Results,"Results, export & data types",Binary/varbinary rendering,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
+CAP-091,Results,"Results, export & data types",Binary/varbinary rendering,integrator,Results grid and Results as Text,BinaryDisplay;ResultMaterializer.FormatSqlTypedCell,partial_code,cap091-*,unverified,,,"varbinary and binary display as 0x hex. A binary column is not shown as decoded text. Live SQL Server binary unverified. Queue status done-component."
 CAP-092,Results,"Results, export & data types",Decimal numeric precision,integrator,,,partial_code,,unverified,,,SPEC-003: decimal 38-digit production path and exact string JSON (numeric-38-production-path; sqldecimal-*; json-decimal-string); fixture-tested; live reader behaviour pending
 CAP-093,Results,"Results, export & data types",datetime/datetimeoffset handling,integrator,,,partial_code,,unverified,,,SPEC-003: datetime and datetimeoffset ISO text and date ISO (s2-date-*); fixture-tested; time and others unsupported; live pending
 CAP-094,Results,"Results, export & data types",Unicode/collation display,integrator,,,partial_code,s2/ws4 materialiser,unverified,,badb0bb,Unicode/text paths exist; was transport-only stale

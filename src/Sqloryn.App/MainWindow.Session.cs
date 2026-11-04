@@ -86,6 +86,7 @@ public partial class MainWindow
             if (!OwnerStillCurrent(tab, binding))
                 return true;
             tab.LastResult = result;
+            RememberBatch(ExecutionHistory.FromResult(result, DateTimeOffset.UtcNow));
             tab.Status = QueryOutcomeFormatter.DescribeStatus(result);
             var affected = QueryOutcomeFormatter.DescribeRowsAffected(result.RowsAffected);
             var elapsed = QueryOutcomeFormatter.DescribeClientElapsed(result.ClientElapsedMilliseconds);
@@ -104,6 +105,7 @@ public partial class MainWindow
             if (!OwnerStillCurrent(tab, binding))
                 return true;
             tab.Status = "Run failed";
+            RememberBatch(ExecutionHistory.FromBatch(sql, QueryCompletionKind.Failed, null, DateTimeOffset.UtcNow));
             if (ReferenceEquals(_active, tab))
             {
                 _lastError = ex.Message;
@@ -127,6 +129,18 @@ public partial class MainWindow
                 UpdateStatus();
         }
         return true;
+    }
+
+    void RememberBatch(ExecutionHistoryEntry entry)
+    {
+        try
+        {
+            AppServices.History.Append(entry);
+        }
+        catch (Exception)
+        {
+            // A history write must not change the query outcome the user just saw.
+        }
     }
 
     async void OnRefreshSubtree(object? sender, RoutedEventArgs e)

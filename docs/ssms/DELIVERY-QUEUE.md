@@ -36,11 +36,11 @@ Outside the sandbox, `AXIsProcessTrusted` is true for this agent process and `CG
 
 ## Where to start next
 
-CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/014, and CAP-040/054/060/071 are done-component. Next: CAP-081 (explicit warnings), CAP-046 (unsaved recovery), CAP-064 (execution history), CAP-091 (binary rendering). HA/BI remain gated-incomplete. Native Mac SQL/screenshots still open.
+CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/014, CAP-040/054/060/071, and CAP-081/046/064/091 are done-component. HA/BI remain gated-incomplete. Native Mac SQL/screenshots still open.
 
 ## Inventory
 
-191 inventory rows, plus the 4 integrator rows above (CSV trio + LIVE-WAVE done-component). CAP-122 is those CSV rows, not another importer. Inventory counts: alias 1, blocked 12, done-component 81, gated-incomplete 10, partial 22, ready 69.
+191 inventory rows, plus the 4 integrator rows above (CSV trio + LIVE-WAVE done-component). CAP-122 is those CSV rows, not another importer. Inventory counts: alias 1, blocked 12, done-component 85, gated-incomplete 10, partial 22, ready 65.
 
 | ID | Workstream | Task | Status | Blocker |
 |---|---|---|---|---|
@@ -89,7 +89,7 @@ CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/0
 | CAP-043 | Explorer | Object properties | ready | — |
 | CAP-044 | Editor | Multiple query tabs. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-045 | Editor | New/open/save/save as. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
-| CAP-046 | Editor | Unsaved document recovery | ready | — |
+| CAP-046 | Editor | Unsaved document recovery | done-component | Native recovery sheet unverified. |
 | CAP-047 | Editor | T-SQL syntax and semantics. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-048 | Editor | Autocomplete and IntelliSense | ready | — |
 | CAP-049 | Editor | Error annotations | ready | — |
@@ -107,7 +107,7 @@ CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/0
 | CAP-061 | Editor | Keyboard shortcuts. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-062 | Editor | Editor formatting | ready | — |
 | CAP-063 | Deploy,Editor | SQL project/source association | ready | — |
-| CAP-064 | Editor | Execution history and recall | ready | — |
+| CAP-064 | Editor | Execution history and recall | done-component | Native history window unverified. |
 | CAP-065 | BI | Multiple language modes when relevant | blocked | No approved language mode besides T-SQL. Blocks extra language modes only. |
 | CAP-066 | Engine | Execute user-authored T-SQL. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-067 | Engine | Execution progress and latency. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
@@ -124,7 +124,7 @@ CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/0
 | CAP-078 | Engine | Long-running operation status | ready | — |
 | CAP-079 | Engine | Query tabs during server restart | ready | — |
 | CAP-080 | Engine | Parameterised app-generated SQL. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
-| CAP-081 | Engine | Explicit user SQL warnings | ready | — |
+| CAP-081 | Engine | Explicit user SQL warnings | done-component | Live PRINT on SQL Server unverified. |
 | CAP-082 | Engine | Batch transaction state. Further scripting or design is CAP-059 only. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-083 | Results | Grid output. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-084 | Results | Results as text. Component present. | done-component | — |
@@ -134,7 +134,7 @@ CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/0
 | CAP-088 | Results | CSV export. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-089 | Results | JSON export. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-090 | Results | Large result paging/virtualization | ready | — |
-| CAP-091 | Results | Binary/varbinary rendering | ready | — |
+| CAP-091 | Results | Binary/varbinary rendering | done-component | Live varbinary on SQL Server unverified. |
 | CAP-092 | Results | Decimal numeric precision. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-093 | Results | datetime/datetimeoffset handling. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-094 | Results | Unicode/collation display. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
