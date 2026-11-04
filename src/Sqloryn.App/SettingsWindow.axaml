@@ -1,0 +1,93 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.SettingsWindow"
+        Title="Settings — SQLoryn"
+        Width="520" Height="520"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <!-- Every control here is either applied by MainWindow.ApplySettings / the results renderer, or shown as
+       read-only information. Nothing is exposed that does not take effect. -->
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Spacing="8">
+      <TextBlock Name="ErrorText" Classes="error" TextWrapping="Wrap" IsVisible="False" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,8,0,0">
+        <Button Content="Cancel" Click="OnCancel" />
+        <Button Content="Save" Classes="primary" Click="OnSave" IsDefault="True" />
+      </StackPanel>
+    </StackPanel>
+
+    <TabControl AutomationProperties.Name="Settings sections">
+      <TabItem Header="General">
+        <StackPanel Spacing="10" Margin="4,14,4,0">
+          <TextBlock Classes="caption" Text="APPEARANCE" />
+          <ComboBox Name="ThemeBox" HorizontalAlignment="Stretch" AutomationProperties.Name="Theme" />
+          <TextBlock Classes="caption" Text="SAFETY" Margin="0,8,0,0" />
+          <CheckBox Name="ConfirmBox" IsChecked="True" IsEnabled="False"
+                    Content="Confirm destructive operations" />
+          <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+                     Text="Always on and not configurable: destructive operations are never run without a preview and confirmation." />
+        </StackPanel>
+      </TabItem>
+
+      <TabItem Header="Editor">
+        <StackPanel Spacing="10" Margin="4,14,4,0">
+          <Grid ColumnDefinitions="160,*">
+            <TextBlock Text="Font size" VerticalAlignment="Center" />
+            <NumericUpDown Name="FontSizeBox" Grid.Column="1" Minimum="8" Maximum="48" Increment="1"
+                           FormatString="0" AutomationProperties.Name="Editor font size" />
+          </Grid>
+          <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+                     Text="Applies to every query editor as soon as you save." />
+        </StackPanel>
+      </TabItem>
+
+      <TabItem Header="Results">
+        <StackPanel Spacing="10" Margin="4,14,4,0">
+          <Grid ColumnDefinitions="160,*">
+            <TextBlock Text="Rows shown per result set" VerticalAlignment="Center" />
+            <NumericUpDown Name="MaxRowsBox" Grid.Column="1" Minimum="1" Maximum="5000" Increment="500"
+                           FormatString="0" AutomationProperties.Name="Maximum displayed rows" />
+          </Grid>
+          <TextBlock Name="RetentionText" Classes="muted" FontSize="11" TextWrapping="Wrap" />
+        </StackPanel>
+      </TabItem>
+
+      <TabItem Header="Connections">
+        <StackPanel Spacing="8" Margin="4,14,4,0">
+          <Grid ColumnDefinitions="180,*">
+            <TextBlock Text="Connect timeout (seconds)" VerticalAlignment="Center" />
+            <NumericUpDown Name="ConnectTimeoutBox" Grid.Column="1" Minimum="1" Maximum="120" Increment="1"
+                           FormatString="0" AutomationProperties.Name="Connect timeout seconds" />
+          </Grid>
+          <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+                     Text="1–120, default 15. Used the next time you connect. Open sessions keep the timeout they connected with. This is the client connect limit, not a server setting." />
+          <TextBlock TextWrapping="Wrap" Margin="0,8,0,0" Text="These rules stay fixed:" />
+          <TextBlock Classes="muted" TextWrapping="Wrap" Text="•  Encryption is always required." />
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="•  Trusting a server certificate is a per-connection, lab-only choice made in the Connect dialog." />
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="•  Passwords stay in memory unless you choose Remember (macOS Keychain)." />
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="•  Saved profiles keep non-secret settings only." />
+        </StackPanel>
+      </TabItem>
+
+      <TabItem Header="Privacy">
+        <StackPanel Spacing="8" Margin="4,14,4,0">
+          <TextBlock TextWrapping="Wrap"
+                     Text="SQLoryn has no telemetry, analytics, AI features or cloud services. Nothing is sent anywhere except your connections to the SQL Servers you choose." />
+          <TextBlock Classes="caption" Text="SETTINGS FILE" Margin="0,8,0,0" />
+          <TextBlock Name="PathText" Classes="muted mono" FontSize="11" TextWrapping="Wrap" />
+          <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
+                     Text="Holds only the preferences on these tabs and window layout. It never contains passwords or query text." />
+          <TextBlock Classes="caption" Text="ON THIS MAC" Margin="0,8,0,0" />
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Dirty query tabs are copied under Application Support/SQLoryn/recovery so a relaunch can offer them back. Credential-like text is removed from that copy. File > Recover Unsaved Scripts… restores it, discards it, or leaves it. Closing that sheet does not delete it." />
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Query > Execution History keeps a short list of recent batch text, the outcome and the client elapsed time. Result rows are not stored. Opening an entry puts the SQL in a new tab and does not run it." />
+        </StackPanel>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</Window>

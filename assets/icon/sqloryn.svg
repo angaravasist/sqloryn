@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0B1F2A"/>
+      <stop offset="100%" stop-color="#143D4A"/>
+    </linearGradient>
+    <linearGradient id="disk" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3DDBC8"/>
+      <stop offset="100%" stop-color="#1FA8A0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="220" fill="url(#bg)"/>
+  <!-- stacked cylinder -->
+  <ellipse cx="512" cy="340" rx="260" ry="90" fill="url(#disk)" opacity="0.95"/>
+  <rect x="252" y="340" width="520" height="160" fill="#1FA8A0"/>
+  <ellipse cx="512" cy="500" rx="260" ry="90" fill="#14857E"/>
+  <ellipse cx="512" cy="500" rx="260" ry="90" fill="none" stroke="#7EF0E0" stroke-width="10" opacity="0.5"/>
+  <!-- orbit ring -->
+  <ellipse cx="512" cy="560" rx="340" ry="220" fill="none" stroke="#7EF0E0" stroke-width="28" opacity="0.85"
+           transform="rotate(-18 512 560)"/>
+  <!-- accent node -->
+  <circle cx="780" cy="430" r="42" fill="#F2C14E"/>
+</svg>

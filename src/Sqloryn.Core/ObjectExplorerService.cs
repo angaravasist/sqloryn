@@ -11,9 +11,61 @@ public static class ObjectExplorerService
         Schema,
         Table,
         View,
+        Procedure,
+        Function,
+        Key,
+        Index,
         Column,
-        Placeholder
+        Placeholder,
+        ForeignKey,
+        Constraint,
+        Trigger,
+        Sequence,
+        Synonym
     }
+
+    /// <summary>A static folder under a schema. <see cref="FolderKind"/>/<see cref="ChildKind"/> are the UI tree kinds.</summary>
+    public sealed record SchemaFolder(string Title, string FolderKind, string ChildKind);
+
+    /// <summary>Folders shown under every schema, in display order. Their contents load only when expanded.</summary>
+    public static IReadOnlyList<SchemaFolder> SchemaFolders { get; } =
+    [
+        new("Tables", "tables", "table"),
+        new("Views", "views", "view"),
+        new("Keys", "keys", "key"),
+        new("Indexes", "indexes", "index"),
+        new("Programmability · Procedures", "procedures", "procedure"),
+        new("Programmability · Functions", "functions", "function"),
+        new("Sequences", "sequences", "sequence"),
+        new("Synonyms", "synonyms", "synonym")
+    ];
+
+    /// <summary>Folders shown directly under a database, before schemas. Contents load only when expanded.</summary>
+    public static IReadOnlyList<SchemaFolder> DatabaseFolders { get; } =
+    [
+        new("User-defined types", "types", "usertype")
+    ];
+
+    static readonly SchemaFolder[] TableFolderList =
+    [
+        new("Columns", "columns", "column"),
+        new("Foreign Keys", "foreignkeys", "foreignkey"),
+        new("Constraints (check · default)", "constraints", "constraint"),
+        new("Triggers", "triggers", "trigger")
+    ];
+
+    static readonly SchemaFolder[] ViewFolderList = [TableFolderList[0], TableFolderList[3]];
+
+    /// <summary>
+    /// Folders shown under a table (columns, foreign keys, constraints, triggers) or view (columns, triggers).
+    /// Contents load only when a folder expands. <paramref name="objectKind"/> is the UI tree kind: "table" or "view".
+    /// </summary>
+    public static IReadOnlyList<SchemaFolder> TableFolders(string objectKind) => objectKind switch
+    {
+        "table" => TableFolderList,
+        "view" => ViewFolderList,
+        _ => throw new ArgumentException("Only tables and views have object folders.", nameof(objectKind))
+    };
 
     public sealed class Node
     {

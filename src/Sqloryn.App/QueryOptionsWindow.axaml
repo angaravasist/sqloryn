@@ -1,0 +1,30 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.QueryOptionsWindow"
+        Title="Session ANSI Settings"
+        Width="480" Height="460"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button Content="Cancel" Click="OnCancel" IsCancel="True" />
+      <Button Content="Apply" Classes="primary" Click="OnApply" IsDefault="True"
+              AutomationProperties.Name="Apply session ANSI settings" />
+    </StackPanel>
+    <StackPanel Spacing="8">
+      <TextBlock Name="ScopeText" Classes="muted" TextWrapping="Wrap" />
+      <CheckBox Name="AnsiNullsBox" Content="ANSI_NULLS ON" IsChecked="True" IsCheckedChanged="OnOptionChanged"
+                AutomationProperties.Name="ANSI_NULLS" />
+      <CheckBox Name="AnsiPaddingBox" Content="ANSI_PADDING ON" IsChecked="True" IsCheckedChanged="OnOptionChanged"
+                AutomationProperties.Name="ANSI_PADDING" />
+      <CheckBox Name="QuotedIdentifierBox" Content="QUOTED_IDENTIFIER ON" IsChecked="True" IsCheckedChanged="OnOptionChanged"
+                AutomationProperties.Name="QUOTED_IDENTIFIER" />
+      <CheckBox Name="ArithAbortBox" Content="ARITHABORT ON" IsChecked="True" IsCheckedChanged="OnOptionChanged"
+                AutomationProperties.Name="ARITHABORT" />
+      <TextBlock Classes="caption" Text="PREVIEW" />
+      <TextBox Name="PreviewBox" Classes="mono" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" Height="168"
+               AutomationProperties.Name="Session ANSI preview" />
+    </StackPanel>
+  </DockPanel>
+</Window>

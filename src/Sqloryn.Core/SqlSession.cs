@@ -5,7 +5,7 @@ using Microsoft.Data.SqlClient;
 namespace Sqloryn.Core;
 
 /// <summary>Owns one SQL connection for a workspace tab. No pooling, no automatic replay.</summary>
-public sealed class SqlSession : IAsyncDisposable
+public sealed class SqlSession : IAsyncDisposable, IDatabaseSession
 {
     readonly SemaphoreSlim _gate = new(1, 1);
     SqlConnection? _connection;
@@ -22,6 +22,8 @@ public sealed class SqlSession : IAsyncDisposable
     public string? ServerDisplay { get; private set; }
     public string? Database { get; private set; }
     public string? ServerVersion { get; private set; }
+    /// <summary>Version-only until <see cref="ProbeCapabilitiesAsync"/> runs; permissions and services stay unknown, never assumed.</summary>
+    public ConnectionCapabilities Capabilities { get; private set; } = ConnectionCapabilities.Unprobed(null);
     public bool HasActiveCommand => Volatile.Read(ref _inFlight) > 0;
     /// <summary>True when the last batch's target could not be verified; further execution is blocked.</summary>
     public bool TargetUnknown => _targetUnknown;
@@ -47,6 +49,7 @@ public sealed class SqlSession : IAsyncDisposable
                 if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                     throw new InvalidOperationException("Server identity query returned no rows.");
                 ServerVersion = reader.GetString(0);
+                Capabilities = ConnectionCapabilities.Unprobed(ServerVersion);
                 Database = reader.IsDBNull(1) ? options.Database : reader.GetString(1);
                 ServerDisplay = options.DisplayTarget;
                 _options = options;
@@ -63,6 +66,72 @@ public sealed class SqlSession : IAsyncDisposable
         finally
         {
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Same server and credentials as this connected session, targeting <paramref name="database"/>.
+    /// In-memory only; used to open a sibling tab session. Null when not connected.
+    /// </summary>
+    public ConnectionOptions? CreateSiblingOptions(string database)
+    {
+        var o = IsConnected ? _options : null;
+        if (o is null)
+            return null;
+        return new ConnectionOptions
+        {
+            Server = o.Server,
+            Port = o.Port,
+            UserId = o.UserId,
+            Password = o.Password,
+            Database = database,
+            Encrypt = o.Encrypt,
+            TrustServerCertificate = o.TrustServerCertificate,
+            ServerCertificatePath = o.ServerCertificatePath,
+            ConnectTimeoutSeconds = o.ConnectTimeoutSeconds,
+            CommandTimeoutSeconds = o.CommandTimeoutSeconds
+        };
+    }
+
+    /// <summary>
+    /// Optional, read-only capability probe on this session's connection. Permission denial or any probe failure
+    /// leaves that capability unknown and never disconnects or faults the session. Only caller cancellation throws.
+    /// Skipped (current capabilities returned) while a command is running or the session is not connected.
+    /// </summary>
+    public async Task<ConnectionCapabilities> ProbeCapabilitiesAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_connection is not { State: ConnectionState.Open } || _options is null || HasActiveCommand)
+                return Capabilities;
+            var runner = new SqlCapabilityRunner(_connection, Math.Min(_options.CommandTimeoutSeconds, 15));
+            Capabilities = await ConnectionCapabilities.ProbeAsync(runner, ServerVersion, cancellationToken).ConfigureAwait(false);
+            return Capabilities;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    sealed class SqlCapabilityRunner(SqlConnection connection, int timeoutSeconds) : ICapabilityQueryRunner
+    {
+        public async Task<IReadOnlyList<object?[]>> QueryAsync(string sql, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = timeoutSeconds;
+            var rows = new List<object?[]>();
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (rows.Count < 4 && await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var row = new object?[reader.FieldCount];
+                reader.GetValues(row);
+                rows.Add(row);
+            }
+            return rows;
         }
     }
 
@@ -105,8 +174,10 @@ public sealed class SqlSession : IAsyncDisposable
             ServerDisplay = null;
             Database = null;
             ServerVersion = null;
+            Capabilities = ConnectionCapabilities.Unprobed(null);
             _options = null;
-            _targetUnknown = false;
+            // Keep _targetUnknown: an unconfirmed SHOWPLAN reset (or other target-unknown
+            // state) must not be cleared by disconnect alone. Only ConnectAsync recovers.
         }
         finally
         {
@@ -121,14 +192,109 @@ public sealed class SqlSession : IAsyncDisposable
         CancelInFlight_NoThrow();
     }
 
-    public async Task<QueryResult> ExecuteAsync(string sql, CancellationToken cancellationToken = default)
+    public Task<QueryResult> ExecuteAsync(string sql, CancellationToken cancellationToken = default)
+        => ExecuteAsync(sql, null, cancellationToken);
+
+    /// <summary>
+    /// Executes <paramref name="sql"/> (the whole document or a selection of it). When it is a selection, pass
+    /// <paramref name="origin"/> so a <see cref="SqlScriptRejectedException"/> reports document line/offset.
+    /// </summary>
+    public async Task<QueryResult> ExecuteAsync(
+        string sql, ScriptExecutionOrigin? origin, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (string.IsNullOrWhiteSpace(sql))
             throw new ArgumentException("SQL text is required.");
-        if (LooksLikeGoBatch(sql))
-            throw new InvalidOperationException("GO batch separators are not supported in Developer Preview 0. Run a single batch.");
 
+        // Preflight the ENTIRE selection before batch 1 can run. Unsupported SQLCMD directives, malformed GO
+        // lines and out-of-bounds repeat counts throw SqlScriptRejectedException with line/offset; nothing executes.
+        SqlScript script;
+        try
+        {
+            script = GoBatchSplitter.Parse(sql);
+        }
+        catch (SqlScriptRejectedException ex) when (origin is { } o)
+        {
+            throw ex.WithOrigin(o);
+        }
+        if (!script.HasSeparator)
+            return await ExecuteBatchAsync(sql, null, cancellationToken).ConfigureAwait(false);
+
+        var batches = new List<string>(script.ExpandedBatchCount);
+        foreach (var batch in script.Batches)
+            for (var r = 0; r < batch.RepeatCount; r++)
+                batches.Add(batch.Text);
+        if (batches.Count == 0)
+            throw new ArgumentException("SQL text is required.");
+        if (batches.Count == 1)
+            return await ExecuteBatchAsync(batches[0], null, cancellationToken).ConfigureAwait(false);
+
+        var cancelGenAtStart = Volatile.Read(ref _cancelGeneration);
+        var aggregate = new BatchAggregate();
+        for (var i = 0; i < batches.Count; i++)
+        {
+            if (i > 0)
+            {
+                var stop = PreBatchStop(cancellationToken, cancelGenAtStart);
+                if (stop is not null)
+                {
+                    aggregate.StopBeforeBatch(stop.Value, i + 1, batches.Count, Database);
+                    break;
+                }
+            }
+
+            QueryResult result;
+            try
+            {
+                result = await ExecuteBatchAsync(batches[i], i == 0 ? null : cancelGenAtStart, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (InvalidOperationException ex) when (i > 0)
+            {
+                aggregate.FailBeforeBatch(SanitizeMessage(ex.Message), i + 1, batches.Count, Database);
+                break;
+            }
+
+            aggregate.Add(result, i + 1, batches.Count);
+            if (result.Completion != QueryCompletionKind.Succeeded ||
+                result.TargetConfidence == TargetConfidence.Unknown)
+            {
+                aggregate.NoteSkipped(i + 1, batches.Count);
+                break;
+            }
+        }
+
+        return aggregate.Build(sql, ServerDisplay ?? "", Database ?? "");
+    }
+
+    StopCause? PreBatchStop(CancellationToken cancellationToken, int cancelGenAtStart)
+    {
+        if (_disconnectRequested || !IsConnected)
+            return StopCause.Disconnect;
+        if (cancellationToken.IsCancellationRequested || Volatile.Read(ref _cancelGeneration) != cancelGenAtStart)
+            return StopCause.UserCancel;
+        return null;
+    }
+
+    /// <summary>Test seam: replaces provider execution of one batch. Never set in production code.</summary>
+    internal Func<string, int?, CancellationToken, Task<QueryResult>>? BatchExecutorForTests { get; init; }
+
+    Task<QueryResult> ExecuteBatchAsync(string sql, int? cancelGenAtStartOverride, CancellationToken cancellationToken)
+    {
+        // Checked before the test seam too, so an unknown target can never reach any executor.
+        if (_targetUnknown)
+            throw new InvalidOperationException(
+                "Database target is unknown after a prior batch. Revalidate or reconnect before running SQL. Prior SQL is never replayed.");
+        return ExecuteBatchDispatchAsync(sql, cancelGenAtStartOverride, cancellationToken);
+    }
+
+    Task<QueryResult> ExecuteBatchDispatchAsync(string sql, int? cancelGenAtStartOverride, CancellationToken cancellationToken)
+        => BatchExecutorForTests is { } hook
+            ? hook(sql, cancelGenAtStartOverride, cancellationToken)
+            : ExecuteBatchCoreAsync(sql, cancelGenAtStartOverride, cancellationToken);
+
+    async Task<QueryResult> ExecuteBatchCoreAsync(string sql, int? cancelGenAtStartOverride, CancellationToken cancellationToken)
+    {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         SqlCommand? command = null;
         CancellationTokenSource? linked = null;
@@ -179,7 +345,7 @@ public sealed class SqlSession : IAsyncDisposable
 
             var budget = new ResultBudget();
             int? transactionState = null;
-            var cancelGenAtStart = Volatile.Read(ref _cancelGeneration);
+            var cancelGenAtStart = cancelGenAtStartOverride ?? Volatile.Read(ref _cancelGeneration);
             var obs = new BatchObserver.Observation();
             var sqlPhaseComplete = false;
             var drainDeadline = TimeSpan.FromSeconds(Math.Clamp(_options.CommandTimeoutSeconds, 5, 60));
@@ -192,6 +358,10 @@ public sealed class SqlSession : IAsyncDisposable
                 DrainDeadlineRequested: timers.DrainDeadlineFired,
                 Timers: timers);
 
+            // Client stopwatch around this batch's execute only. Target verification below is not included,
+            // and the number is not a server statistic.
+            var executeTimer = System.Diagnostics.Stopwatch.StartNew();
+            int? providerRows = null;
             try
             {
                 DbDataReader? reader = null;
@@ -219,9 +389,17 @@ public sealed class SqlSession : IAsyncDisposable
                 finally
                 {
                     // Dispose the active reader before same-session verification / cancel probe.
-                    if (reader is not null)
+                    // SqlDataReader.RecordsAffected is valid after close and is the provider count, not a grid tally.
+                    if (reader is SqlDataReader sqlReader)
+                    {
+                        await sqlReader.DisposeAsync().ConfigureAwait(false);
+                        providerRows = ProviderRowsAffected.FromRecordsAffected(sqlReader.RecordsAffected);
+                    }
+                    else if (reader is not null)
                         await reader.DisposeAsync().ConfigureAwait(false);
                 }
+
+                executeTimer.Stop();
 
                 // Only refine an already-recorded UserCancel; never overwrite provider/watchdog timeout.
                 if (obs.StopCause == StopCause.UserCancel)
@@ -242,6 +420,10 @@ public sealed class SqlSession : IAsyncDisposable
             }
 
             AfterObserve:
+            if (executeTimer.IsRunning)
+                executeTimer.Stop();
+            obs.ClientElapsedMilliseconds = executeTimer.ElapsedMilliseconds;
+            obs.RowsAffected = providerRows;
             foreach (var msg in messages)
                 obs.Messages.Insert(0, msg);
 
@@ -357,7 +539,9 @@ public sealed class SqlSession : IAsyncDisposable
                 TransactionState = sqlOutcome.TransactionState,
                 TargetConfidence = TargetConfidence.Known,
                 RetentionLimitReached = sqlOutcome.RetentionLimitReached,
-                StopCause = sqlOutcome.StopCause
+                StopCause = sqlOutcome.StopCause,
+                RowsAffected = sqlOutcome.RowsAffected,
+                ClientElapsedMilliseconds = sqlOutcome.ClientElapsedMilliseconds
             };
         }
 
@@ -377,7 +561,9 @@ public sealed class SqlSession : IAsyncDisposable
             TransactionState = sqlOutcome.TransactionState,
             TargetConfidence = TargetConfidence.Unknown,
             RetentionLimitReached = sqlOutcome.RetentionLimitReached,
-            StopCause = sqlOutcome.StopCause
+            StopCause = sqlOutcome.StopCause,
+            RowsAffected = sqlOutcome.RowsAffected,
+            ClientElapsedMilliseconds = sqlOutcome.ClientElapsedMilliseconds
         };
     }
 
@@ -536,6 +722,757 @@ public sealed class SqlSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Runs one parameterised statement on this session's connection and returns the first result set with raw values.
+    /// Used by catalog browsing, design and keyed-edit features. Parameter names must be of the form @name.
+    /// Rows beyond <paramref name="maxRows"/> are dropped and <see cref="RawRows.Truncated"/> is set.
+    /// Reads are sequential and bounded by <paramref name="budget"/> (default <see cref="RawReadBudget.Default"/>):
+    /// a string/binary cell over the budget is returned as <see cref="RawCellOmitted"/>, never as a shortened value.
+    /// </summary>
+    public async Task<RawRows> QueryRawAsync(
+        string sql,
+        IEnumerable<EditParameter>? parameters = null,
+        int maxRows = 5_000,
+        CancellationToken cancellationToken = default,
+        RawReadBudget? budget = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (string.IsNullOrWhiteSpace(sql))
+            throw new ArgumentException("SQL text is required.");
+        if (maxRows < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxRows));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureConnected();
+            await using var cmd = _connection!.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = _options!.CommandTimeoutSeconds;
+            AddParameters(cmd, parameters);
+
+            await using var reader = await cmd.ExecuteReaderAsync(
+                System.Data.CommandBehavior.SequentialAccess, cancellationToken).ConfigureAwait(false);
+            return await RawRowReader.ReadAsync(reader, maxRows, budget ?? RawReadBudget.Default, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Runs one <see cref="AgentCommand"/> (start or delete an Agent job). The statement text is a fixed constant inside the
+    /// command and the job id is bound as a parameter; callers must have obtained confirmation (see <see cref="AgentActions"/>).
+    /// A cancel or timeout here means the server's outcome is unknown, not that nothing happened.
+    /// </summary>
+    public async Task ExecuteAgentCommandAsync(AgentCommand command, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(command);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureConnected();
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+            await using var cmd = _connection!.CreateCommand();
+            cmd.CommandText = command.Sql;
+            cmd.CommandTimeout = _options!.CommandTimeoutSeconds;
+            AddParameters(cmd, command.Parameters);
+            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    static void AddParameters(SqlCommand cmd, IEnumerable<EditParameter>? parameters)
+    {
+        if (parameters is null)
+            return;
+        foreach (var p in parameters)
+        {
+            if (string.IsNullOrEmpty(p.Name) || p.Name[0] != '@')
+                throw new ArgumentException("Parameter names must start with '@'.");
+            if (RawCellOmitted.IsOmitted(p.Value))
+                throw new ArgumentException($"Parameter {p.Name} holds a value that was not fully loaded and cannot be written back.");
+            cmd.Parameters.AddWithValue(p.Name, p.Value ?? DBNull.Value);
+        }
+    }
+
+    /// <summary>
+    /// Applies <paramref name="commands"/> (from <see cref="EditRowsSql.BuildUpdate"/>/<see cref="EditRowsSql.BuildDelete"/>)
+    /// in ONE owned SqlTransaction. Every write's row count is validated before commit; any conflict, wrong count or
+    /// error rolls the whole set back. Refuses to run when the session already has an open transaction.
+    /// If the outcome is <see cref="EditBatchOutcome.OutcomeUnknown"/> the connection is closed so no transaction or lock survives.
+    /// </summary>
+    public async Task<EditBatchResult> ApplyEditsAsync(
+        IReadOnlyList<EditCommand> commands, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(commands);
+        if (commands.Count == 0)
+            throw new ArgumentException("No edits to apply.", nameof(commands));
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? linked = null;
+        try
+        {
+            EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before saving edits.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _activeCts = linked;
+            Interlocked.Increment(ref _inFlight);
+
+            var connection = _connection!;
+            var timeout = _options!.CommandTimeoutSeconds;
+
+            await using (var state = connection.CreateCommand())
+            {
+                state.CommandText = "SELECT CONVERT(int, XACT_STATE());";
+                state.CommandTimeout = timeout;
+                var xact = (int)(await state.ExecuteScalarAsync(linked.Token).ConfigureAwait(false) ?? 0);
+                if (xact != 0)
+                    return new EditBatchResult(EditBatchOutcome.RolledBackError, 0, null,
+                        "A transaction is already open on this session; refusing to save edits inside it. Nothing was written.");
+            }
+
+            var factory = new SqlEditTransactionFactory(this, connection, timeout);
+            EditBatchResult result;
+            try
+            {
+                result = await EditRowsBatch.ApplyAsync(factory, commands, linked.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not ArgumentException)
+            {
+                // Anything escaping the batch after a transaction began leaves its state unknowable: force the reload path.
+                result = new EditBatchResult(EditBatchOutcome.OutcomeUnknown, 0, null,
+                    $"The edit batch ended unexpectedly ({ex.Message.Replace('\r', ' ').Replace('\n', ' ')}). The edits may or may not have been saved.");
+            }
+
+            // OutcomeUnknown always forces the reload path, regardless of how cleanup/dispose behaved.
+            if (result.Outcome == EditBatchOutcome.OutcomeUnknown)
+            {
+                // Closing the connection ends any transaction the server may still hold for us.
+                _targetUnknown = true;
+                await DisposeConnectionAsync().ConfigureAwait(false);
+                result = result with { Message = result.Message + " The session was disconnected; reconnect and reload." };
+            }
+            return result;
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCts, linked))
+                _activeCts = null;
+            _activeSqlCommand = null;
+            linked?.Dispose();
+            if (linked is not null)
+                Interlocked.Decrement(ref _inFlight);
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Reads the catalog fingerprint of <paramref name="table"/> (see <see cref="TableDesignFingerprint"/>). Capture it when a
+    /// design is loaded and pass it to <see cref="ApplyTableDesignAsync"/>. A table that does not exist yields
+    /// <see cref="TableDesignFingerprint.Absent"/>.
+    /// </summary>
+    public async Task<string> ReadTableFingerprintAsync(TableRef table, CancellationToken cancellationToken = default)
+    {
+        var query = TableDesignFingerprint.BuildQuery(table);
+        var rows = await QueryRawAsync(query.CommandText, query.Parameters, 5_000, cancellationToken).ConfigureAwait(false);
+        if (rows.Truncated || rows.HasOmittedCells)
+            throw new InvalidOperationException("The table definition was too large to fingerprint safely.");
+        return TableDesignFingerprint.FromRows(rows);
+    }
+
+    /// <summary>
+    /// Applies reviewed DDL (<see cref="TableDesignPreview.Statements"/>) in ONE owned SqlTransaction, after re-reading the
+    /// table fingerprint inside it and refusing when it differs from <paramref name="expectedFingerprint"/>. Any failing
+    /// statement rolls the whole set back. Mixed/non-transactional batches are refused before anything runs. Refuses to run
+    /// when the session already has an open transaction. If the outcome is
+    /// <see cref="TableDesignApplyOutcome.OutcomeUnknown"/> the connection is closed so no transaction or lock survives.
+    /// </summary>
+    public async Task<TableDesignApplyResult> ApplyTableDesignAsync(
+        TableRef table,
+        IReadOnlyList<TableDesignStatement> statements,
+        string expectedFingerprint,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(statements);
+        if (statements.Count == 0)
+            throw new ArgumentException("No statements to apply.", nameof(statements));
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? linked = null;
+        try
+        {
+            EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before changing the schema.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _activeCts = linked;
+            Interlocked.Increment(ref _inFlight);
+
+            var connection = _connection!;
+            var timeout = _options!.CommandTimeoutSeconds;
+
+            await using (var state = connection.CreateCommand())
+            {
+                state.CommandText = "SELECT CONVERT(int, XACT_STATE());";
+                state.CommandTimeout = timeout;
+                var xact = (int)(await state.ExecuteScalarAsync(linked.Token).ConfigureAwait(false) ?? 0);
+                if (xact != 0)
+                    return new TableDesignApplyResult(TableDesignApplyOutcome.RolledBackError, 0, null,
+                        "A transaction is already open on this session; refusing to change the schema inside it. Nothing was changed.");
+            }
+
+            var factory = new SqlSchemaTransactionFactory(this, connection, timeout);
+            TableDesignApplyResult result;
+            try
+            {
+                result = await TableDesignApply.ApplyAsync(factory, table, statements, expectedFingerprint, linked.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not ArgumentException)
+            {
+                result = new TableDesignApplyResult(TableDesignApplyOutcome.OutcomeUnknown, 0, null,
+                    $"The schema change ended unexpectedly ({ex.Message.Replace('\r', ' ').Replace('\n', ' ')}). It may or may not have been applied.");
+            }
+
+            if (result.Outcome == TableDesignApplyOutcome.OutcomeUnknown)
+            {
+                // Closing the connection ends any transaction the server may still hold for us.
+                _targetUnknown = true;
+                await DisposeConnectionAsync().ConfigureAwait(false);
+                result = result with { Message = result.Message + " The session was disconnected; reconnect and reload." };
+            }
+            return result;
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCts, linked))
+                _activeCts = null;
+            _activeSqlCommand = null;
+            linked?.Dispose();
+            if (linked is not null)
+                Interlocked.Decrement(ref _inFlight);
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Applies a reviewed <see cref="PermissionChangePreview"/> (GRANT/DENY/REVOKE) in ONE owned SqlTransaction. Any failing
+    /// statement rolls the whole set back; a server refusal (this login may not change the permission) is reported as
+    /// <see cref="PermissionApplyOutcome.RefusedDenied"/> with nothing changed. Refuses to run when the session already has an
+    /// open transaction. If the outcome is <see cref="PermissionApplyOutcome.OutcomeUnknown"/> the connection is closed so no
+    /// transaction or lock survives. Passwords and other secrets are never part of a preview and never reach this method.
+    /// </summary>
+    public async Task<PermissionApplyResult> ApplyPermissionChangeAsync(
+        PermissionChangePreview preview, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(preview);
+        if (!preview.HasChanges)
+            throw new ArgumentException("The preview has no statements to apply.", nameof(preview));
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? linked = null;
+        try
+        {
+            EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before changing permissions.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _activeCts = linked;
+            Interlocked.Increment(ref _inFlight);
+
+            var connection = _connection!;
+            var timeout = _options!.CommandTimeoutSeconds;
+
+            await using (var state = connection.CreateCommand())
+            {
+                state.CommandText = "SELECT CONVERT(int, XACT_STATE());";
+                state.CommandTimeout = timeout;
+                var xact = (int)(await state.ExecuteScalarAsync(linked.Token).ConfigureAwait(false) ?? 0);
+                if (xact != 0)
+                    return new PermissionApplyResult(PermissionApplyOutcome.RolledBackError, 0, null,
+                        "A transaction is already open on this session; refusing to change permissions inside it. Nothing was changed.");
+            }
+
+            var factory = new SqlPermissionTransactionFactory(this, connection, timeout);
+            PermissionApplyResult result;
+            try
+            {
+                result = await PermissionChangeApply.ApplyAsync(factory, preview, linked.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not ArgumentException)
+            {
+                result = new PermissionApplyResult(PermissionApplyOutcome.OutcomeUnknown, 0, null,
+                    $"The permission change ended unexpectedly ({SanitizeMessage(DiagnosticsRedactor.Redact(ex.Message))}). It may or may not have been applied.");
+            }
+
+            if (result.Outcome == PermissionApplyOutcome.OutcomeUnknown)
+            {
+                // Closing the connection ends any transaction the server may still hold for us.
+                _targetUnknown = true;
+                await DisposeConnectionAsync().ConfigureAwait(false);
+                result = result with { Message = result.Message + " The session was disconnected; reconnect and reload." };
+            }
+            return result;
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCts, linked))
+                _activeCts = null;
+            _activeSqlCommand = null;
+            linked?.Dispose();
+            if (linked is not null)
+                Interlocked.Decrement(ref _inFlight);
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Applies a reviewed flat-file import (<see cref="CsvImportPlan"/>) in ONE owned SqlTransaction after the whole file
+    /// validated cleanly: optional CREATE TABLE or DELETE, then parameterised INSERT batches, then commit. Any failure,
+    /// duplicate key or cancel (<see cref="RequestCancel"/> or <paramref name="cancellationToken"/>) rolls everything back.
+    /// Refuses to run when the session already has an open transaction. If the outcome is
+    /// <see cref="CsvImportOutcome.OutcomeUnknown"/> the connection is closed so no transaction or lock survives.
+    /// </summary>
+    public async Task<CsvImportResult> ApplyCsvImportAsync(
+        CsvImportPlan plan,
+        CsvImportSource source,
+        IProgress<long>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(source);
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? linked = null;
+        try
+        {
+            EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before importing.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _activeCts = linked;
+            Interlocked.Increment(ref _inFlight);
+
+            var connection = _connection!;
+            var timeout = _options!.CommandTimeoutSeconds;
+
+            await using (var state = connection.CreateCommand())
+            {
+                state.CommandText = "SELECT CONVERT(int, XACT_STATE());";
+                state.CommandTimeout = timeout;
+                var xact = (int)(await state.ExecuteScalarAsync(linked.Token).ConfigureAwait(false) ?? 0);
+                if (xact != 0)
+                    return new CsvImportResult(CsvImportOutcome.RolledBackError, 0, 0, 0, [],
+                        "A transaction is already open on this session; refusing to import inside it. Nothing was written.");
+            }
+
+            var factory = new SqlCsvImportTransactionFactory(this, connection, timeout);
+            CsvImportResult result;
+            try
+            {
+                result = await CsvImportApply.ApplyAsync(factory, plan, source, linked.Token, progress).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not ArgumentException)
+            {
+                result = new CsvImportResult(CsvImportOutcome.OutcomeUnknown, 0, 0, 0, [],
+                    $"The import ended unexpectedly ({ex.Message.Replace('\r', ' ').Replace('\n', ' ')}). It may or may not have been applied.");
+            }
+
+            if (result.Outcome == CsvImportOutcome.OutcomeUnknown)
+            {
+                // Closing the connection ends any transaction the server may still hold for us.
+                _targetUnknown = true;
+                await DisposeConnectionAsync().ConfigureAwait(false);
+                result = result with { Message = result.Message + " The session was disconnected; reconnect and reload." };
+            }
+            return result;
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCts, linked))
+                _activeCts = null;
+            _activeSqlCommand = null;
+            linked?.Dispose();
+            if (linked is not null)
+                Interlocked.Decrement(ref _inFlight);
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Test seam: supplies the plan command runner instead of the live connection. Never set in production code.</summary>
+    internal Func<IPlanCommandRunner>? PlanRunnerForTests { get; init; }
+
+    /// <summary>
+    /// Estimated execution plan for <paramref name="sql"/> via SET SHOWPLAN_XML. The SQL is delivered to the server only after
+    /// SHOWPLAN_XML ON succeeded, so it is compiled but never executed; this method never calls <see cref="ExecuteAsync"/>.
+    /// If SHOWPLAN_XML cannot be switched OFF again the connection is closed so nothing runs in SHOWPLAN mode.
+    /// </summary>
+    public async Task<EstimatedPlanResult> EstimatePlanAsync(string sql, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (string.IsNullOrWhiteSpace(sql))
+            throw new ArgumentException("SQL text is required.");
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? linked = null;
+        var counted = false;
+        try
+        {
+            if (PlanRunnerForTests is null)
+                EnsureConnected();
+            if (_targetUnknown)
+                throw new InvalidOperationException(
+                    "Database target is unknown after a prior batch. Revalidate or reconnect before estimating a plan.");
+            if (Volatile.Read(ref _inFlight) > 0)
+                throw new InvalidOperationException("A command is already running on this session.");
+
+            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _activeCts = linked;
+            Interlocked.Increment(ref _inFlight);
+            counted = true;
+
+            var runner = PlanRunnerForTests?.Invoke()
+                         ?? new SqlPlanCommandRunner(this, _connection!, _options!.CommandTimeoutSeconds);
+            var result = await EstimatedPlanService.EstimateAsync(runner, sql, linked.Token).ConfigureAwait(false);
+            if (result.SessionTainted)
+            {
+                // SHOWPLAN state is unconfirmed: drop the connection and refuse all SQL until ConnectAsync.
+                _targetUnknown = true;
+                await DisposeConnectionAsync().ConfigureAwait(false);
+            }
+            return result;
+        }
+        finally
+        {
+            if (ReferenceEquals(_activeCts, linked))
+                _activeCts = null;
+            _activeSqlCommand = null;
+            linked?.Dispose();
+            if (counted)
+                Interlocked.Decrement(ref _inFlight);
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Real runner. Refuses to submit user SQL unless its own SET SHOWPLAN_XML ON returned successfully, and forgets that
+    /// state as soon as OFF is attempted.
+    /// </summary>
+    sealed class SqlPlanCommandRunner(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds) : IPlanCommandRunner
+    {
+        bool _showplanOn;
+        // Characters read across every batch of this runner (one runner per estimate).
+        long _totalCharacters;
+
+        public async Task SetShowplanXmlAsync(bool on, CancellationToken cancellationToken)
+        {
+            if (!on)
+                _showplanOn = false;
+            await using var cmd = connection.CreateCommand();
+            // A control statement must be alone in its batch.
+            cmd.CommandText = on ? "SET SHOWPLAN_XML ON;" : "SET SHOWPLAN_XML OFF;";
+            cmd.CommandTimeout = on ? commandTimeoutSeconds : Math.Min(commandTimeoutSeconds, 15);
+            cmd.CommandType = CommandType.Text;
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                _showplanOn = on;
+            }
+            catch (SqlException ex)
+            {
+                throw new PlanCommandException(ex.Number, SanitizeMessage(ex.Message), ex);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public async Task<IReadOnlyList<string>> RunBatchAsync(string batch, CancellationToken cancellationToken)
+        {
+            if (!_showplanOn)
+                throw new InvalidOperationException("SHOWPLAN_XML is not confirmed ON; refusing to submit SQL.");
+            var plans = new List<string>();
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = batch;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                // SequentialAccess + chunked GetChars: a plan is never materialised past its budget (no GetValue).
+                await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken)
+                    .ConfigureAwait(false);
+                try
+                {
+                    do
+                    {
+                        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                        {
+                            if (reader.FieldCount == 0 || await reader.IsDBNullAsync(0, cancellationToken).ConfigureAwait(false))
+                                continue;
+                            var remainingTotal = EstimatedPlanService.MaxTotalPlanCharacters - _totalCharacters;
+                            var budget = Math.Min(EstimatedPlanService.MaxPlanCharacters, remainingTotal);
+                            var plan = PlanXmlReader.ReadBounded(
+                                (offset, buffer, length) => (int)reader.GetChars(0, offset, buffer, 0, length),
+                                budget, cancellationToken);
+                            _totalCharacters += plan.Length;
+                            plans.Add(plan);
+                        }
+                    }
+                    while (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false));
+                }
+                catch (PlanCommandException)
+                {
+                    // Stop the server streaming the rest of an over-budget plan before the reader is disposed.
+                    try { cmd.Cancel(); } catch { /* best effort; OFF below decides whether the session survives */ }
+                    throw;
+                }
+                return plans;
+            }
+            catch (SqlException ex)
+            {
+                throw new PlanCommandException(ex.Number, SanitizeMessage(ex.Message), ex);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+    }
+
+    sealed class SqlEditTransactionFactory(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds)
+        : IEditTransactionFactory
+    {
+        public async Task<IEditTransaction> BeginAsync(CancellationToken cancellationToken)
+        {
+            var tx = (SqlTransaction)await connection.BeginTransactionAsync(
+                IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+            return new SqlEditTransaction(owner, connection, tx, commandTimeoutSeconds);
+        }
+    }
+
+    sealed class SqlEditTransaction(SqlSession owner, SqlConnection connection, SqlTransaction transaction, int commandTimeoutSeconds)
+        : IEditTransaction
+    {
+        public async Task<int> ExecuteAffectedAsync(EditCommand command, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = command.CommandText;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            AddParameters(cmd, command.Parameters);
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                return await EditRowsSql.ReadAffectedCountAsync(reader, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public Task CommitAsync(CancellationToken cancellationToken) => transaction.CommitAsync(cancellationToken);
+        public Task RollbackAsync(CancellationToken cancellationToken) => transaction.RollbackAsync(cancellationToken);
+        public ValueTask DisposeAsync() => transaction.DisposeAsync();
+    }
+
+    sealed class SqlCsvImportTransactionFactory(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds)
+        : ICsvImportTransactionFactory
+    {
+        public async Task<ICsvImportTransaction> BeginAsync(CancellationToken cancellationToken)
+        {
+            var tx = (SqlTransaction)await connection.BeginTransactionAsync(
+                IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+            return new SqlCsvImportTransaction(owner, connection, tx, commandTimeoutSeconds);
+        }
+    }
+
+    sealed class SqlCsvImportTransaction(SqlSession owner, SqlConnection connection, SqlTransaction transaction, int commandTimeoutSeconds)
+        : ICsvImportTransaction
+    {
+        // 2601: unique index violation; 2627: unique/primary key constraint violation.
+        static bool IsDuplicateKey(SqlException ex)
+            => ex.Errors.Cast<SqlError>().Any(e => e.Number is 2601 or 2627);
+
+        public async Task ExecuteAsync(string sql, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public async Task<int> ExecuteAffectedAsync(EditCommand command, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = command.CommandText;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            AddParameters(cmd, command.Parameters);
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                return await EditRowsSql.ReadAffectedCountAsync(reader, cancellationToken).ConfigureAwait(false);
+            }
+            catch (SqlException ex) when (IsDuplicateKey(ex))
+            {
+                throw new CsvImportDuplicateKeyException("The server rejected a duplicate key.", ex);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public Task CommitAsync(CancellationToken cancellationToken) => transaction.CommitAsync(cancellationToken);
+        public Task RollbackAsync(CancellationToken cancellationToken) => transaction.RollbackAsync(cancellationToken);
+        public ValueTask DisposeAsync() => transaction.DisposeAsync();
+    }
+
+    sealed class SqlPermissionTransactionFactory(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds)
+        : IPermissionTransactionFactory
+    {
+        public async Task<IPermissionTransaction> BeginAsync(CancellationToken cancellationToken)
+        {
+            var tx = (SqlTransaction)await connection.BeginTransactionAsync(
+                IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+            return new SqlPermissionTransaction(owner, connection, tx, commandTimeoutSeconds);
+        }
+    }
+
+    sealed class SqlPermissionTransaction(SqlSession owner, SqlConnection connection, SqlTransaction transaction, int commandTimeoutSeconds)
+        : IPermissionTransaction
+    {
+        public async Task ExecuteAsync(string sql, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public Task CommitAsync(CancellationToken cancellationToken) => transaction.CommitAsync(cancellationToken);
+        public Task RollbackAsync(CancellationToken cancellationToken) => transaction.RollbackAsync(cancellationToken);
+        public ValueTask DisposeAsync() => transaction.DisposeAsync();
+    }
+
+    sealed class SqlSchemaTransactionFactory(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds)
+        : ISchemaTransactionFactory
+    {
+        public async Task<ISchemaTransaction> BeginAsync(CancellationToken cancellationToken)
+        {
+            var tx = (SqlTransaction)await connection.BeginTransactionAsync(
+                IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+            return new SqlSchemaTransaction(owner, connection, tx, commandTimeoutSeconds);
+        }
+    }
+
+    sealed class SqlSchemaTransaction(SqlSession owner, SqlConnection connection, SqlTransaction transaction, int commandTimeoutSeconds)
+        : ISchemaTransaction
+    {
+        public async Task<string> ReadFingerprintAsync(TableRef table, CancellationToken cancellationToken)
+        {
+            var query = TableDesignFingerprint.BuildQuery(table);
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = query.CommandText;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            AddParameters(cmd, query.Parameters);
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await using var reader = await cmd.ExecuteReaderAsync(
+                    CommandBehavior.SequentialAccess, cancellationToken).ConfigureAwait(false);
+                var rows = await RawRowReader.ReadAsync(reader, 5_000, RawReadBudget.Default, cancellationToken).ConfigureAwait(false);
+                if (rows.Truncated || rows.HasOmittedCells)
+                    throw new InvalidOperationException("The table definition was too large to fingerprint safely.");
+                return TableDesignFingerprint.FromRows(rows);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public async Task ExecuteAsync(string sql, CancellationToken cancellationToken)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = commandTimeoutSeconds;
+            cmd.CommandType = CommandType.Text;
+            owner._activeSqlCommand = cmd;
+            try
+            {
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                owner._activeSqlCommand = null;
+            }
+        }
+
+        public Task CommitAsync(CancellationToken cancellationToken) => transaction.CommitAsync(cancellationToken);
+        public Task RollbackAsync(CancellationToken cancellationToken) => transaction.RollbackAsync(cancellationToken);
+        public ValueTask DisposeAsync() => transaction.DisposeAsync();
+    }
+
     async Task<IReadOnlyList<string>> ReadNameListAsync(string sql, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -563,23 +1500,24 @@ public sealed class SqlSession : IAsyncDisposable
         return trimmed.Length <= 400 ? trimmed : trimmed[..400] + "…";
     }
 
-    /// <summary>Conservative detection only — preview does not implement GO batching.</summary>
-    internal static bool LooksLikeGoBatch(string sql)
-    {
-        using var reader = new StringReader(sql);
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            var trimmed = line.Trim();
-            if (trimmed.Equals("GO", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("GO ", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("GO\t", StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
-    }
+    internal static bool LooksLikeGoBatch(string sql) => GoBatchSplitter.ContainsSeparator(sql);
 
     // Compatibility shim for existing tests that called SqlSession.FormatCell.
     internal static CellValue FormatCell(System.Data.Common.DbDataReader reader, int ordinal)
         => ResultMaterializer.FormatCell(reader, ordinal);
 }
+
+/// <summary>
+/// Raw first result set from <see cref="SqlSession.QueryRawAsync"/>. A null value is SQL NULL.
+/// A <see cref="RawCellOmitted"/> value marks a cell that was too large or unsupported to load; it must never be written back.
+/// </summary>
+/// <param name="Truncated">The row cap or the byte budget stopped reading before the result set ended.</param>
+/// <param name="ByteBudgetExhausted">The total byte budget (not just the row cap) ended the read.</param>
+/// <param name="HasOmittedCells">At least one cell is a <see cref="RawCellOmitted"/> placeholder.</param>
+public sealed record RawRows(
+    IReadOnlyList<string> Columns,
+    IReadOnlyList<string> SqlTypes,
+    IReadOnlyList<object?[]> Rows,
+    bool Truncated,
+    bool ByteBudgetExhausted = false,
+    bool HasOmittedCells = false);

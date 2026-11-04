@@ -1,0 +1,94 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.ImportCsvWindow"
+        Title="Import Flat File — SQLoryn"
+        Width="1040" Height="760"
+        MinWidth="820" MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <DockPanel Margin="14">
+    <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,10">
+      <TextBlock Name="TitleText" FontSize="18" FontWeight="SemiBold" Text="Import flat file" />
+      <TextBlock Classes="muted" TextWrapping="Wrap"
+                 Text="Choose a delimited text file, check the preview and mapping, then confirm. Reading and previewing never write to the file or the database. The import runs in one transaction: a failure, duplicate key or cancel leaves the destination unchanged." />
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Bottom" Spacing="8" Margin="0,10,0,0">
+      <ProgressBar Name="ImportProgress" IsIndeterminate="True" IsVisible="False" />
+      <TextBlock Name="IssuesText" TextWrapping="Wrap" IsVisible="False"
+                 AutomationProperties.Name="Import problems" />
+      <TextBlock Name="StatusText" TextWrapping="Wrap" Classes="muted" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <Button Name="PreviewSqlButton" Content="Preview SQL" Click="OnPreviewSql" IsEnabled="False" />
+        <Button Name="ConfirmButton" Content="Confirm Import…" Classes="primary" Click="OnConfirmImport" IsEnabled="False" />
+        <Button Name="CancelImportButton" Content="Cancel import" Click="OnCancelImport" IsVisible="False" />
+        <Button Name="CloseButton" Content="Close" Click="OnClose" />
+      </StackPanel>
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,8">
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+        <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="File" />
+        <TextBox Grid.Column="1" Name="PathBox" IsReadOnly="True" PlaceholderText="No file chosen"
+                 AutomationProperties.Name="Chosen file" />
+        <Button Grid.Column="2" Name="BrowseButton" Content="Choose file…" Click="OnBrowse" />
+      </Grid>
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <TextBlock VerticalAlignment="Center" Text="Delimiter" />
+        <ComboBox Name="DelimiterBox" Width="130" SelectedIndex="0" AutomationProperties.Name="Delimiter">
+          <ComboBoxItem Content="Comma ," />
+          <ComboBoxItem Content="Semicolon ;" />
+          <ComboBoxItem Content="Tab" />
+          <ComboBoxItem Content="Pipe |" />
+        </ComboBox>
+        <TextBlock VerticalAlignment="Center" Text="Encoding" />
+        <ComboBox Name="EncodingBox" Width="170" SelectedIndex="0" AutomationProperties.Name="Encoding">
+          <ComboBoxItem Content="UTF-8 (or BOM)" />
+          <ComboBoxItem Content="UTF-16 LE" />
+          <ComboBoxItem Content="UTF-16 BE" />
+          <ComboBoxItem Content="Latin-1 (ISO-8859-1)" />
+          <ComboBoxItem Content="ASCII" />
+        </ComboBox>
+        <CheckBox Name="HeaderCheck" IsChecked="True" Content="First row is header" />
+        <CheckBox Name="EmptyNullCheck" IsChecked="False" Content="Empty text as NULL" />
+        <Button Name="ReloadButton" Content="Reload preview" Click="OnReloadPreview" IsEnabled="False" />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <TextBlock VerticalAlignment="Center" Text="Destination" />
+        <TextBlock Name="DestinationPrefix" VerticalAlignment="Center" Classes="mono" />
+        <TextBox Name="TableBox" Width="260" PlaceholderText="Table name"
+                 AutomationProperties.Name="Destination table name" LostFocus="OnDestinationChanged" />
+        <ComboBox Name="ModeBox" Width="250" SelectedIndex="0" SelectionChanged="OnModeChanged"
+                  AutomationProperties.Name="Import mode">
+          <ComboBoxItem Content="Append to existing table" />
+          <ComboBoxItem Content="Create new table" />
+          <ComboBoxItem Content="Replace table contents (deletes rows)" />
+        </ComboBox>
+        <Button Name="MapButton" Content="Map columns" Click="OnMapColumns" IsEnabled="False" />
+      </StackPanel>
+    </StackPanel>
+
+    <Grid RowDefinitions="*,Auto,*,120" RowSpacing="6">
+      <DataGrid Name="PreviewGrid" Grid.Row="0" AutoGenerateColumns="False" IsReadOnly="True"
+                CanUserSortColumns="False" CanUserReorderColumns="False" HeadersVisibility="All"
+                AutomationProperties.Name="File preview" />
+      <TextBlock Grid.Row="1" Classes="muted" Text="Column mapping (untick Include to skip a source column; edit the destination name or type)." />
+      <DataGrid Name="MapGrid" Grid.Row="2" AutoGenerateColumns="False" CanUserSortColumns="False"
+                CanUserReorderColumns="False" SelectionMode="Single" CellEditEnded="OnMappingEdited"
+                AutomationProperties.Name="Column mapping">
+        <DataGrid.Columns>
+          <DataGridCheckBoxColumn Header="Include" Binding="{ReflectionBinding Include, Mode=TwoWay}" Width="80" />
+          <DataGridTextColumn Header="Source column" Binding="{ReflectionBinding Source}" IsReadOnly="True" Width="*" />
+          <DataGridTextColumn Header="Guessed type" Binding="{ReflectionBinding Guess}" IsReadOnly="True" Width="130" />
+          <DataGridTextColumn Header="Destination column" Binding="{ReflectionBinding Target, Mode=TwoWay}" Width="*" />
+          <DataGridTextColumn Header="Type (Int, BigInt, Decimal, Bit, DateTime2, UniqueIdentifier, NVarChar)"
+                              Binding="{ReflectionBinding TypeText, Mode=TwoWay}" Width="*" />
+          <DataGridCheckBoxColumn Header="Key" Binding="{ReflectionBinding IsKey, Mode=TwoWay}" Width="60" />
+        </DataGrid.Columns>
+      </DataGrid>
+      <TextBox Name="SqlBox" Grid.Row="3" Classes="mono" IsReadOnly="True" AcceptsReturn="True"
+               TextWrapping="NoWrap" PlaceholderText="Generated SQL appears here. Nothing runs until you confirm."
+               AutomationProperties.Name="SQL preview" />
+    </Grid>
+  </DockPanel>
+</Window>

@@ -1,6 +1,6 @@
 # Current trust boundaries and risks
 
-Experimental probe. Owner: SQLoryn maintainer. Reviewed: 2026-10-31.
+Experimental probe. Owner: SQLoryn maintainer. Reviewed: 2026-10-31; plan-budget and taint notes added 2026-11-04 (no full re-review).
 Risk IDs retain the brief's references; severity is potential impact. No supported
 users/releases exist. This is not an independent security audit.
 
@@ -37,14 +37,16 @@ This is not a Keychain or production credential design. Never supply real secret
 | R-002 / critical: server impersonation | Mandatory TLS, exact certificate pin, no trust bypass; SSH host-key file required | Normal CA/name/expiry checks and Mac SQL runs remain unverified without an approved host |
 | R-003, R-022 / critical: wrong target/production | New instance only, loopback, generated identity, edition/version check; SSH config isolated; no arbitrary endpoints | Sentinel/host-key prevent accidents; they are not authorisation; never attach to an existing tunnel |
 | R-SSH / high: remote command/tunnel misuse | Fixed remote helper, prepare ownership, JSON stdin for secrets, token-safe argv, tunnel options without ClearAllForwardings so `-L` remains effective, local Docker socket binding, independent cleanup + run-id recovery | Live SSH behaviour unproven until an approved host exists; orphaned remote resources on hard kill/network loss |
-| R-004 / critical: replay | No connection retries, pooling or automatic SQL replay in Core/probe | Live disconnect-during-run evidence pending for the app |
-| R-006, R-007 / high: fidelity/memory | Typed assertions, sequential 10,000-row read | General cells, rendering/export, backpressure and benchmarks absent |
+| R-004 / critical: replay | No connection retries, pooling or automatic SQL replay in Core/probe; a session whose SHOWPLAN reset is unconfirmed is tainted and refuses execution and further estimates until reconnect | Live disconnect-during-run and live SHOWPLAN evidence pending for the app |
+| R-006, R-007 / high: fidelity/memory | Typed assertions, sequential 10,000-row read | Row/cell/byte budgets and estimated-plan caps (4 Mi chars per plan, 8 Mi in total) are fixture-tested only; general cells, rendering/export, backpressure and live benchmarks absent |
 | R-016 / high: false cancellation | Observe active request, cancellation, absent request, usable original session | WAITFOR with test admin only; partitions/transactions open |
 | R-009, R-019 / high: dependency/licence | Locked packages, fail-closed audit, SHA-pinned Actions/image, native SNI excluded | Restore obtains separately licensed SNI; inspect all actual artifacts/notices before release |
 | R-010, R-015 / high: false claims/stale docs | Separate candidate catalogue, matrix and linked evidence | Keep state/tests/docs updated together; docs are not proof |
 | R-011, R-024 / high: platforms | Reject server emulation; both Mac component architectures in CI; SSH path rejects known ARM engine reports | Native Mac-to-server SQL evidence absent; reported arch ≠ hardware proof; signed installers absent |
 | R-013 / critical: PR exfiltration | Read-only token, pinned actions, no protected secrets/self-hosted runner; SQL job explicit | Review workflow diffs; temporary SQL admin password is intentionally available to its own job |
 | R-020 / high: no independent review | PR required; agent does not merge/release | Single maintainer cannot supply independent approval; seek review before distribution |
+
+Security administration (WS7-T1) adds permission-change risk: GRANT/DENY/REVOKE are built only from an allow-listed model with bracket-quoted identifiers (control characters refused, `'` doubled again inside the `sp_executesql` literal), previewed verbatim, applied only after a confirm dialog in one transaction, and rolled back on any error; the server, not the client, decides who may change a permission. Catalog reads are bounded and never select password hashes; no password or credential can be entered. Gaps: fake-transaction evidence only, no restricted-principal live run, effective permissions are not computed, and SQL Server metadata visibility means lists can be partial.
 
 Other risks are **unimplemented/unassessed**: destructive GUI (R-005), updater
 (R-008), Windows/BI management (R-012), optional AI (R-014), concurrent editing

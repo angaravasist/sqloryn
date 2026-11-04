@@ -13,43 +13,106 @@ namespace Sqloryn;
 public partial class MainWindow : Window
 {
     readonly ObservableCollection<QueryTab> _tabs = [];
-    readonly ObservableCollection<TreeNode> _treeRoots = [];
+    readonly ExplorerController _explorer;
+    readonly TextBox MessagesBox = new()
+    {
+        IsReadOnly = true,
+        AcceptsReturn = true,
+        TextWrapping = TextWrapping.Wrap,
+        BorderThickness = new Avalonia.Thickness(0),
+        CornerRadius = new Avalonia.CornerRadius(0),
+        FontFamily = new FontFamily("Menlo, Monaco, Consolas, monospace"),
+        FontSize = 12
+    };
     QueryTab? _active;
+    AppSettings _settings = new();
+    FindReplaceWindow? _findWindow;
+    string _lastError = "";
     bool _closeApproved;
     bool _closePromptInFlight;
     long _treeLoadGeneration;
-
-    sealed class TreeNode(string title, string kind, string? database = null, string? schema = null, string? objectName = null)
-    {
-        public string Title { get; } = title;
-        public string Kind { get; } = kind;
-        public string? Database { get; } = database;
-        public string? Schema { get; } = schema;
-        public string? ObjectName { get; } = objectName;
-        public ObservableCollection<TreeNode> Children { get; } = [];
-        public bool Loaded { get; set; }
-        public bool Loading { get; set; }
-    }
+    bool _suppressDatabaseChoice;
+    readonly HashSet<string> _adoptedRecoveryIds = new(StringComparer.Ordinal);
+    bool _persistingRecovery;
+    bool _suspendRecoveryPersist;
+    bool _announceEmptyRecovery;
 
     public MainWindow()
     {
         InitializeComponent();
-        ObjectTree.ItemsSource = _treeRoots;
-        ObjectTree.ItemTemplate = new FuncTreeDataTemplate<TreeNode>(
+        _settings = LoadSettings();
+        _explorer = new ExplorerController(
+            (tab, binding) => BindingStillCurrent(tab, binding) && ReferenceEquals(_active, tab),
+            message => StatusBar.Text = SafeUi(message));
+        ObjectTree.ItemsSource = _explorer.ShownRoots;
+        ObjectTree.ItemTemplate = new FuncTreeDataTemplate<ExplorerNode>(
             _ => true,
-            (node, _) => new TextBlock { Text = node.Title },
-            node => node.Children);
+            (node, _) => BuildNodeView(node),
+            node => node.Shown);
+        ObjectTree.AddHandler(TreeViewItem.ExpandedEvent, OnTreeItemExpanded);
         Editor.LostFocus += (_, _) => CaptureSelection();
         Editor.PointerReleased += (_, _) => CaptureSelection();
         Editor.KeyUp += (_, _) => CaptureSelection();
+        Editor.TextArea.SelectionChanged += (_, _) => CaptureSelection();
+        Editor.TextChanged += OnEditorTextChanged;
+        Editor.ActualThemeVariantChanged += (_, _) => ApplyEditorHighlighting();
+        ApplyEditorHighlighting();
         Closing += OnWindowClosing;
+        ApplySettings(_settings);
+        WelcomePanel.ConnectRequested += (_, e) => OnConnect(this, e);
+        WelcomePanel.NewQueryRequested += (_, e) => OnWelcomeNewQuery(this, e);
+        WelcomePanel.OpenRequested += (_, e) => OnOpen(this, e);
+        InitShell();
         AddTab();
+        Opened += (_, _) =>
+        {
+            _announceEmptyRecovery = false;
+            OnRecoverUnsaved(this, new RoutedEventArgs());
+        };
+    }
+
+    static AppSettings LoadSettings()
+    {
+        try
+        {
+            return AppServices.Settings.Load();
+        }
+        catch (Exception)
+        {
+            return new AppSettings();
+        }
+    }
+
+    void ApplySettings(AppSettings settings)
+    {
+        _settings = settings;
+        Editor.FontSize = settings.EditorFontSize;
+        AppServices.ApplyTheme(settings);
+    }
+
+    static Control BuildNodeView(ExplorerNode node)
+    {
+        var text = new TextBlock { Text = node.Title, VerticalAlignment = VerticalAlignment.Center };
+        if (node.Kind == "database")
+            text.FontWeight = FontWeight.SemiBold;
+        else if (node.IsFolder)
+            text.Classes.Add("muted");
+        else if (node.Kind is "column" or "placeholder")
+        {
+            text.Classes.Add("muted");
+            text.FontSize = 12;
+        }
+        ToolTip.SetTip(text, node.Info is { Length: > 0 } info && node.Kind == "placeholder" ? info : null);
+        return text;
     }
 
     void OnWindowClosing(object? sender, WindowClosingEventArgs e)
     {
         if (_closeApproved)
+        {
+            SaveLayout();
             return;
+        }
         e.Cancel = true;
         if (_closePromptInFlight)
             return;
@@ -108,14 +171,15 @@ public partial class MainWindow : Window
         }
     }
 
-    void AddTab()
+    QueryTab AddTab(QueryTab? existing = null)
     {
-        var tab = new QueryTab();
+        var tab = existing ?? new QueryTab();
         _tabs.Add(tab);
         var item = new TabItem { Header = tab.Header, Tag = tab };
         QueryTabs.Items.Add(item);
         QueryTabs.SelectedItem = item;
         ActivateTab(tab);
+        return tab;
     }
 
     void ActivateTab(QueryTab tab)
@@ -127,7 +191,13 @@ public partial class MainWindow : Window
         RefreshHeader(tab);
         UpdateStatus();
         UpdateRunMode();
-        RenderResult(tab.LastResult);
+        if (tab.IsExecuting && tab.RunStartedUtc is DateTimeOffset started)
+        {
+            var ms = (long)(DateTimeOffset.UtcNow - started).TotalMilliseconds;
+            ShowRunning(tab, ms < 0 ? 0 : ms, initial: true);
+        }
+        else
+            RenderResult(tab.LastResult);
         _ = LoadDatabasesAsync(tab);
     }
 
@@ -164,17 +234,52 @@ public partial class MainWindow : Window
         if (_active is null)
         {
             StatusBar.Text = "No tab.";
+            ConnectionLabel.Classes.Set("connected", false);
             ConnectionLabel.Text = "Not connected";
+            UpdateTransactionLabel();
+            UpdateWelcome();
             return;
         }
+        UpdateCommandState(_active);
         var session = _active.Session;
+        ConnectionLabel.Classes.Set("connected", session.IsConnected && !session.TargetUnknown);
         ConnectionLabel.Text = !session.IsConnected
             ? "Not connected"
             : session.TargetUnknown
                 ? $"{session.ServerDisplay} / (target unknown — revalidate)"
                 : $"{session.ServerDisplay} / {session.Database}";
-        StatusBar.Text =
-            $"{_active.Status} · tab {_active.Id.ToString()[..8]} · preview: single batch, no GO, session-only credentials";
+        StatusBar.Text = _active.Status;
+        UpdateTransactionLabel();
+        UpdateWelcome();
+    }
+
+    /// <summary>Shows the last batch's XACT_STATE for the active tab. Null until a batch records one.</summary>
+    void UpdateTransactionLabel()
+        => TransactionStateLabel.Text = QueryOutcomeFormatter.DescribeTransaction(_active?.LastResult?.TransactionState);
+
+    void UpdateCommandState(QueryTab tab)
+    {
+        var connected = tab.Session.IsConnected;
+        var executing = tab.IsExecuting || tab.Session.HasActiveCommand;
+        DisconnectButton.IsEnabled = connected && !executing;
+        DisconnectButton.IsVisible = connected;
+        RunButton.IsEnabled = connected && !executing;
+        RunBatchButton.IsEnabled = connected && !executing;
+        DatabaseBox.IsEnabled = connected && !executing && !tab.Session.TargetUnknown;
+        CancelButton.IsEnabled = LongRunningStatus.CancelControlEnabled(executing);
+        CancelButton.IsVisible = LongRunningStatus.CancelControlVisible;
+        // Export is only offered once there is something to export.
+        var hasSets = tab.LastResult?.ResultSets.Count > 0;
+        ExportCsvButton.IsEnabled = hasSets;
+        ExportJsonButton.IsEnabled = hasSets;
+        ExportCsvButton.IsVisible = hasSets;
+        ExportJsonButton.IsVisible = hasSets;
+    }
+
+    void ReportError(string message)
+    {
+        _lastError = message;
+        StatusBar.Text = SafeUi(message);
     }
 
     void UpdateRunMode()
@@ -205,12 +310,15 @@ public partial class MainWindow : Window
             if (ReferenceEquals(_active, tab))
                 UpdateStatus();
             await tab.Session.ConnectAsync(dialog.Result);
+            var profileNote = await PersistProfileAsync(dialog);
             if (!OwnerStillCurrent(tab, binding))
                 return;
             tab.Status = $"Connected · SQL Server {tab.Session.ServerVersion}";
             if (ReferenceEquals(_active, tab))
             {
                 UpdateStatus();
+                if (profileNote is not null)
+                    StatusBar.Text = profileNote;
                 await LoadDatabasesAsync(tab);
             }
         }
@@ -221,9 +329,72 @@ public partial class MainWindow : Window
             tab.Status = "Connect failed";
             if (ReferenceEquals(_active, tab))
             {
-                StatusBar.Text = SafeUi(ex.Message);
                 UpdateStatus();
+                ReportError(ex.Message);
             }
+            else
+            {
+                _lastError = ex.Message;
+            }
+        }
+    }
+
+    /// <summary>Upserts the non-secret profile and, when asked, stores the password in the Keychain. Returns a warning on failure.</summary>
+    async Task<string?> PersistProfileAsync(ConnectWindow dialog)
+    {
+        var options = dialog.Result;
+        if (options is null || !dialog.SaveProfile)
+            return null;
+        try
+        {
+            AppServices.Profiles.Upsert(new ConnectionProfile
+            {
+                Id = dialog.ProfileId,
+                Name = dialog.ProfileName,
+                Group = dialog.ProfileGroup,
+                Server = options.Server,
+                Port = options.Port,
+                Database = options.Database,
+                UserId = options.UserId,
+                Encrypt = true,
+                TrustServerCertificate = options.TrustServerCertificate,
+                ServerCertificatePath = options.ServerCertificatePath,
+                RememberPassword = dialog.RememberPassword,
+                LastUsedUtc = DateTimeOffset.UtcNow
+            });
+            var key = ProfileSecretKeys.ForProfile(dialog.ProfileId);
+            if (dialog.RememberPassword)
+                await AppServices.Secrets.SetAsync(key, options.Password);
+            else
+                await AppServices.Secrets.DeleteAsync(key);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _lastError = ex.Message;
+            return SafeUi("Connected, but the profile or password was not saved: " + ex.Message);
+        }
+    }
+
+    async void OnRevalidate(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        var binding = tab.CaptureBinding();
+        try
+        {
+            await tab.Session.RevalidateTargetAsync();
+            if (!OwnerStillCurrent(tab, binding))
+                return;
+            tab.Status = "Target revalidated";
+            if (ReferenceEquals(_active, tab))
+                UpdateStatus();
+        }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(_active, tab))
+                ReportError(ex.Message);
         }
     }
 
@@ -240,7 +411,8 @@ public partial class MainWindow : Window
         tab.BumpGeneration();
         if (ReferenceEquals(_active, tab))
         {
-            _treeRoots.Clear();
+            _explorer.Clear();
+            SetDatabaseChoices(tab, []);
             UpdateStatus();
         }
     }
@@ -251,58 +423,77 @@ public partial class MainWindow : Window
             return;
         var tab = _active;
         CaptureSelection();
+        await ExecuteOnTabAsync(tab, tab.BatchToRun, tab.BatchOrigin);
+    }
+
+    /// <summary>
+    /// Query > Display Estimated Plan. Compiles the selection/document under SET SHOWPLAN_XML and shows the XML in Messages.
+    /// This handler never calls ExecuteAsync: every outcome (success, refusal, permission denied, failure, cancel) ends here.
+    /// </summary>
+    async void OnDisplayEstimatedPlan(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        CaptureSelection();
         var sql = tab.BatchToRun;
         if (string.IsNullOrWhiteSpace(sql))
         {
-            StatusBar.Text = "Nothing to run.";
+            StatusBar.Text = "Nothing to estimate.";
             return;
         }
         if (!tab.Session.IsConnected)
         {
-            StatusBar.Text = "Connect before running SQL.";
+            StatusBar.Text = "Connect before displaying an estimated plan.";
             return;
         }
         if (tab.Session.TargetUnknown)
         {
-            StatusBar.Text =
-                "Database target unknown after a prior batch. Reconnect or revalidate before running. SQL is never replayed.";
+            StatusBar.Text = "Database target unknown after a prior batch. Reconnect or revalidate first.";
             return;
         }
         if (tab.IsExecuting || tab.Session.HasActiveCommand || !tab.TryBeginRun())
         {
-            StatusBar.Text = "A command is already running on this tab. Use Cancel; Run will not queue or replay SQL.";
+            StatusBar.Text = "A command is already running on this tab. Wait or cancel before estimating a plan.";
             return;
         }
 
         tab.RunCts = new CancellationTokenSource();
         var cts = tab.RunCts;
         var binding = tab.CaptureBinding();
-        tab.Status = "Running…";
+        tab.Status = "Estimating plan (SQL is not executed)…";
         if (ReferenceEquals(_active, tab))
             UpdateStatus();
         try
         {
-            var result = await tab.Session.ExecuteAsync(sql, cts.Token);
-            if (!OwnerStillCurrent(tab, binding))
-                return;
-            tab.LastResult = result;
-            tab.Status = QueryOutcomeFormatter.DescribeStatus(result);
-            if (ReferenceEquals(_active, tab))
+            EstimatedPlanResult result;
+            try
             {
-                RenderResult(result);
-                UpdateStatus();
+                result = await tab.Session.EstimatePlanAsync(sql, cts.Token);
             }
-        }
-        catch (Exception ex)
-        {
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or ObjectDisposedException)
+            {
+                // Fail closed: show the refusal; never fall back to running the SQL.
+                result = new EstimatedPlanResult(EstimatedPlanStatus.Failed, [], SafeUi(ex.Message), false);
+            }
             if (!OwnerStillCurrent(tab, binding))
                 return;
-            tab.Status = "Run failed";
+            tab.Status = result.Status == EstimatedPlanStatus.Succeeded
+                ? "Estimated plan ready (not executed)"
+                : "Estimated plan unavailable (not executed)";
+            if (result.Status != EstimatedPlanStatus.Succeeded)
+                _lastError = result.Error ?? "";
             if (ReferenceEquals(_active, tab))
             {
-                MessagesBox.Text = SafeUi(ex.Message);
-                StatusBar.Text = SafeUi(ex.Message);
+                RenderResult(tab.LastResult);
+                MessagesBox.Text = EstimatedPlanService.FormatForMessages(result);
+                ResultSummary.Text = "Estimated plan · statement not executed";
+                SetResultsVisible(true);
+                ShowMessagesTab();
                 UpdateStatus();
+                StatusBar.Text = result.Status == EstimatedPlanStatus.Succeeded
+                    ? "Estimated plan shown in Messages. The statement was not executed."
+                    : SafeUi(result.Error ?? "Estimated plan unavailable.");
             }
         }
         finally
@@ -331,7 +522,11 @@ public partial class MainWindow : Window
         UpdateStatus();
     }
 
-    void OnNewTab(object? sender, RoutedEventArgs e) => AddTab();
+    void OnNewTab(object? sender, RoutedEventArgs e)
+    {
+        _welcomeDismissed = true;
+        AddTab();
+    }
 
     async void OnCloseTab(object? sender, RoutedEventArgs e)
     {
@@ -422,7 +617,7 @@ public partial class MainWindow : Window
         var versionAtReadStart = tab.Document.Version;
         try
         {
-            var text = await ScriptDocument.ReadFileTextAsync(path);
+            var (text, fingerprint) = await ScriptDocument.ReadFileAsync(path);
             if (!OwnerStillCurrent(tab, binding))
             {
                 if (pending is not null)
@@ -432,7 +627,7 @@ public partial class MainWindow : Window
             // Pull any intervening editor edits into the document first.
             if (ReferenceEquals(tab, _active))
                 tab.Document.SetText(Editor.Text ?? "");
-            if (!DocumentLifecycle.TryCommitOpenReplacement(tab.Document, path, text, versionAtReadStart))
+            if (!DocumentLifecycle.TryCommitOpenReplacement(tab.Document, path, text, versionAtReadStart, fingerprint))
             {
                 if (pending is not null)
                     DocumentLifecycle.Rollback([pending]);
@@ -497,6 +692,15 @@ public partial class MainWindow : Window
             // Proceed only when the originating document is clean after save.
             return !tab.Document.IsDirty;
         }
+        catch (ExternalDocumentChangedException ex)
+        {
+            // File changed on disk since open/last save: nothing was written, the external content is intact,
+            // and the buffer stays dirty. No overwrite path is offered silently; use Save As to keep this text.
+            if (ReferenceEquals(_active, tab))
+                StatusBar.Text = SafeUi(ex.Message + " Your unsaved text is kept; use Save As to write it elsewhere.");
+            RefreshHeader(tab);
+            return false;
+        }
         catch (Exception ex)
         {
             // Dirty state preserved by ScriptDocument.SaveAsync
@@ -533,6 +737,7 @@ public partial class MainWindow : Window
         // Sync editor into active document before prompting.
         if (_active is not null)
             _active.Document.SetText(Editor.Text ?? "");
+        PersistRecovery();
 
         var docs = _tabs.Select(t => t.Document).ToList();
         var (ok, pending) = await DocumentLifecycle.ResolveAllDirtyDeferredAsync(
@@ -562,6 +767,7 @@ public partial class MainWindow : Window
                     Editor.Text = tab.Document.Text;
                 RefreshHeader(tab);
             }
+            PersistRecovery();
             return false;
         }
 
@@ -572,6 +778,7 @@ public partial class MainWindow : Window
                 Editor.Text = tab.Document.Text;
             RefreshHeader(tab);
         }
+        PersistRecovery();
 
         if (!disposeOnSuccess)
             return true;
@@ -636,12 +843,17 @@ public partial class MainWindow : Window
             ActivateTab(tab);
     }
 
-    void OnEditorTextChanged(object? sender, TextChangedEventArgs e)
+    void ApplyEditorHighlighting()
+        => Editor.SyntaxHighlighting = EditorSupport.Highlighting(Editor.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Dark);
+
+    void OnEditorTextChanged(object? sender, EventArgs e)
     {
         if (_active is null)
             return;
         _active.Document.SetText(Editor.Text ?? "");
         RefreshHeader(_active);
+        UpdateWelcome();
+        PersistRecovery();
     }
 
     void CaptureSelection()
@@ -649,9 +861,10 @@ public partial class MainWindow : Window
         if (_active is null)
             return;
         var text = Editor.Text ?? "";
-        var start = Math.Clamp(Math.Min(Editor.SelectionStart, Editor.SelectionEnd), 0, text.Length);
-        var end = Math.Clamp(Math.Max(Editor.SelectionStart, Editor.SelectionEnd), 0, text.Length);
+        var start = Math.Clamp(Editor.SelectionStart, 0, text.Length);
+        var end = Math.Clamp(Editor.SelectionStart + Editor.SelectionLength, start, text.Length);
         _active.Selection = start == end ? null : text[start..end];
+        _active.SelectionStart = start;
         UpdateRunMode();
     }
 
@@ -667,7 +880,11 @@ public partial class MainWindow : Window
         var binding = tab.CaptureBinding();
         if (!ReferenceEquals(_active, tab))
             return;
-        _treeRoots.Clear();
+        _explorer.Clear();
+        SetDatabaseChoices(tab, []);
+        DatabaseBox.PlaceholderText = tab.Session.IsConnected ? "Loading databases…" : "Database";
+        PropertiesBox.Text = "";
+        SetPropertiesVisible(false);
         if (!tab.Session.IsConnected)
             return;
         try
@@ -676,189 +893,464 @@ public partial class MainWindow : Window
             if (loadId != Volatile.Read(ref _treeLoadGeneration) || !ReferenceEquals(_active, tab) ||
                 !ReferenceEquals(tab.Session, binding.SessionKey))
                 return;
-            foreach (var n in names)
-            {
-                var node = new TreeNode(n, "database", database: n);
-                node.Children.Add(new TreeNode("…", "placeholder", database: n));
-                _treeRoots.Add(node);
-            }
+            _explorer.SetRoots(names.Select(n => ExplorerController.WithPlaceholder(new ExplorerNode(n, "database", database: n))));
+            SetDatabaseChoices(tab, names);
             if (names.Count == 0)
                 StatusBar.Text = "Object explorer: no accessible databases.";
         }
         catch (Exception ex)
         {
             if (ReferenceEquals(_active, tab))
-                StatusBar.Text = SafeUi(ex.Message);
+                ReportError(ex.Message);
         }
     }
 
+    ExplorerNode? SelectedNode => ObjectTree.SelectedItem as ExplorerNode;
+
     async void OnExpandSelected(object? sender, RoutedEventArgs e)
     {
-        if (ObjectTree.SelectedItem is TreeNode node)
-            await ExpandNodeAsync(node, insertSql: false);
+        if (SelectedNode is { } node)
+            await ExpandNodeAsync(node);
+    }
+
+    async void OnTreeItemExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (e.Source is TreeViewItem { DataContext: ExplorerNode node })
+            await ExpandNodeAsync(node);
     }
 
     async void OnObjectKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key is not (Key.Right or Key.Enter or Key.Space))
             return;
-        if (ObjectTree.SelectedItem is not TreeNode node)
+        if (SelectedNode is not { } node)
             return;
         e.Handled = true;
-        await ExpandNodeAsync(node, insertSql: false);
+        await ExpandNodeAsync(node);
     }
 
     async void OnObjectDoubleTapped(object? sender, TappedEventArgs e)
     {
-        if (ObjectTree.SelectedItem is not TreeNode node)
+        if (SelectedNode is not { } node)
             return;
-        // Double-tap expands/loads only — does not insert SQL.
-        await ExpandNodeAsync(node, insertSql: false);
+        if (node.Kind is "table" or "view")
+        {
+            await ScriptSelectInNewTabAsync(node);
+            return;
+        }
+        await ExpandNodeAsync(node);
     }
+
+    void OnTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)
+        => RefreshInspector();
+
+    long _overviewGeneration;
+
+    /// <summary>
+    /// Shows the selected node in the inspector; a table or view also gets a compact overview (columns summary and
+    /// key counts) loaded read-only. Hidden when nothing is selected.
+    /// </summary>
+    void RefreshInspector()
+    {
+        var node = SelectedNode;
+        var generation = Interlocked.Increment(ref _overviewGeneration);
+        PropertiesTitle.Text = node?.Kind is "table" or "view" ? "OVERVIEW" : "PROPERTIES";
+        PropertiesBox.Text = ExplorerController.Describe(node, _active?.Session.ServerDisplay);
+        SetPropertiesVisible(node is not null);
+        if (node is null || _active is null || node.Kind is not ("table" or "view"))
+            return;
+        PropertiesBox.Text += "\n\nLoading overview…";
+        _ = ShowOverviewAsync(node, _active, generation);
+    }
+
+    async Task ShowOverviewAsync(ExplorerNode node, QueryTab tab, long generation)
+    {
+        var text = await _explorer.LoadOverviewAsync(
+            node, tab, () => generation == Volatile.Read(ref _overviewGeneration) && ReferenceEquals(SelectedNode, node));
+        if (text is not null)
+            PropertiesBox.Text = text;
+    }
+
+    void OnExplorerFilterChanged(object? sender, TextChangedEventArgs e)
+        => _explorer.SetFilter(ExplorerFilterBox.Text);
+
+    void OnClearExplorerFilter(object? sender, RoutedEventArgs e)
+        => ExplorerFilterBox.Text = "";
 
     async void OnScriptSelect(object? sender, RoutedEventArgs e)
     {
-        if (ObjectTree.SelectedItem is not TreeNode node || _active is null)
+        if (SelectedNode is not { } node || _active is null)
             return;
         if (node.Kind is not ("table" or "view") || node.Database is null || node.Schema is null || node.ObjectName is null)
         {
-            StatusBar.Text = "Select a table or view to insert a quoted SELECT.";
+            StatusBar.Text = "Select a table or view to script a quoted SELECT into a new tab.";
             return;
         }
-        var tab = _active;
-        var sql = SqlIdentity.ScriptSelectTop(node.Database, node.Schema, node.ObjectName);
-        Editor.Text = (Editor.Text ?? "") + sql;
-        tab.Document.SetText(Editor.Text);
-        RefreshHeader(tab);
-        StatusBar.Text = "Inserted " + SqlIdentity.Qualify3(node.Database, node.Schema, node.ObjectName);
+        await ScriptSelectInNewTabAsync(node);
     }
 
-    async Task ExpandNodeAsync(TreeNode node, bool insertSql)
+    bool _scriptTabInFlight;
+
+    /// <summary>
+    /// Opens a NEW tab holding only the generated SELECT. The originating tab's document, dirty state and
+    /// selection are not touched. The new tab gets its own session, bound to the object's database.
+    /// </summary>
+    async Task ScriptSelectInNewTabAsync(ExplorerNode node)
+    {
+        if (_active is null || _scriptTabInFlight)
+            return;
+        var source = _active;
+        var sourceBinding = source.CaptureBinding();
+        var session = source.Session;
+        ScriptFromObjectPlan plan;
+        try
+        {
+            plan = ScriptFromObjectPlan.Create(session.Database, session.TargetUnknown, node.Database, node.Schema, node.ObjectName);
+        }
+        catch (ArgumentException)
+        {
+            StatusBar.Text = "Incomplete object identity; cannot script.";
+            return;
+        }
+        var options = session.IsConnected ? session.CreateSiblingOptions(plan.TargetDatabase) : null;
+        if (options is null)
+        {
+            StatusBar.Text = "Connect first to script an object into a new tab.";
+            return;
+        }
+
+        _scriptTabInFlight = true;
+        var created = new QueryTab();
+        var adopted = false;
+        try
+        {
+            StatusBar.Text = "Opening script tab…";
+            await created.Session.ConnectAsync(options);
+            // The sibling session must target the originating database before any SQL can run in it.
+            if (!string.Equals(created.Session.Database, plan.TargetDatabase, StringComparison.OrdinalIgnoreCase))
+                await created.Session.ChangeDatabaseAsync(plan.TargetDatabase);
+            if (!string.Equals(created.Session.Database, plan.TargetDatabase, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("New tab could not be bound to the originating database.");
+            if (_closeApproved || !OwnerStillCurrent(source, sourceBinding))
+            {
+                StatusBar.Text = "Script tab discarded: source tab/session changed.";
+                return;
+            }
+            // Preserve the source editor text before the editor swaps documents.
+            if (ReferenceEquals(_active, source))
+                source.Document.SetText(Editor.Text ?? "");
+            created.Document.DiscardChangesTo(plan.Sql);
+            created.Status = $"Connected · SQL Server {created.Session.ServerVersion}";
+            AddTab(created);
+            adopted = true;
+            StatusBar.Text = "Scripted " + SqlIdentity.Qualify3(plan.TargetDatabase, node.Schema!, node.ObjectName!) + " into a new tab.";
+        }
+        catch (Exception ex)
+        {
+            ReportError("Script tab failed: " + ex.Message);
+        }
+        finally
+        {
+            _scriptTabInFlight = false;
+            if (!adopted)
+                await created.DisposeAsync();
+        }
+    }
+
+    async Task ExpandNodeAsync(ExplorerNode node)
+    {
+        if (_active is null)
+            return;
+        await _explorer.ExpandAsync(node, _active);
+        // Folder counts and truncation notes appear in the inspector once the load finishes.
+        if (ReferenceEquals(SelectedNode, node) && node.Kind is not ("table" or "view"))
+            PropertiesBox.Text = ExplorerController.Describe(node, _active?.Session.ServerDisplay);
+    }
+
+    /// <summary>Resolves the selected table node for design/edit actions, or reports why it cannot.</summary>
+    (QueryTab Tab, TableRef Table)? RequireSelectedTable(bool tablesOnly)
+    {
+        if (_active is null)
+            return null;
+        var tab = _active;
+        if (SelectedNode is not { } node || node.Database is null || node.Schema is null || node.ObjectName is null ||
+            node.Kind != "table" && (tablesOnly || node.Kind != "view"))
+        {
+            StatusBar.Text = tablesOnly ? "Select a table in Object Explorer first." : "Select a table or view in Object Explorer first.";
+            return null;
+        }
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect first.";
+            return null;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return null;
+        }
+        return (tab, new TableRef(node.Database, node.Schema, node.ObjectName));
+    }
+
+    async void OnDesignTable(object? sender, RoutedEventArgs e)
+    {
+        if (RequireSelectedTable(tablesOnly: true) is not { } selected)
+            return;
+        var (tab, table) = selected;
+        var node = SelectedNode;
+        var window = new TableDesignWindow(tab.Session, table);
+        await window.ShowDialog(this);
+        if (window.Applied && node is not null && node.Loaded && ReferenceEquals(_active, tab))
+        {
+            _explorer.Reset(node);
+            StatusBar.Text = "Table changed; collapse and expand it to reload columns.";
+        }
+    }
+
+    async void OnNewTable(object? sender, RoutedEventArgs e)
     {
         if (_active is null)
             return;
         var tab = _active;
-        var binding = tab.CaptureBinding();
-        var database = node.Database;
-        try
+        if (SelectedNode is not { Database: { } database, Schema: { } schema } node)
         {
-            if (node.Kind == "database" && !node.Loaded)
-            {
-                if (node.Loading)
-                    return;
-                node.Loading = true;
-                node.Children.Clear();
-                node.Children.Add(new TreeNode("Loading…", "placeholder", database));
-                IReadOnlyList<string> schemas;
-                try
-                {
-                    schemas = await tab.Session.ListSchemasAsync(node.Database!);
-                }
-                finally
-                {
-                    node.Loading = false;
-                }
-                if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
-                {
-                    StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
-                    return;
-                }
-                node.Children.Clear();
-                foreach (var schema in schemas)
-                {
-                    var sn = new TreeNode(schema, "schema", node.Database, schema);
-                    sn.Children.Add(new TreeNode("…", "placeholder", node.Database, schema));
-                    node.Children.Add(sn);
-                }
-                node.Loaded = true;
-            }
-            else if (node.Kind == "schema" && !node.Loaded)
-            {
-                if (node.Loading)
-                    return;
-                node.Loading = true;
-                node.Children.Clear();
-                node.Children.Add(new TreeNode("Loading…", "placeholder", node.Database, node.Schema));
-                IReadOnlyList<(string Schema, string Name, string Type)> objects;
-                try
-                {
-                    objects = await tab.Session.ListTablesAndViewsAsync(node.Database!, node.Schema!);
-                }
-                finally
-                {
-                    node.Loading = false;
-                }
-                if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
-                {
-                    StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
-                    return;
-                }
-                node.Children.Clear();
-                foreach (var (schema, name, type) in objects)
-                {
-                    var kind = type == "V" ? "view" : "table";
-                    // Show database context so identical names across DBs stay distinguishable.
-                    var tn = new TreeNode($"{node.Database}.{schema}.{name} ({kind})", kind, node.Database, schema, name);
-                    tn.Children.Add(new TreeNode("…", "placeholder", node.Database, schema, name));
-                    node.Children.Add(tn);
-                }
-                node.Loaded = true;
-            }
-            else if (node.Kind is "table" or "view")
-            {
-                if (!node.Loaded)
-                {
-                    if (node.Loading)
-                        return;
-                    node.Loading = true;
-                    node.Children.Clear();
-                    node.Children.Add(new TreeNode("Loading…", "placeholder", node.Database, node.Schema, node.ObjectName));
-                    IReadOnlyList<(string Name, string TypeName, bool IsNullable)> columns;
-                    try
-                    {
-                        columns = await tab.Session.ListColumnsAsync(node.Database!, node.Schema!, node.ObjectName!);
-                    }
-                    finally
-                    {
-                        node.Loading = false;
-                    }
-                    if (!BindingStillCurrent(tab, binding) || !ReferenceEquals(_active, tab))
-                    {
-                        StatusBar.Text = "Object explorer load discarded (tab/session/database changed).";
-                        return;
-                    }
-                    node.Children.Clear();
-                    foreach (var (name, type, nullable) in columns)
-                        node.Children.Add(new TreeNode($"{name} : {type}{(nullable ? "?" : "")}", "column", node.Database, node.Schema, name));
-                    node.Loaded = true;
-                }
-                if (insertSql && node.Database is not null && node.Schema is not null && node.ObjectName is not null)
-                {
-                    var sql = SqlIdentity.ScriptSelectTop(node.Database, node.Schema, node.ObjectName);
-                    Editor.Text = (Editor.Text ?? "") + sql;
-                    tab.Document.SetText(Editor.Text);
-                    RefreshHeader(tab);
-                }
-            }
+            StatusBar.Text = "Select a schema (or one of its folders) in Object Explorer first.";
+            return;
         }
-        catch (Exception ex)
+        if (!tab.Session.IsConnected)
         {
-            if (ReferenceEquals(_active, tab))
-                StatusBar.Text = SafeUi(ex.Message);
+            StatusBar.Text = "Connect first.";
+            return;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return;
+        }
+        var window = new TableDesignWindow(tab.Session, database, schema);
+        await window.ShowDialog(this);
+        if (window.Applied && ReferenceEquals(_active, tab))
+        {
+            var tables = _explorer.FindTablesFolder(node);
+            if (tables is { Loaded: true })
+                _explorer.Reset(tables);
+            StatusBar.Text = "Table created; expand Tables again (or Refresh) to see it.";
         }
     }
 
-    void RenderResult(QueryResult? result)
+    async void OnImportCsv(object? sender, RoutedEventArgs e)
     {
-        if (result is null)
+        if (_active is null)
+            return;
+        var tab = _active;
+        if (!tab.Session.IsConnected)
         {
-            ResultsBox.Text = "";
-            MessagesBox.Text = "";
+            StatusBar.Text = "Connect first.";
             return;
         }
-        ResultsBox.Text = QueryOutcomeFormatter.FormatResults(result);
-        MessagesBox.Text = QueryOutcomeFormatter.FormatMessages(result);
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return;
+        }
+
+        // Destination: the selected table, else the selected schema (or its folders), else the connected database's dbo.
+        var node = SelectedNode;
+        string? database = node?.Database ?? tab.Session.Database;
+        var schema = node?.Schema ?? "dbo";
+        string? table = node is { Kind: "table" } ? node.ObjectName : null;
+        if (string.IsNullOrEmpty(database))
+        {
+            StatusBar.Text = "Select a database or schema in Object Explorer first.";
+            return;
+        }
+
+        var window = new ImportCsvWindow(tab.Session, database, schema, table);
+        await window.ShowDialog(this);
+        if (!window.Applied || !ReferenceEquals(_active, tab) || node is null)
+            return;
+        if (node.Kind == "table" && node.Loaded)
+            _explorer.Reset(node);
+        else if (_explorer.FindTablesFolder(node) is { Loaded: true } tables)
+            _explorer.Reset(tables);
+        StatusBar.Text = "Import finished; expand Tables again (or Refresh) to see changes.";
     }
+
+    /// <summary>Opens the security window on the active tab's session. Reading and previewing are safe; Apply confirms inside the window.</summary>
+    async void OnSecurity(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect first.";
+            return;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return;
+        }
+        var window = new SecurityWindow(tab.Session, SelectedNode?.Database ?? tab.Session.Database);
+        await window.ShowDialog(this);
+        if (window.Applied)
+            StatusBar.Text = "Permissions were changed; Object Explorer metadata may need a refresh.";
+    }
+
+    async void OnOperations(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect first.";
+            return;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return;
+        }
+        var database = SelectedNode?.Database ?? tab.Session.Database;
+        var window = new OperationsWindow(tab.Session, database);
+        await window.ShowDialog(this);
+        if (window.Applied)
+            StatusBar.Text = "Operation finished or its outcome is unknown; Refresh Object Explorer to see database changes.";
+    }
+
+    async void OnOpenAgent(object? sender, RoutedEventArgs e)
+    {
+        if (_active is null)
+            return;
+        var tab = _active;
+        if (!tab.Session.IsConnected)
+        {
+            StatusBar.Text = "Connect first.";
+            return;
+        }
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is running on this tab. Wait or cancel before opening this window.";
+            return;
+        }
+        await new AgentWindow(tab.Session).ShowDialog(this);
+    }
+
+    async void OnEditRows(object? sender, RoutedEventArgs e)
+    {
+        if (RequireSelectedTable(tablesOnly: true) is not { } selected)
+            return;
+        var (tab, table) = selected;
+        await new EditRowsWindow(tab.Session, table).ShowDialog(this);
+    }
+
+    // ---- Find / Replace -------------------------------------------------------------------
+
+    void OnFindReplace(object? sender, RoutedEventArgs e)
+    {
+        if (_findWindow is not null)
+        {
+            _findWindow.Activate();
+            return;
+        }
+        var window = new FindReplaceWindow(Editor);
+        window.TextReplaced += _ =>
+        {
+            if (_active is null)
+                return;
+            _active.Document.SetText(Editor.Text ?? "");
+            RefreshHeader(_active);
+        };
+        window.Closed += (_, _) => _findWindow = null;
+        _findWindow = window;
+        window.Show(this);
+    }
+
+    async void OnGoToLine(object? sender, RoutedEventArgs e)
+    {
+        var document = Editor.Document;
+        if (document is null)
+            return;
+        var dialog = new GoToLineWindow(document.LineCount, Editor.TextArea.Caret.Line);
+        await dialog.ShowDialog(this);
+        if (dialog.Result is { } target)
+            EditorSupport.GoTo(Editor, target);
+        Editor.TextArea.Focus();
+    }
+
+    // ---- Tools / Help ---------------------------------------------------------------------
+
+    async void OnSettings(object? sender, RoutedEventArgs e)
+    {
+        var dialog = new SettingsWindow();
+        await dialog.ShowDialog<bool>(this);
+        if (dialog.Saved is { } saved)
+        {
+            ApplySettings(saved);
+            if (_active is not null)
+                RenderResult(_active.LastResult);
+            StatusBar.Text = "Settings saved.";
+        }
+    }
+
+    async void OnDiagnostics(object? sender, RoutedEventArgs e)
+    {
+        var bundle = BuildDiagnosticsBundle();
+        await new DiagnosticsWindow(bundle).ShowDialog(this);
+    }
+
+    string BuildDiagnosticsBundle()
+    {
+        var parts = new List<(string Title, string Text)>
+        {
+            ("Application", string.Join('\n',
+                "SQLoryn developer preview (not a release build)",
+                $"Version: {typeof(MainWindow).Assembly.GetName().Version}",
+                $"OS: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}",
+                $"Architecture: {System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}",
+                $".NET: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}",
+                $"Keychain available: {AppServices.SecretsArePersistent}",
+                $"Generated (UTC): {DateTime.UtcNow:O}")),
+            ("Capabilities", "GO batch separators supported. No SSMS parity claimed. No live SQL Server evidence is implied by this bundle.")
+        };
+
+        var sessions = new List<string>();
+        for (var i = 0; i < _tabs.Count; i++)
+        {
+            var tab = _tabs[i];
+            var s = tab.Session;
+            sessions.Add(string.Join(" | ",
+                $"tab {i + 1}",
+                $"status: {tab.Status}",
+                $"connected: {s.IsConnected}",
+                $"server: {s.ServerDisplay ?? "-"}",
+                $"database: {s.Database ?? "-"}",
+                $"version: {s.ServerVersion ?? "-"}",
+                $"target unknown: {s.TargetUnknown}",
+                $"executing: {tab.IsExecuting}"));
+        }
+        parts.Add(("Sessions", string.Join('\n', sessions)));
+        parts.Add(("Status line", StatusBar.Text ?? ""));
+        parts.Add(("Last error (redacted)", string.IsNullOrEmpty(_lastError) ? "(none recorded this run)" : _lastError));
+        if (_active?.LastResult is { } last)
+        {
+            parts.Add(("Last run outcome (redacted)", QueryOutcomeFormatter.FormatMessages(last)));
+        }
+        parts.Add(("Excluded", "SQL text, result rows, passwords, connection strings and script paths are never included."));
+        return DiagnosticsRedactor.BuildSupportBundle(parts);
+    }
+
+    async void OnAbout(object? sender, RoutedEventArgs e)
+        => await Dialogs.ShowMessageAsync(this, "About SQLoryn",
+            "SQLoryn — database studio (developer preview)\n\n" +
+            "• SQL authentication with mandatory encryption.\n" +
+            "• GO batch separators are supported.\n" +
+            $"• Version {typeof(MainWindow).Assembly.GetName().Version}. Build and support details are in Tools > Diagnostics Bundle.\n" +
+            "• This preview does not claim parity with SQL Server Management Studio, and no live SQL Server test evidence is implied.\n" +
+            "• Passwords are stored only if you choose Remember (macOS Keychain).\n\n" +
+            "Not affiliated with Microsoft.");
 
     static string SafeUi(string message)
     {

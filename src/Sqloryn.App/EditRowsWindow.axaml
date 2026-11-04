@@ -1,0 +1,31 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.EditRowsWindow"
+        Title="Edit Top 200 Rows — SQLoryn"
+        Width="1000" Height="640"
+        MinWidth="720" MinHeight="420"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <DockPanel Margin="14">
+    <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,10">
+      <TextBlock Name="TitleText" FontSize="18" FontWeight="SemiBold" />
+      <TextBlock Name="HintText" Classes="muted" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Bottom" Spacing="8" Margin="0,10,0,0">
+      <TextBlock Name="StatusText" TextWrapping="Wrap" Classes="muted" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <Button Name="AddButton" Content="Add row" Click="OnAddRow" IsEnabled="False" />
+        <Button Name="DeleteButton" Content="Delete row…" Click="OnDeleteRow" IsEnabled="False" />
+        <Button Name="NullButton" Content="Set cell to NULL" Click="OnSetNull" />
+        <Button Content="Reload (discard edits)" Click="OnReload" />
+        <Button Name="SaveButton" Content="Save changes…" Classes="primary" Click="OnSave" IsEnabled="False" />
+        <Button Content="Close" Click="OnClose" />
+      </StackPanel>
+    </StackPanel>
+
+    <DataGrid Name="RowGrid" AutoGenerateColumns="False" CanUserSortColumns="False"
+              CanUserReorderColumns="False" SelectionMode="Single"
+              AutomationProperties.Name="Editable rows" />
+  </DockPanel>
+</Window>

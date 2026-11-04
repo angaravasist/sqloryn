@@ -1,0 +1,69 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.AgentWindow"
+        Title="SQL Server Agent — SQLoryn"
+        Width="1000" Height="720"
+        MinWidth="760" MinHeight="520"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <DockPanel Margin="14">
+    <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,10">
+      <TextBlock FontSize="18" FontWeight="SemiBold" Text="SQL Server Agent jobs" />
+      <TextBlock Name="GateText" TextWrapping="Wrap" Classes="muted"
+                 AutomationProperties.Name="Agent availability" />
+      <TextBlock Classes="muted" TextWrapping="Wrap"
+                 Text="Listing jobs, schedules and history only reads. Run and Delete show exactly what will be sent and wait for your confirmation. Times are server time; Agent stores no time zone." />
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Bottom" Spacing="6" Margin="0,10,0,0">
+      <ProgressBar Name="BusyBar" IsIndeterminate="True" IsVisible="False" />
+      <TextBlock Name="ActionText" TextWrapping="Wrap" AutomationProperties.Name="Last Agent action result" />
+      <TextBlock Name="StatusText" TextWrapping="Wrap" Classes="muted" AutomationProperties.Name="Agent status" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <Button Name="RefreshButton" Content="Refresh" Click="OnRefresh" />
+        <Button Name="RunButton" Content="Run Job…" Click="OnRunJob" IsEnabled="False" />
+        <Button Name="DeleteButton" Content="Delete Job…" Classes="danger" Click="OnDeleteJob" IsEnabled="False" />
+        <Button Content="Close" Click="OnClose" />
+      </StackPanel>
+    </StackPanel>
+
+    <Grid RowDefinitions="2*,Auto,*,Auto" RowSpacing="6">
+      <DataGrid Name="JobsGrid" Grid.Row="0" AutoGenerateColumns="False" IsReadOnly="True"
+                CanUserSortColumns="False" SelectionMode="Single" SelectionChanged="OnJobSelected"
+                AutomationProperties.Name="Agent jobs">
+        <DataGrid.Columns>
+          <DataGridTextColumn Header="Job" Binding="{ReflectionBinding Name}" Width="2*" />
+          <DataGridTextColumn Header="Enabled" Binding="{ReflectionBinding Enabled}" Width="80" />
+          <DataGridTextColumn Header="Last outcome" Binding="{ReflectionBinding LastStatus}" Width="110" />
+          <DataGridTextColumn Header="Last run" Binding="{ReflectionBinding LastRun}" Width="*" />
+          <DataGridTextColumn Header="Next run" Binding="{ReflectionBinding NextRun}" Width="*" />
+        </DataGrid.Columns>
+      </DataGrid>
+      <TextBlock Grid.Row="1" Name="DetailHeader" Classes="muted" Text="Select a job to see its schedules and history." />
+      <Grid Grid.Row="2" ColumnDefinitions="*,2*" ColumnSpacing="8" RowDefinitions="*">
+        <DataGrid Name="SchedulesGrid" Grid.Column="0" AutoGenerateColumns="False" IsReadOnly="True"
+                  CanUserSortColumns="False" AutomationProperties.Name="Job schedules">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="Schedule" Binding="{ReflectionBinding Name}" Width="*" />
+            <DataGridTextColumn Header="On" Binding="{ReflectionBinding Enabled}" Width="50" />
+            <DataGridTextColumn Header="Definition" Binding="{ReflectionBinding Description}" Width="2*" />
+            <DataGridTextColumn Header="Next run" Binding="{ReflectionBinding NextRun}" Width="*" />
+          </DataGrid.Columns>
+        </DataGrid>
+        <DataGrid Name="HistoryGrid" Grid.Column="1" AutoGenerateColumns="False" IsReadOnly="True"
+                  CanUserSortColumns="False" SelectionMode="Single" SelectionChanged="OnHistorySelected"
+                  AutomationProperties.Name="Job history">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="When" Binding="{ReflectionBinding When}" Width="2*" />
+            <DataGridTextColumn Header="Step" Binding="{ReflectionBinding Step}" Width="*" />
+            <DataGridTextColumn Header="Status" Binding="{ReflectionBinding Status}" Width="90" />
+            <DataGridTextColumn Header="Duration" Binding="{ReflectionBinding Duration}" Width="80" />
+          </DataGrid.Columns>
+        </DataGrid>
+      </Grid>
+      <TextBox Grid.Row="3" Name="MessageBox" Classes="mono" IsReadOnly="True" AcceptsReturn="True"
+               TextWrapping="Wrap" Height="90" PlaceholderText="Select a history row to read the server's message."
+               AutomationProperties.Name="History message" />
+    </Grid>
+  </DockPanel>
+</Window>
