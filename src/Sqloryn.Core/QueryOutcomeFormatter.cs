@@ -7,6 +7,19 @@ namespace Sqloryn.Core;
 /// </summary>
 public static class QueryOutcomeFormatter
 {
+    /// <summary>
+    /// Last observed <c>XACT_STATE</c> from a finished batch. This is not a live monitor and it does not
+    /// start, commit or roll back a transaction.
+    /// </summary>
+    public static string DescribeTransaction(int? state) => state switch
+    {
+        1 => "Transaction: open (XACT_STATE 1), from the last batch",
+        0 => "Transaction: none (XACT_STATE 0), from the last batch",
+        -1 => "Transaction: uncommittable (XACT_STATE -1), from the last batch",
+        null => "Transaction: not observed",
+        _ => $"Transaction: XACT_STATE {state}, from the last batch"
+    };
+
     public static string DescribeStatus(QueryResult result) => result.Completion switch
     {
         QueryCompletionKind.Succeeded => "Succeeded",

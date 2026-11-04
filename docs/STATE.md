@@ -65,7 +65,7 @@ Full delivery contract active on tip after WS1–WS12 merges. **Not product-comp
 | Python tests | **51 OK** |
 | `repo_preflight.py` | PASS |
 | `bash scripts/build_macos_app.sh` | arm64 FD `.app` + [provenance](evidence/package-arm64.md) |
-| Launch / screenshots | Screen Recording **denied** (rechecked); Accessibility **available**. Agent-shell Avalonia RenderTimer `-6661` on direct exec; prefer `open` + AX tree over claiming universal screenshot block |
+| Launch / screenshots | Screen Recording **denied** (`CGPreflightScreenCaptureAccess` false, rechecked unsandboxed 4 Nov 2026). Accessibility **available** (`AXIsProcessTrusted` true for this agent process). Agent-shell Avalonia RenderTimer `-6661` on direct exec; prefer `open` + AX tree over claiming universal screenshot block |
 | Live disposable SQL (Linux) | **PASS on 0af9108** for the six scenarios listed above — [run 41793052872](https://github.com/angaravasist/sqloryn/actions/runs/41793052872). Expanded scenarios for this wave (CSV fidelity, design apply, insert/delete, security, backup, time/GUID) are in progress. Offline journey ledger: [JOURNEY_EVIDENCE](ssms/JOURNEY_EVIDENCE.md) |
 | Native Mac SQL / screenshots | **Not accepted** — Screen Recording still denied; AX available. Linux live evidence ≠ Mac native |
 | Windows SSH product path | **Closed** |

@@ -220,6 +220,7 @@ public partial class MainWindow : Window
             StatusBar.Text = "No tab.";
             ConnectionLabel.Classes.Set("connected", false);
             ConnectionLabel.Text = "Not connected";
+            UpdateTransactionLabel();
             UpdateWelcome();
             return;
         }
@@ -232,8 +233,13 @@ public partial class MainWindow : Window
                 ? $"{session.ServerDisplay} / (target unknown — revalidate)"
                 : $"{session.ServerDisplay} / {session.Database}";
         StatusBar.Text = _active.Status;
+        UpdateTransactionLabel();
         UpdateWelcome();
     }
+
+    /// <summary>Shows the last batch's XACT_STATE for the active tab. Null until a batch records one.</summary>
+    void UpdateTransactionLabel()
+        => TransactionStateLabel.Text = QueryOutcomeFormatter.DescribeTransaction(_active?.LastResult?.TransactionState);
 
     void UpdateCommandState(QueryTab tab)
     {

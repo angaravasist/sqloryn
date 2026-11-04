@@ -125,9 +125,15 @@
 
         <DockPanel Grid.Row="1">
           <Border DockPanel.Dock="Top" Classes="sectionhead">
-            <TextBlock Name="RunModeLabel" Classes="muted"
-                       Text="Run mode: document (select text to run a selection)"
-                       AutomationProperties.Name="Run mode" />
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Right" Name="TransactionStateLabel" Classes="muted"
+                         Text="Transaction: not observed" Margin="12,0,0,0"
+                         AutomationProperties.Name="Last observed transaction state"
+                         ToolTip.Tip="XACT_STATE from the last batch on this tab. This label does not start, commit or roll back a transaction." />
+              <TextBlock Name="RunModeLabel" Classes="muted"
+                         Text="Run mode: document (select text to run a selection)"
+                         AutomationProperties.Name="Run mode" />
+            </DockPanel>
           </Border>
           <!-- AvaloniaEdit (MIT, docs/decisions/005-sql-editor-component.md). ScriptDocument stays the source of truth;
                MainWindow syncs Editor.Text <-> Document. Hint: Run executes the selection when one exists, otherwise

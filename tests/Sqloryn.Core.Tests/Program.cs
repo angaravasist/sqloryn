@@ -3036,7 +3036,8 @@ Pass("explorer-ownership");
         ["ConnectButton"] = "Connect",
         ["RunButton"] = "Run query",
         ["CancelButton"] = "Cancel query",
-        ["SidebarToggle"] = "Toggle object explorer sidebar"
+        ["SidebarToggle"] = "Toggle object explorer sidebar",
+        ["TransactionStateLabel"] = "Last observed transaction state"
     };
     foreach (var (control, name) in expectMain)
         Check(main.TryGetValue(control, out var actual) && actual == name, $"a11y-main-{control}-has-automation-name");
@@ -3051,6 +3052,15 @@ Pass("explorer-ownership");
     var shell = File.ReadAllText(Path.Combine(appDir, "MainWindow.Shell.cs"));
     Check(shell.Contains("Key.F5", StringComparison.Ordinal) && shell.Contains("Key.Escape", StringComparison.Ordinal), "keyboard-f5-run-escape-cancel-present");
     Check(shell.Contains("Key.Enter, KeyModifiers.Meta", StringComparison.Ordinal), "keyboard-mac-cmd-return-run-present");
+
+    var resultsUi = File.ReadAllText(Path.Combine(appDir, "MainWindow.Results.cs"));
+    Check(resultsUi.Contains("FilterContains(", StringComparison.Ordinal) && resultsUi.Contains("Does not re-query the server", StringComparison.Ordinal), "ws4-results-filter-box");
+    Check(resultsUi.Contains("Export still writes the full retained result", StringComparison.Ordinal), "ws4-results-filter-export-unfiltered");
+    Check(QueryOutcomeFormatter.DescribeTransaction(1).Contains("open", StringComparison.Ordinal) && QueryOutcomeFormatter.DescribeTransaction(1).Contains("last batch", StringComparison.Ordinal), "xact-open-last-batch");
+    Check(QueryOutcomeFormatter.DescribeTransaction(0).Contains("none", StringComparison.Ordinal), "xact-none-last-batch");
+    Check(QueryOutcomeFormatter.DescribeTransaction(-1).Contains("uncommittable", StringComparison.Ordinal), "xact-uncommittable-last-batch");
+    Check(QueryOutcomeFormatter.DescribeTransaction(null) == "Transaction: not observed", "xact-not-observed");
+    Check(!QueryOutcomeFormatter.DescribeTransaction(1).Contains("commit", StringComparison.OrdinalIgnoreCase), "xact-label-does-not-claim-commit");
 
     // App Save path: external-change refusal is caught before the generic handler so the buffer stays dirty with a distinct message.
     var mainCode = File.ReadAllText(Path.Combine(appDir, "MainWindow.axaml.cs"));
