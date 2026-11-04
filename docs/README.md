@@ -15,6 +15,7 @@ source of truth. Update relevant documents in the same PR as behaviour.
 | Code map, data flow | [Architecture](ARCHITECTURE.md) |
 | Why these choices? | [ADR-001](decisions/001-sqlclient-probe.md), [ADR-002](decisions/002-macos-ssh-sql-probe.md), [ADR-003](decisions/003-desktop-avalonia.md), [ADR-004](decisions/004-macos-database-studio.md) |
 | What must this experiment prove? | [SPEC-001](specs/001-sqlclient-probe.md), [SPEC-002](specs/002-developer-preview-0.md), [SPEC-003](specs/003-macos-database-studio.md) |
+| Offline journey/keyboard checklist and per-journey evidence | [Journeys](JOURNEYS.md), [Journey evidence](ssms/JOURNEY_EVIDENCE.md) |
 | How to build/test safely | [Testing](TESTING.md), [Walkthrough](WALKTHROUGH.md) |
 | Dependencies and redistribution | [Dependency assessment](DEPENDENCIES.md) |
 | Credentials, network, storage and unresolved risk | [Threat model](THREAT_MODEL.md) |

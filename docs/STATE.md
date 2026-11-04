@@ -42,14 +42,14 @@ Hosted checks for the post-merge tip are pending after push.
 | Check | Result |
 |---|---|
 | `dotnet build SQLoryn.slnx -c Release` | 0 warnings / 0 errors |
-| Core component executable | **98 PASS**, 0 FAIL (includes S-1 fix) |
+| Core component executable | **101 PASS lines** (100 named + summary), 0 FAIL (includes S-1 fix, offline journey/keyboard/large-script checks) |
 | SqlClientProbe.Tests | **35 PASS** |
 | Python tests | **43 OK** |
 | `repo_preflight.py` | PASS |
 | `bash scripts/build_macos_app.sh` | arm64 FD `.app` |
-| Launch smoke | process started |
+| Launch smoke | process started; `scripts/measure_app_launch.sh` median 127 ms / max 169 ms to process start on M3, 3 runs ([evidence](evidence/launch-arm64.md)); not window or input-ready |
 | Screenshots | **Blocked** (no Screen Recording grant for agent) |
-| Live disposable SQL / eight journeys | **Not run** — no authorised fixture |
+| Live disposable SQL / eight journeys | **Not run** — no authorised fixture; offline per-step status in [JOURNEY_EVIDENCE](ssms/JOURNEY_EVIDENCE.md) and [JOURNEYS](JOURNEYS.md) |
 | Windows SSH product path | **Closed** |
 
 ## Core SQL acceptance harness

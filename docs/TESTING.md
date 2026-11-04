@@ -27,6 +27,9 @@ open artifacts/macos/osx-arm64/SQLoryn.app   # arm64
 # open artifacts/macos/osx-x64/SQLoryn.app   # Intel
 ```
 
+Offline launch timing (process start only; writes `docs/evidence/launch-<arch>.md`):
+`bash scripts/measure_app_launch.sh 3`. Offline journey checklist: [JOURNEYS.md](JOURNEYS.md).
+
 Requires the SDK/runtime from `global.json`. Framework-dependent publish; not a
 signed installer. See [WALKTHROUGH.md](WALKTHROUGH.md).
 

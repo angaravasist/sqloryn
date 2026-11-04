@@ -1659,6 +1659,31 @@ Pass("explorer-ownership");
             Pass("ctl-connect-never-sees-other-secret");
         }
 
+        // Keychain denial for the current generation, typing after apply, and Forget (dialog close / profile delete)
+        {
+            var c = new ConnectAutofillController();
+            var gen = c.SelectProfile(Profile(pid));
+            var failed = c.LookupFailed(gen, new InvalidOperationException("denied"));
+            Check(failed.Status == AutofillStatus.Failed && !c.LookupPending && c.PasswordText == "" && !c.PasswordIsAutofilled, "ctl-denied-current-surfaces-failure");
+            var afterDenied = c.ResolveForConnect(Id());
+            Check(afterDenied.Allowed && afterDenied.Password == "" && !afterDenied.UsesRememberedSecret, "ctl-denied-connect-needs-explicit-password");
+
+            var c2 = new ConnectAutofillController();
+            c2.LookupCompleted(c2.SelectProfile(Profile(pid)), "secretA");
+            c2.UserTypedPassword("typedOverAutofill");
+            var typedDecision = c2.ResolveForConnect(Id());
+            Check(c2.PasswordText == "typedOverAutofill" && !c2.PasswordIsAutofilled && typedDecision.Allowed && !typedDecision.UsesRememberedSecret, "ctl-typed-over-autofill-is-explicit");
+
+            var c3 = new ConnectAutofillController();
+            var gen3 = c3.SelectProfile(Profile(pid));
+            c3.LookupCompleted(gen3, "secretA");
+            c3.Forget();
+            Check(c3.PasswordText == "" && !c3.PasswordIsAutofilled, "ctl-forget-clears-box");
+            Check(c3.LookupCompleted(gen3, "secretA").Status == AutofillStatus.Stale && c3.PasswordText == "", "ctl-forget-then-late-result-stale");
+            Check(!c3.ResolveForConnect(Id()).UsesRememberedSecret, "ctl-forget-connect-no-secret");
+            Pass("ctl-denied-typed-forget-ordering");
+        }
+
         // end-to-end with a delayed store: Window-style sequence
         {
             var store = new DelayedSecretStore();
@@ -2784,6 +2809,98 @@ Pass("explorer-ownership");
         Check(result.Status == EstimatedPlanStatus.Succeeded && !result.SessionTainted && !session.TargetUnknown, "sqlsession-clean-estimate-not-tainted");
         Pass("sqlsession-clean-estimate-not-tainted");
     }
+}
+
+// Large-script responsiveness (generous bound; no UI). Elapsed time is reported in the failure message only.
+{
+    const int Bound = 2000;
+    var line = "SELECT 1 AS [col]; -- padding padding padding padding padding\n";
+    var sb = new System.Text.StringBuilder(2_200_000);
+    while (sb.Length < 2_000_000)
+        sb.Append(line);
+    sb.Append("-- NEEDLE_AT_END\n");
+    var big = sb.ToString();
+    Check(big.Length >= 2_000_000, "large-script-size");
+
+    var bigDoc = new ScriptDocument();
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    bigDoc.SetText(big);
+    var setMs = sw.ElapsedMilliseconds;
+    if (setMs > Bound || bigDoc.Text.Length != big.Length || !bigDoc.IsDirty)
+        throw new Exception($"FAIL large-script-settext: {setMs} ms (bound {Bound} ms), length {bigDoc.Text.Length}");
+
+    sw.Restart();
+    var hit = FindReplaceEngine.FindNext(bigDoc.Text, "NEEDLE_AT_END", 0, caseSensitive: true);
+    var findMs = sw.ElapsedMilliseconds;
+    if (findMs > Bound || hit != big.Length - "-- NEEDLE_AT_END\n".Length + 3)
+        throw new Exception($"FAIL large-script-findnext: {findMs} ms (bound {Bound} ms), index {hit}");
+
+    sw.Restart();
+    var miss = FindReplaceEngine.FindNext(bigDoc.Text, "ABSENT_NEEDLE", bigDoc.Text.Length / 2, caseSensitive: false);
+    var missMs = sw.ElapsedMilliseconds;
+    if (missMs > Bound || miss != -1)
+        throw new Exception($"FAIL large-script-findnext-miss-wrap: {missMs} ms (bound {Bound} ms), index {miss}");
+    Pass("large-script-settext-and-find");
+}
+
+// Offline keyboard/automation contract: critical controls keep stable names and shortcuts (source scan; not a UI run).
+{
+    static string FindRepoRoot()
+    {
+        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
+            if (File.Exists(Path.Combine(d.FullName, "SQLoryn.slnx")))
+                return d.FullName;
+        throw new Exception("FAIL repo root (SQLoryn.slnx) not found from test base directory");
+    }
+
+    var appDir = Path.Combine(FindRepoRoot(), "src", "Sqloryn.App");
+    const string Automation = "AutomationProperties.Name";
+
+    static Dictionary<string, string?> NamedControls(string axamlPath)
+    {
+        var map = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var el in System.Xml.Linq.XDocument.Load(axamlPath).Descendants())
+        {
+            var n = el.Attribute("Name")?.Value;
+            if (n is not null)
+                map[n] = el.Attribute("AutomationProperties.Name")?.Value;
+        }
+        return map;
+    }
+
+    var main = NamedControls(Path.Combine(appDir, "MainWindow.axaml"));
+    var expectMain = new Dictionary<string, string>
+    {
+        ["WelcomeConnect"] = "New connection",
+        ["WelcomeNewQuery"] = "New query",
+        ["WelcomeOpen"] = "Open SQL file",
+        ["ConnectButton"] = "Connect",
+        ["RunButton"] = "Run query",
+        ["CancelButton"] = "Cancel query",
+        ["SidebarToggle"] = "Toggle object explorer sidebar"
+    };
+    foreach (var (control, name) in expectMain)
+        Check(main.TryGetValue(control, out var actual) && actual == name, $"a11y-main-{control}-has-automation-name");
+
+    var connectXml = System.Xml.Linq.XDocument.Load(Path.Combine(appDir, "ConnectWindow.axaml"));
+    var connectButtons = connectXml.Descendants().Where(e => e.Name.LocalName == "Button")
+        .ToDictionary(e => e.Attribute("Content")?.Value ?? "", e => e.Attribute(Automation)?.Value);
+    Check(connectButtons.GetValueOrDefault("Connect") == "Connect" && connectButtons.GetValueOrDefault("Cancel") == "Cancel connect", "a11y-connect-dialog-buttons");
+    var defaultConnect = connectXml.Descendants().Any(e => e.Name.LocalName == "Button" && e.Attribute("Content")?.Value == "Connect" && e.Attribute("IsDefault")?.Value == "True");
+    Check(defaultConnect, "a11y-connect-dialog-return-key-default");
+
+    var shell = File.ReadAllText(Path.Combine(appDir, "MainWindow.Shell.cs"));
+    Check(shell.Contains("Key.F5", StringComparison.Ordinal) && shell.Contains("Key.Escape", StringComparison.Ordinal), "keyboard-f5-run-escape-cancel-present");
+    Check(shell.Contains("Key.Enter, KeyModifiers.Meta", StringComparison.Ordinal), "keyboard-mac-cmd-return-run-present");
+
+    // App Save path: external-change refusal is caught before the generic handler so the buffer stays dirty with a distinct message.
+    var mainCode = File.ReadAllText(Path.Combine(appDir, "MainWindow.axaml.cs"));
+    var externalCatch = mainCode.IndexOf("catch (ExternalDocumentChangedException", StringComparison.Ordinal);
+    var genericCatch = mainCode.IndexOf("catch (Exception ex)", externalCatch < 0 ? 0 : externalCatch, StringComparison.Ordinal);
+    Check(externalCatch >= 0 && genericCatch > externalCatch, "app-save-external-change-handler-precedes-generic");
+    var externalException = new ExternalDocumentChangedException("/tmp/x.sql");
+    Check(externalException.Message.Length > 0 && !externalException.Message.Contains("secret", StringComparison.OrdinalIgnoreCase), "app-save-external-change-message-present");
+    Pass("a11y-keyboard-contract-source-scan");
 }
 
 Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
