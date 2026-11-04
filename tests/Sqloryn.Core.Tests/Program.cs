@@ -2499,6 +2499,130 @@ Pass("explorer-ownership");
         Pass("estimate-plan-oversize");
     }
 
+    // Per-plan limit applies via the fake's oversized-plan support too, and the plan is never retained truncated.
+    {
+        var runner = new FakePlanRunner { OversizedPlanCharacters = EstimatedPlanService.MaxPlanCharacters + 1 };
+        var result = await EstimatedPlanService.EstimateAsync(runner, "SELECT 1");
+        Check(result.Status == EstimatedPlanStatus.Failed && result.PlanXml.Count == 0 && runner.Log[^1] == "SET OFF" && !result.SessionTainted, "estimate-plan-oversize-fake");
+        Pass("estimate-plan-oversize-fake");
+    }
+
+    // Total budget across every plan and batch: stops before the next batch, never truncates.
+    {
+        const int threeMiB = 3 * 1024 * 1024;
+        Check(EstimatedPlanService.MaxTotalPlanCharacters >= EstimatedPlanService.MaxPlanCharacters &&
+              threeMiB < EstimatedPlanService.MaxPlanCharacters &&
+              3 * threeMiB > EstimatedPlanService.MaxTotalPlanCharacters &&
+              2 * threeMiB <= EstimatedPlanService.MaxTotalPlanCharacters, "estimate-plan-total-budget-constants");
+        var runner = new FakePlanRunner { OversizedPlanCharacters = threeMiB };
+        var result = await EstimatedPlanService.EstimateAsync(runner, "SELECT 1\nGO\nSELECT 2\nGO\nSELECT 3\nGO\nSELECT 4");
+        Check(result.Status == EstimatedPlanStatus.Failed && runner.BatchCalls == 3 && result.PlanXml.Count == 2 &&
+              result.PlanXml.All(p => p.Length == threeMiB) &&
+              result.Error!.Contains("total", StringComparison.OrdinalIgnoreCase) && runner.Log[^1] == "SET OFF" &&
+              !runner.ShowplanOn && !result.SessionTainted && runner.DmlExecutions == 0, "estimate-plan-total-budget-stops");
+
+        // Many plans within a single batch also count.
+        var multi = new FakePlanRunner { PlanFor = _ => [new string('y', threeMiB), new string('y', threeMiB), new string('y', threeMiB)] };
+        var r2 = await EstimatedPlanService.EstimateAsync(multi, "SELECT 1");
+        Check(r2.Status == EstimatedPlanStatus.Failed && r2.PlanXml.Count == 2 && r2.PlanXml.All(p => p.Length == threeMiB), "estimate-plan-total-budget-single-batch");
+
+        // Exactly at the budget is allowed.
+        var half = EstimatedPlanService.MaxTotalPlanCharacters / 2;
+        var exact = new FakePlanRunner { OversizedPlanCharacters = half };
+        var r3 = await EstimatedPlanService.EstimateAsync(exact, "SELECT 1\nGO\nSELECT 2");
+        Check(half <= EstimatedPlanService.MaxPlanCharacters && r3.Status == EstimatedPlanStatus.Succeeded && r3.PlanXml.Count == 2, "estimate-plan-total-budget-exact");
+        Pass("estimate-plan-total-budget");
+    }
+
+    // Total-budget failure with a failing OFF taints the session.
+    {
+        var runner = new FakePlanRunner
+        {
+            OversizedPlanCharacters = 3 * 1024 * 1024,
+            OffFailure = new PlanCommandException(null, "network down")
+        };
+        var result = await EstimatedPlanService.EstimateAsync(runner, "SELECT 1\nGO\nSELECT 2\nGO\nSELECT 3\nGO\nSELECT 4");
+        Check(result.Status == EstimatedPlanStatus.Failed && result.SessionTainted && runner.BatchCalls == 3, "estimate-plan-total-budget-off-failure-tainted");
+        Pass("estimate-plan-total-budget-off-failure");
+    }
+
+    // Cancel mid-estimate: Cancelled, OFF attempted; when OFF fails the session is tainted.
+    {
+        var runner = new FakePlanRunner
+        {
+            BatchFailure = new OperationCanceledException(),
+            OffFailure = new PlanCommandException(null, "network down")
+        };
+        var result = await EstimatedPlanService.EstimateAsync(runner, Insert);
+        Check(result.Status == EstimatedPlanStatus.Cancelled && result.SessionTainted && runner.Log[^1] == "SET OFF" && runner.DmlExecutions == 0, "estimate-plan-cancel-off-failure-tainted");
+
+        // Cancellation token fired while the batch is running (runner honours the token).
+        using var cts = new CancellationTokenSource();
+        var ctsRunner = new FakePlanRunner { PlanFor = _ => { cts.Cancel(); cts.Token.ThrowIfCancellationRequested(); return ["<p/>"]; } };
+        var r2 = await EstimatedPlanService.EstimateAsync(ctsRunner, Insert, cts.Token);
+        Check(r2.Status == EstimatedPlanStatus.Cancelled && !r2.SessionTainted && ctsRunner.Log[^1] == "SET OFF" && !ctsRunner.ShowplanOn, "estimate-plan-cancel-mid-estimate-off-attempted");
+        Pass("estimate-plan-cancel-taint");
+    }
+
+    // Unexpected exception types while turning SHOWPLAN off also taint (never leak out unclassified).
+    foreach (Exception offFailure in new Exception[]
+    {
+        new InvalidOperationException("reset boom"),
+        new ObjectDisposedException("connection"),
+        new NullReferenceException("reset boom"),
+        new IOException("pipe broke"),
+    })
+    {
+        var runner = new FakePlanRunner { OffFailure = offFailure };
+        var result = await EstimatedPlanService.EstimateAsync(runner, Insert);
+        Check(result.SessionTainted && result.Status == EstimatedPlanStatus.Failed, "estimate-plan-unexpected-off-exception-tainted:" + offFailure.GetType().Name);
+        var cancelled = new FakePlanRunner { OffFailure = offFailure, BatchFailure = new OperationCanceledException() };
+        var r2 = await EstimatedPlanService.EstimateAsync(cancelled, Insert);
+        Check(r2.SessionTainted && r2.Status == EstimatedPlanStatus.Cancelled, "estimate-plan-cancel-unexpected-off-tainted:" + offFailure.GetType().Name);
+    }
+    Pass("estimate-plan-unexpected-off-exception");
+
+    // Provider-bound plan reader: sequential chunked reads, hard cap, no silent truncation.
+    {
+        static (Func<long, char[], int, int> GetChars, Func<long> Served) Source(string text)
+        {
+            long served = 0;
+            return ((offset, buffer, length) =>
+            {
+                var n = (int)Math.Min(length, Math.Max(0, text.Length - offset));
+                text.CopyTo((int)offset, buffer, 0, n);
+                served += n;
+                return n;
+            }, () => served);
+        }
+
+        var small = "<ShowPlanXML>" + new string('a', 30_000) + "</ShowPlanXML>";
+        var (smallGet, _) = Source(small);
+        Check(PlanXmlReader.ReadBounded(smallGet, 100_000, CancellationToken.None) == small, "plan-reader-under-budget");
+
+        var (exactGet, _) = Source(new string('b', 20_000));
+        Check(PlanXmlReader.ReadBounded(exactGet, 20_000, CancellationToken.None).Length == 20_000, "plan-reader-exactly-budget");
+
+        var (bigGet, served) = Source(new string('c', 10_000_000));
+        try
+        {
+            PlanXmlReader.ReadBounded(bigGet, 50_000, CancellationToken.None);
+            throw new Exception("FAIL plan-reader-over-budget did not throw");
+        }
+        catch (PlanCommandException ex)
+        {
+            Check(ex.Message.Contains("too large", StringComparison.OrdinalIgnoreCase), "plan-reader-over-budget-message");
+        }
+        Check(served() < 50_000 + 2 * PlanXmlReader.ChunkCharacters, "plan-reader-stops-reading-at-budget:" + served());
+
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var (cGet, _) = Source("<a/>");
+        try { PlanXmlReader.ReadBounded(cGet, 100, cancelled.Token); throw new Exception("FAIL plan-reader-cancel"); }
+        catch (OperationCanceledException) { }
+        Pass("plan-reader-bounded");
+    }
+
     // Messages formatting is single-purpose text and says nothing ran.
     {
         var ok = new EstimatedPlanResult(EstimatedPlanStatus.Succeeded, ["<ShowPlanXML/>"], null, false);
@@ -2535,6 +2659,48 @@ Pass("explorer-ownership");
         try { await offline.EstimatePlanAsync(Insert); throw new Exception("FAIL estimate-offline"); }
         catch (InvalidOperationException) { }
         Pass("sqlsession-estimate-plan");
+    }
+
+    // Tainted estimate: session is target-unknown; ExecuteAsync/EstimatePlanAsync refuse until reconnect.
+    foreach (var taint in new Func<FakePlanRunner>[]
+    {
+        () => new FakePlanRunner { OffFailure = new PlanCommandException(null, "network down") },
+        () => new FakePlanRunner { OffFailure = new NullReferenceException("reset boom") },
+        () => new FakePlanRunner { BatchFailure = new InvalidOperationException("reader exploded") },
+        () => new FakePlanRunner { OversizedPlanCharacters = 3 * 1024 * 1024, OffFailure = new PlanCommandException(null, "network down") },
+    })
+    {
+        var executed = 0;
+        var runner = taint();
+        var runnerCreations = 0;
+        await using var session = new SqlSession
+        {
+            BatchExecutorForTests = (_, _, _) => { executed++; throw new Exception("FAIL tainted session must not execute"); },
+            PlanRunnerForTests = () => { runnerCreations++; return runner; }
+        };
+        var sql = runner.OversizedPlanCharacters is null ? Insert : "SELECT 1\nGO\nSELECT 2\nGO\nSELECT 3\nGO\nSELECT 4";
+        var result = await session.EstimatePlanAsync(sql);
+        Check(result.SessionTainted && session.TargetUnknown && !session.HasActiveCommand, "sqlsession-estimate-tainted-target-unknown");
+
+        try { await session.ExecuteAsync("SELECT 1"); throw new Exception("FAIL execute after tainted estimate"); }
+        catch (InvalidOperationException ex) { Check(ex.Message.Contains("target is unknown", StringComparison.OrdinalIgnoreCase), "sqlsession-tainted-execute-message"); }
+        try { await session.ExecuteAsync("SELECT 1\nGO\nSELECT 2"); throw new Exception("FAIL multi-batch execute after tainted estimate"); }
+        catch (InvalidOperationException) { }
+        try { await session.EstimatePlanAsync(Insert); throw new Exception("FAIL estimate after tainted estimate"); }
+        catch (InvalidOperationException ex) { Check(ex.Message.Contains("target is unknown", StringComparison.OrdinalIgnoreCase), "sqlsession-tainted-estimate-message"); }
+        Check(executed == 0 && runnerCreations == 1 && runner.DmlExecutions == 0, "sqlsession-tainted-refuses-everything");
+    }
+    Pass("sqlsession-estimate-tainted-refuses-until-reconnect");
+
+    // A clean estimate does not poison the session.
+    {
+        await using var session = new SqlSession
+        {
+            PlanRunnerForTests = () => new FakePlanRunner()
+        };
+        var result = await session.EstimatePlanAsync(Insert);
+        Check(result.Status == EstimatedPlanStatus.Succeeded && !result.SessionTainted && !session.TargetUnknown, "sqlsession-clean-estimate-not-tainted");
+        Pass("sqlsession-clean-estimate-not-tainted");
     }
 }
 

@@ -25,6 +25,37 @@ public sealed class PlanCommandException(int? number, string message, Exception?
     public int? Number { get; } = number;
 }
 
+/// <summary>
+/// Reads one plan document in fixed-size chunks and stops as soon as it exceeds the budget, so a hostile or huge plan is
+/// never materialised in full. Over-budget input is an error, never a shortened document.
+/// </summary>
+internal static class PlanXmlReader
+{
+    internal const int ChunkCharacters = 8 * 1024;
+
+    /// <param name="getChars">Sequential <c>(fieldOffset, buffer, length) =&gt; charsRead</c>; returns 0 at the end of the value.</param>
+    /// <param name="maxCharacters">Hard cap on the returned document.</param>
+    internal static string ReadBounded(Func<long, char[], int, int> getChars, long maxCharacters, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(getChars);
+        var sb = new StringBuilder();
+        var buffer = new char[ChunkCharacters];
+        long offset = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = getChars(offset, buffer, buffer.Length);
+            if (read <= 0)
+                return sb.ToString();
+            offset += read;
+            if (offset > maxCharacters)
+                throw new PlanCommandException(null,
+                    $"The estimated plan is too large to display (more than {maxCharacters:N0} characters).");
+            sb.Append(buffer, 0, read);
+        }
+    }
+}
+
 public enum EstimatedPlanStatus
 {
     Succeeded,
@@ -51,6 +82,12 @@ public static class EstimatedPlanService
 {
     /// <summary>Per-plan size limit. A larger plan is reported as an error, never shortened.</summary>
     public const int MaxPlanCharacters = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// Limit on the summed characters of every plan across every batch of one estimate. Exceeding it fails the estimate
+    /// before any further batch is sent; plans are never shortened.
+    /// </summary>
+    public const int MaxTotalPlanCharacters = 8 * 1024 * 1024;
 
     /// <summary>Server errors meaning the caller lacks SHOWPLAN (262), VIEW SERVER STATE (300) or object (229/297) permission.</summary>
     static readonly HashSet<int> PermissionErrors = [229, 262, 297, 300];
@@ -89,6 +126,7 @@ public static class EstimatedPlanService
         EstimatedPlanStatus status = EstimatedPlanStatus.Succeeded;
         string? error = null;
         var tainted = false;
+        long totalCharacters = 0;
         try
         {
             try
@@ -107,6 +145,11 @@ public static class EstimatedPlanService
                         if (plan.Length > MaxPlanCharacters)
                             throw new PlanCommandException(null,
                                 $"The estimated plan is too large to display ({plan.Length:N0} characters; limit {MaxPlanCharacters:N0}).");
+                        // An over-budget plan is not retained (and never shortened); the loop ends and OFF is attempted.
+                        if (totalCharacters + plan.Length > MaxTotalPlanCharacters)
+                            throw new PlanCommandException(null,
+                                $"The estimated plans are too large to display in total (more than {MaxTotalPlanCharacters:N0} characters across all plans).");
+                        totalCharacters += plan.Length;
                         plans.Add(plan);
                     }
                 }
@@ -148,8 +191,9 @@ public static class EstimatedPlanService
                 {
                     await runner.SetShowplanXmlAsync(false, offCts.Token).ConfigureAwait(false);
                 }
-                catch (Exception ex) when (ex is PlanCommandException or OperationCanceledException or InvalidOperationException or IOException)
+                catch (Exception)
                 {
+                    // Any failure to confirm the reset (not only provider errors) leaves the connection mode unprovable.
                     tainted = true;
                     var extra = "SET SHOWPLAN_XML OFF failed, so this connection may still be in SHOWPLAN mode and will be closed. " +
                                 "Statements were not executed.";

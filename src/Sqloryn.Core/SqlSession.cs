@@ -233,6 +233,15 @@ public sealed class SqlSession : IAsyncDisposable
     internal Func<string, int?, CancellationToken, Task<QueryResult>>? BatchExecutorForTests { get; init; }
 
     Task<QueryResult> ExecuteBatchAsync(string sql, int? cancelGenAtStartOverride, CancellationToken cancellationToken)
+    {
+        // Checked before the test seam too, so an unknown target can never reach any executor.
+        if (_targetUnknown)
+            throw new InvalidOperationException(
+                "Database target is unknown after a prior batch. Revalidate or reconnect before running SQL. Prior SQL is never replayed.");
+        return ExecuteBatchDispatchAsync(sql, cancelGenAtStartOverride, cancellationToken);
+    }
+
+    Task<QueryResult> ExecuteBatchDispatchAsync(string sql, int? cancelGenAtStartOverride, CancellationToken cancellationToken)
         => BatchExecutorForTests is { } hook
             ? hook(sql, cancelGenAtStartOverride, cancellationToken)
             : ExecuteBatchCoreAsync(sql, cancelGenAtStartOverride, cancellationToken);
@@ -811,8 +820,9 @@ public sealed class SqlSession : IAsyncDisposable
             var runner = PlanRunnerForTests?.Invoke()
                          ?? new SqlPlanCommandRunner(this, _connection!, _options!.CommandTimeoutSeconds);
             var result = await EstimatedPlanService.EstimateAsync(runner, sql, linked.Token).ConfigureAwait(false);
-            if (result.SessionTainted && PlanRunnerForTests is null)
+            if (result.SessionTainted)
             {
+                // SHOWPLAN state is unconfirmed: drop the connection and refuse all SQL until ConnectAsync.
                 _targetUnknown = true;
                 await DisposeConnectionAsync().ConfigureAwait(false);
             }
@@ -837,6 +847,8 @@ public sealed class SqlSession : IAsyncDisposable
     sealed class SqlPlanCommandRunner(SqlSession owner, SqlConnection connection, int commandTimeoutSeconds) : IPlanCommandRunner
     {
         bool _showplanOn;
+        // Characters read across every batch of this runner (one runner per estimate).
+        long _totalCharacters;
 
         public async Task SetShowplanXmlAsync(bool on, CancellationToken cancellationToken)
         {
@@ -875,16 +887,34 @@ public sealed class SqlSession : IAsyncDisposable
             owner._activeSqlCommand = cmd;
             try
             {
-                await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-                do
+                // SequentialAccess + chunked GetChars: a plan is never materialised past its budget (no GetValue).
+                await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken)
+                    .ConfigureAwait(false);
+                try
                 {
-                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    do
                     {
-                        if (reader.FieldCount > 0 && !await reader.IsDBNullAsync(0, cancellationToken).ConfigureAwait(false))
-                            plans.Add(Convert.ToString(reader.GetValue(0), System.Globalization.CultureInfo.InvariantCulture) ?? "");
+                        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                        {
+                            if (reader.FieldCount == 0 || await reader.IsDBNullAsync(0, cancellationToken).ConfigureAwait(false))
+                                continue;
+                            var remainingTotal = EstimatedPlanService.MaxTotalPlanCharacters - _totalCharacters;
+                            var budget = Math.Min(EstimatedPlanService.MaxPlanCharacters, remainingTotal);
+                            var plan = PlanXmlReader.ReadBounded(
+                                (offset, buffer, length) => (int)reader.GetChars(0, offset, buffer, 0, length),
+                                budget, cancellationToken);
+                            _totalCharacters += plan.Length;
+                            plans.Add(plan);
+                        }
                     }
+                    while (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false));
                 }
-                while (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false));
+                catch (PlanCommandException)
+                {
+                    // Stop the server streaming the rest of an over-budget plan before the reader is disposed.
+                    try { cmd.Cancel(); } catch { /* best effort; OFF below decides whether the session survives */ }
+                    throw;
+                }
                 return plans;
             }
             catch (SqlException ex)

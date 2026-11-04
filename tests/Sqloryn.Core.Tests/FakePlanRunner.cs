@@ -11,9 +11,12 @@ sealed class FakePlanRunner : IPlanCommandRunner
     public int DmlExecutions { get; private set; }
     public int BatchCalls { get; private set; }
     public Exception? OnFailure { get; set; }
+    /// <summary>Thrown by every <c>SET SHOWPLAN_XML OFF</c>; any exception type models an unconfirmed reset.</summary>
     public Exception? OffFailure { get; set; }
     public Exception? BatchFailure { get; set; }
     public Func<string, IReadOnlyList<string>>? PlanFor { get; set; }
+    /// <summary>When set (and <see cref="PlanFor"/> is not), every batch returns one plan of exactly this many characters.</summary>
+    public int? OversizedPlanCharacters { get; set; }
 
     public Task SetShowplanXmlAsync(bool on, CancellationToken cancellationToken)
     {
@@ -38,6 +41,8 @@ sealed class FakePlanRunner : IPlanCommandRunner
         }
         if (BatchFailure is not null)
             throw BatchFailure;
+        if (PlanFor is null && OversizedPlanCharacters is { } size)
+            return Task.FromResult<IReadOnlyList<string>>([new string('p', size)]);
         return Task.FromResult(PlanFor?.Invoke(batch) ?? ["<ShowPlanXML>" + batch.Trim().Length + "</ShowPlanXML>"]);
     }
 }
