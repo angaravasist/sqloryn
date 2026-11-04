@@ -36,11 +36,11 @@ Outside the sandbox, `AXIsProcessTrusted` is true for this agent process and `CG
 
 ## Where to start next
 
-CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/014, CAP-040/054/060/071, and CAP-081/046/064/091 are done-component. HA/BI remain gated-incomplete. Native Mac SQL/screenshots still open.
+CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/014, CAP-040/054/060/071, CAP-081/046/064/091, and CAP-043/034/096/078 are done-component. HA/BI remain gated-incomplete. Native Mac SQL/screenshots still open.
 
 ## Inventory
 
-191 inventory rows, plus the 4 integrator rows above (CSV trio + LIVE-WAVE done-component). CAP-122 is those CSV rows, not another importer. Inventory counts: alias 1, blocked 12, done-component 85, gated-incomplete 10, partial 22, ready 65.
+191 inventory rows, plus the 4 integrator rows above (CSV trio + LIVE-WAVE done-component). CAP-122 is those CSV rows, not another importer. Inventory counts: alias 1, blocked 12, done-component 89, gated-incomplete 10, partial 22, ready 61.
 
 | ID | Workstream | Task | Status | Blocker |
 |---|---|---|---|---|
@@ -77,7 +77,7 @@ CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/0
 | CAP-031 | Schema | Primary and foreign keys. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-032 | Schema | Constraints. Further scripting or design is CAP-109 only. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-033 | Schema | Sequences and synonyms. Further scripting or design is CAP-114 only. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
-| CAP-034 | Operations,Schema | User-defined types | ready | — |
+| CAP-034 | Operations,Schema | User-defined types. A User-defined types folder under each database lists catalog types; expanding a type shows its system type. Component present. | done-component | Live expand unverified. |
 | CAP-035 | Operations,Schema | Full-text objects | ready | — |
 | CAP-036 | Identity | Security object tree | ready | — |
 | CAP-037 | Operations | Server management object tree | ready | — |
@@ -86,7 +86,7 @@ CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/0
 | CAP-040 | Explorer | Refresh the selected Object Explorer database or folder without reloading the rest of the tree. Full Refresh remains. Component present. | done-component | — |
 | CAP-041 | Explorer | Object Explorer Details pane. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-042 | Explorer | Context menu scripting. Further scripting or design is CAP-115 only. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
-| CAP-043 | Explorer | Object properties | ready | — |
+| CAP-043 | Explorer | Object properties. Read-only sheet for the selected object: name, schema, type, and create/modify dates when the catalog returns them. Component present. | done-component | Live catalog read unverified. |
 | CAP-044 | Editor | Multiple query tabs. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-045 | Editor | New/open/save/save as. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-046 | Editor | Unsaved document recovery | done-component | Native recovery sheet unverified. |
@@ -121,7 +121,7 @@ CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/0
 | CAP-075 | Engine | Affected row counts. Component present. | done-component | — |
 | CAP-076 | Engine | Session isolation | ready | — |
 | CAP-077 | Engine | Query execution without DB privilege | ready | — |
-| CAP-078 | Engine | Long-running operation status | ready | — |
+| CAP-078 | Engine | Long-running operation status. Cancel stays beside Run and is enabled while Execute is running. Messages and status say Running with client elapsed time until the command ends. Component present. | done-component | Native timer unverified. |
 | CAP-079 | Engine | Query tabs during server restart | ready | — |
 | CAP-080 | Engine | Parameterised app-generated SQL. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-081 | Engine | Explicit user SQL warnings | done-component | Live PRINT on SQL Server unverified. |
@@ -139,7 +139,7 @@ CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/0
 | CAP-093 | Results | datetime/datetimeoffset handling. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-094 | Results | Unicode/collation display. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-095 | Results | NULL versus empty string. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
-| CAP-096 | Results | XML/JSON viewer | ready | — |
+| CAP-096 | Results | XML/JSON viewer. Pretty-prints a retained xml cell or nvarchar JSON object/array and does not re-query or execute the cell. Component present. | done-component | Native viewer unverified. |
 | CAP-097 | Results | Geospatial and specialized SQL types | ready | — |
 | CAP-098 | Results | Sort/filter result viewing. Component present. | done-component | Live or native evidence is LIVE-WAVE or the Screen Recording recheck above. That does not block other component work. |
 | CAP-099 | Results | Elapsed-time client statistics. Retained row counts and truncation are already shown. Component present. | done-component | — |

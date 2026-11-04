@@ -129,10 +129,12 @@ public partial class MainWindow
             ("_Results",
             [
                 C(_resultsAsText ? "Results as _Grid" : "Results as _Text", OnResultsAsText),
-                C("Copy _Results", OnCopyResults)
+                C("Copy _Results", OnCopyResults),
+                C("View _XML or JSON…", () => OnViewStructured(this, e))
             ]),
             ("_Object",
             [
+                C("_Properties…", () => OnObjectProperties(this, e), Key.I, Primary),
                 C("_Expand Selected", () => OnExpandSelected(this, e), Key.E, Primary),
                 C("Refresh _Selected", () => OnRefreshSubtree(this, e)),
                 C("Script _SELECT in New Tab (Table/View)", () => OnScriptSelect(this, e), Key.E, Primary | KeyModifiers.Shift),

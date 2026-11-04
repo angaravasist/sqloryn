@@ -19,6 +19,8 @@ sealed class QueryTab : IAsyncDisposable
     /// <summary>0-based offset of <see cref="Selection"/> in the document text when it was captured.</summary>
     public int SelectionStart { get; set; }
     public CancellationTokenSource? RunCts { get; set; }
+    /// <summary>When the current Execute started, so status can show client elapsed time before the command ends.</summary>
+    public DateTimeOffset? RunStartedUtc { get; set; }
     public bool IsExecuting => RunGuard.IsEntered(_runFlag);
     public long Generation => Interlocked.Read(ref _generation);
 

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -18,11 +19,15 @@ public partial class MainWindow
 
     bool _renderingResults;
     bool _resultsAsText;
+    ViewedCell? _viewedCell;
+
+    sealed record ViewedCell(int SetIndex, int RowNumber, int Column, string? SqlType, CellValue Cell, string Header);
 
     /// <summary>Rebuilds the results area: one DataGrid tab per result set plus a Messages tab.</summary>
     void RenderResult(QueryResult? result)
     {
         _renderingResults = true;
+        _viewedCell = null;
         try
         {
             ResultTabs.Items.Clear();
@@ -52,7 +57,9 @@ public partial class MainWindow
                     {
                         Header = $"Result {i + 1} ({kept})",
                         Tag = i,
-                        Content = _resultsAsText ? BuildResultText(set, shown) : BuildResultGrid(set, shown)
+                        Content = _resultsAsText
+                            ? BuildResultText(set, shown)
+                            : BuildResultGrid(set, shown, i, RememberViewedCell, OpenStructuredCell)
                     });
                 }
                 MessagesBox.Text = QueryOutcomeFormatter.FormatMessages(result);
@@ -107,13 +114,85 @@ public partial class MainWindow
             _active.LastResultSetIndex = index;
     }
 
+    void RememberViewedCell(int setIndex, int rowNumber, int column, string? sqlType, CellValue cell, string header)
+        => _viewedCell = new ViewedCell(setIndex, rowNumber, column, sqlType, cell, header);
+
+    void OpenStructuredCell(string? sqlType, CellValue cell, string header)
+    {
+        var view = StructuredValueView.Present(sqlType, cell);
+        _ = new StructuredValueWindow(header, view.Text).ShowDialog(this);
+    }
+
+    void OnViewStructured(object? sender, RoutedEventArgs e)
+    {
+        if (_active is not { } tab)
+            return;
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is still running. View XML/JSON waits for the retained result and does not query the server.";
+            return;
+        }
+        if (tab.LastResult is not { } result || result.ResultSets.Count == 0)
+        {
+            StatusBar.Text = "Run a query that returns rows first. View XML/JSON does not re-query the server and does not execute cell content.";
+            return;
+        }
+        if (_viewedCell is { } picked && StructuredValueView.CanView(picked.SqlType, picked.Cell))
+        {
+            OpenStructuredCell(picked.SqlType, picked.Cell, picked.Header);
+            StatusBar.Text = "Showing the retained cell. The content was not executed and the server was not queried again.";
+            return;
+        }
+        if (_viewedCell is not null)
+        {
+            StatusBar.Text = "View XML/JSON applies to an xml column or nvarchar holding a JSON object or array. This cell was not executed and the server was not queried.";
+            return;
+        }
+        if (ResultTabs.SelectedItem is TabItem { Tag: int index and >= 0, Content: Control content } &&
+            index < result.ResultSets.Count && FindGrid(content) is { } grid)
+        {
+            var row = grid.SelectedItems?.OfType<ResultRow>().FirstOrDefault();
+            if (row is not null)
+            {
+                var set = result.ResultSets[index];
+                var matches = new List<int>();
+                for (var c = 0; c < set.Columns.Count; c++)
+                {
+                    var cell = c < row.Cells.Length ? row.Cells[c] : CellValue.Null;
+                    var sqlType = c < set.SqlTypes.Count ? set.SqlTypes[c] : null;
+                    if (StructuredValueView.CanView(sqlType, cell))
+                        matches.Add(c);
+                }
+                if (matches.Count == 1)
+                {
+                    var c = matches[0];
+                    var header = string.IsNullOrEmpty(set.Columns[c]) ? "(no column name)" : set.Columns[c];
+                    OpenStructuredCell(c < set.SqlTypes.Count ? set.SqlTypes[c] : null, row.Cells[c], header);
+                    StatusBar.Text = "Showing the retained cell. The content was not executed and the server was not queried again.";
+                    return;
+                }
+                if (matches.Count > 1)
+                {
+                    StatusBar.Text = "This row has more than one XML or JSON value. Click the cell, then View XML/JSON. Nothing was executed.";
+                    return;
+                }
+            }
+        }
+        StatusBar.Text = "Click an xml cell or an nvarchar cell that holds a JSON object or array, then View XML/JSON. The cell is not executed and the server is not queried again.";
+    }
+
     /// <summary>
     /// One result set as a grid. Header clicks cycle ascending, descending and original order over the
     /// rows retained in memory (Core <see cref="ResultSetView.SortedRowIndexes"/>; NULLs last). The filter box
     /// calls <see cref="ResultSetView.FilterContains"/> on those same rows. Neither path re-queries the server,
     /// and export still writes the full retained result. A banner states the retained-row scope.
     /// </summary>
-    static Control BuildResultGrid(ResultSet set, int shownRows)
+    Control BuildResultGrid(
+        ResultSet set,
+        int shownRows,
+        int setIndex,
+        Action<int, int, int, string?, CellValue, string> selectCell,
+        Action<string?, CellValue, string> openCell)
     {
         ResultRow MakeRow(int index)
         {
@@ -174,7 +253,7 @@ public partial class MainWindow
                 MaxWidth = 640,
                 Width = new DataGridLength(1, DataGridLengthUnitType.Auto),
                 ClipboardContentBinding = new Binding($"Cells[{index}].ClipboardText"),
-                CellTemplate = new FuncDataTemplate<ResultRow>((row, _) => BuildCell(row, index, sqlType))
+                CellTemplate = new FuncDataTemplate<ResultRow>((row, _) => BuildCell(row, index, sqlType, headerNames[index], setIndex, selectCell, openCell))
             };
             grid.Columns.Add(dataColumns[i]);
         }
@@ -392,7 +471,14 @@ public partial class MainWindow
         return one.Length <= 80 ? one : one[..80] + "…";
     }
 
-    static Control BuildCell(ResultRow? row, int index, string? sqlType)
+    static Control BuildCell(
+        ResultRow? row,
+        int index,
+        string? sqlType,
+        string header,
+        int setIndex,
+        Action<int, int, int, string?, CellValue, string> selectCell,
+        Action<string?, CellValue, string> openCell)
     {
         var cell = row is not null && index < row.Cells.Length ? row.Cells[index] : CellValue.Null;
         var shown = BinaryDisplay.PresentColumn(sqlType, cell);
@@ -418,7 +504,18 @@ public partial class MainWindow
             else if (shown.Length == 0)
                 ToolTip.SetTip(text, "empty string");
             else if (cell.Truncated)
-                ToolTip.SetTip(text, "Value truncated for display");
+                ToolTip.SetTip(text, "Value truncated for display. View XML/JSON does not re-query the server.");
+            else if (StructuredValueView.CanView(sqlType, cell))
+                ToolTip.SetTip(text, "Click, then View XML/JSON. Pretty-prints this retained cell and does not re-query the server.");
+        }
+        if (row is not null)
+        {
+            text.PointerPressed += (_, e) =>
+            {
+                selectCell(setIndex, row.Number, index, sqlType, cell, header);
+                if (e.ClickCount >= 2 && StructuredValueView.CanView(sqlType, cell))
+                    openCell(sqlType, cell, header);
+            };
         }
         return text;
     }

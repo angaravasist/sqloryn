@@ -217,6 +217,7 @@ sealed class ExplorerController(Func<QueryTab, OperationBinding, bool> isCurrent
     static string What(ExplorerNode node) => node.Kind switch
     {
         "database" => "schemas in " + node.Database,
+        "types" => "user-defined types in " + node.Database,
         "table" or "view" => "folders of " + node.ObjectName,
         _ => node.Title + (node.ObjectName is null ? "" : " of " + node.ObjectName)
     };
@@ -235,7 +236,23 @@ sealed class ExplorerController(Func<QueryTab, OperationBinding, bool> isCurrent
             case "database":
             {
                 var schemas = await CatalogClient.ListSchemasAsync(session, db, ct);
-                return (schemas.Items.Select(s => WithPlaceholder(new ExplorerNode(s, "schema", db, s))).ToList(), schemas.TruncationNote);
+                var children = new List<ExplorerNode>();
+                foreach (var folder in ObjectExplorerService.DatabaseFolders)
+                    children.Add(WithPlaceholder(new ExplorerNode(folder.Title, folder.FolderKind, db)));
+                children.AddRange(schemas.Items.Select(s => WithPlaceholder(new ExplorerNode(s, "schema", db, s))));
+                return (children, schemas.TruncationNote);
+            }
+            case "types":
+            {
+                var types = await CatalogClient.ListUserDefinedTypesAsync(session, db, ct);
+                return (types.Items.Select(t => UserTypeNode(t, db)).ToList(), types.TruncationNote);
+            }
+            case "usertype":
+            {
+                var title = string.IsNullOrEmpty(node.Detail)
+                    ? "System type was not returned by the catalog."
+                    : node.Detail;
+                return ([new ExplorerNode(title, "typesystem", db, node.Schema, node.ObjectName) { Info = node.Info }], null);
             }
             case "schema" when schema is not null:
                 // Folders are static; each catalog query runs when its folder expands.
@@ -252,7 +269,7 @@ sealed class ExplorerController(Func<QueryTab, OperationBinding, bool> isCurrent
                 var childKind = ChildKinds[node.Kind];
                 return (names.Items.Select(n =>
                 {
-                    var child = new ExplorerNode(n, childKind, db, schema, n);
+                    var child = new ExplorerNode(n, childKind, db, schema, n) { CatalogName = n };
                     return childKind == "procedure" ? child : WithPlaceholder(child);
                 }).ToList(), names.TruncationNote);
             }
@@ -300,8 +317,25 @@ sealed class ExplorerController(Func<QueryTab, OperationBinding, bool> isCurrent
         CatalogListing<SchemaObject> items, string childKind, string db, string schema, string? table)
         => items.Items.Select(o => new ExplorerNode(SchemaObjectCatalog.Title(childKind, o), childKind, db, schema, table ?? o.Name)
         {
-            Info = SchemaObjectCatalog.Describe(childKind, o)
+            Info = SchemaObjectCatalog.Describe(childKind, o),
+            CatalogName = o.Name
         }).ToList();
+
+    static ExplorerNode UserTypeNode(UserDefinedType type, string database)
+    {
+        var expand = UserDefinedTypeCatalog.ExpandTitle(type);
+        var node = new ExplorerNode(UserDefinedTypeCatalog.Title(type), "usertype", database, type.Schema, type.Name)
+        {
+            Info = UserDefinedTypeCatalog.Describe(type),
+            Detail = expand,
+            CatalogName = type.Name,
+            Loaded = true
+        };
+        var child = new ExplorerNode(expand, "typesystem", database, type.Schema, type.Name) { Info = node.Info };
+        node.Children.Add(child);
+        node.Shown.Add(child);
+        return node;
+    }
 
     // ---- Object overview ------------------------------------------------------------------
 
@@ -359,6 +393,9 @@ sealed class ExplorerController(Func<QueryTab, OperationBinding, bool> isCurrent
             "functions" => "Functions folder",
             "sequences" => "Sequences folder",
             "synonyms" => "Synonyms folder",
+            "types" => "User-defined types folder",
+            "usertype" => "User-defined type",
+            "typesystem" => "System type",
             "columns" => "Columns folder",
             "foreignkeys" => "Foreign keys folder",
             "constraints" => "Constraints folder",
@@ -391,5 +428,31 @@ sealed class ExplorerController(Func<QueryTab, OperationBinding, bool> isCurrent
         if (!string.IsNullOrEmpty(node.Info))
             text += "\n" + node.Info + "\n";
         return text.TrimEnd();
+    }
+
+    /// <summary>
+    /// Read-only properties for the selected node. Catalog dates are loaded only for kinds that have them.
+    /// A denied read is returned as text. Nothing is written.
+    /// </summary>
+    public async Task<string> LoadPropertiesAsync(ExplorerNode node, QueryTab tab, CancellationToken cancellationToken = default)
+    {
+        var name = node.CatalogName ?? node.ObjectName ?? node.Title;
+        var local = ObjectPropertySheet.FormatLocal(node.Kind, name, node.Schema ?? (node.Kind == "schema" ? node.Title : null), node.Detail);
+        if (!ObjectPropertySheet.ReadsCatalog(node.Kind))
+            return local;
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+            return local + "\n\nProperties were not read from the catalog because a command is running on this tab. Nothing was changed.";
+        try
+        {
+            if (node.Kind == "database")
+                return await CatalogClient.ReadDatabasePropertiesAsync(tab.Session, node.Database ?? node.Title, cancellationToken);
+            if (node.Database is null || node.Schema is null || string.IsNullOrEmpty(name))
+                return local + "\n\nThe catalog was not queried because the object name or schema is missing. Nothing was changed.";
+            return await CatalogClient.ReadObjectPropertiesAsync(tab.Session, node.Database, node.Schema, name, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return CatalogFailure.From(ex, "properties of " + name).Text + "\nNothing was changed.";
+        }
     }
 }
