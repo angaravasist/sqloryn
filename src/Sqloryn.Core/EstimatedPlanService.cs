@@ -223,6 +223,8 @@ public static class EstimatedPlanService
             for (var i = 0; i < result.PlanXml.Count; i++)
             {
                 sb.Append("\n-- Plan ").Append(i + 1).Append(" of ").Append(result.PlanXml.Count).Append('\n');
+                sb.Append(SafeShowPlanXml.FormatSummary(SafeShowPlanXml.Parse(result.PlanXml[i])));
+                sb.Append("\n-- Plan XML (complete)\n");
                 sb.Append(result.PlanXml[i]).Append('\n');
             }
             if (result.PlanXml.Count == 0)

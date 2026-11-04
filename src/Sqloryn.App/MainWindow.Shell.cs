@@ -77,6 +77,7 @@ public partial class MainWindow
             tools.Add(C("_Settings…", () => OnSettings(this, e), Key.OemComma, Primary));
         tools.Add(C("S_ecurity…", () => OnSecurity(this, e)));
         tools.Add(C("_Backup, Restore and Check…", () => OnOperations(this, e)));
+        tools.Add(C("SQL Server _Agent…", () => OnOpenAgent(this, e)));
         tools.Add(C("_Diagnostics Bundle…", () => OnDiagnostics(this, e)));
 
         var groups = new List<(string, Cmd?[])>

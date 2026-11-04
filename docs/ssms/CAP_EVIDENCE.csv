@@ -145,12 +145,12 @@ CAP-143,Operations,Administration & maintenance,Server properties/configuration,
 CAP-144,Observe,Administration & maintenance,Activity Monitor,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-145,"Explorer,Observe,Operations",Administration & maintenance,Server/database reports,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-146,"Observe,Operations",Administration & maintenance,Server logs and error log,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-147,Agent,Administration & maintenance,SQL Server Agent jobs,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-148,Agent,Administration & maintenance,Job steps/schedules/history,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
+CAP-147,Agent,Administration & maintenance,SQL Server Agent jobs,integrator,,,partial_code,ws9-agent-*,unverified,,,WS9-T1: read-only job list + gated confirmed Run/Delete (Core+AgentWindow); fakes only; no create/edit; live Agent unverified
+CAP-148,Agent,Administration & maintenance,Job steps/schedules/history,integrator,,,partial_code,ws9-agent-*,unverified,,,WS9-T1: schedules + bounded history read with denial mapping and server-time labels; no step view/edit; fakes only
 CAP-149,Agent,Administration & maintenance,Alerts and operators,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-150,Observe,Administration & maintenance,Extended Events,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-151,"AI,Observe",Administration & maintenance,Query Store,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
-CAP-152,"Observe,Results",Administration & maintenance,Estimated/actual execution plans,integrator,,,partial_code,,unverified,,,SPEC-003: Display Estimated Plan via SHOWPLAN_XML text only; bounded per plan and in total; never executes SQL (estimate-plan-*; plan-reader-*; sqlsession-estimate-*); fakes only; no actual or graphical plan; live pending
+CAP-152,"Observe,Results",Administration & maintenance,Estimated/actual execution plans,integrator,,,partial_code,,unverified,,,SPEC-003: Display Estimated Plan via SHOWPLAN_XML text only; bounded per plan and in total; never executes SQL (estimate-plan-*; plan-reader-*; sqlsession-estimate-*); WS9-T1 adds SafeShowPlanXml operator summary with DTD/XXE prohibited (ws9-plan-*; ws9-xxe-*); fakes only; no actual or graphical plan; live pending
 CAP-153,Observe,Administration & maintenance,Live query statistics,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-154,"AI,Observe",Administration & maintenance,Query diagnostics/profiler,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
 CAP-155,"BI,Operations",Administration & maintenance,Maintenance plans,integrator,,,missing,,unverified,,,Unassessed candidate; not implemented
