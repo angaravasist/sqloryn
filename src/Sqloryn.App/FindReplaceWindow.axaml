@@ -1,0 +1,25 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.FindReplaceWindow"
+        Title="Find and Replace"
+        Width="460" Height="260"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <StackPanel Margin="16" Spacing="8">
+    <Grid ColumnDefinitions="80,*" RowDefinitions="Auto,Auto" RowSpacing="8">
+      <TextBlock Text="Find" VerticalAlignment="Center" Classes="muted" />
+      <TextBox Name="FindBox" Grid.Column="1" AutomationProperties.Name="Find text" />
+      <TextBlock Grid.Row="1" Text="Replace" VerticalAlignment="Center" Classes="muted" />
+      <TextBox Name="ReplaceBox" Grid.Row="1" Grid.Column="1" AutomationProperties.Name="Replace text" />
+    </Grid>
+    <CheckBox Name="CaseBox" Content="Match case" />
+    <WrapPanel>
+      <Button Content="Find Next" Classes="primary" Margin="0,0,8,8" Click="OnFindNext" IsDefault="True" />
+      <Button Content="Replace" Margin="0,0,8,8" Click="OnReplace" />
+      <Button Content="Replace All" Margin="0,0,8,8" Click="OnReplaceAll" />
+      <Button Content="Close" Margin="0,0,0,8" Click="OnClose" />
+    </WrapPanel>
+    <TextBlock Name="StatusText" Classes="muted" TextWrapping="Wrap" />
+  </StackPanel>
+</Window>

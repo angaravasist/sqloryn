@@ -1,0 +1,56 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.TableDesignWindow"
+        Title="Design Table — SQLoryn"
+        Width="900" Height="680"
+        MinWidth="720" MinHeight="520"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <DockPanel Margin="14">
+    <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,10">
+      <TextBlock Name="TitleText" FontSize="18" FontWeight="SemiBold" />
+      <TextBlock Classes="muted" TextWrapping="Wrap"
+                 Text="Edit the column draft, preview the generated DDL, then confirm to apply. Nothing runs until you confirm. ALTER statements are not wrapped in a transaction." />
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Bottom" Spacing="8" Margin="0,10,0,0">
+      <TextBlock Name="WarningsText" TextWrapping="Wrap" IsVisible="False"
+                 AutomationProperties.Name="Design warnings" />
+      <TextBlock Name="StatusText" TextWrapping="Wrap" Classes="muted" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <Button Name="PreviewButton" Content="Preview DDL" Click="OnPreview" />
+        <Button Name="ApplyButton" Content="Confirm Apply…" Classes="primary" Click="OnApply" IsEnabled="False" />
+        <Button Content="Close" Click="OnClose" />
+      </StackPanel>
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Top" Name="TableNamePanel" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8" IsVisible="False">
+      <TextBlock VerticalAlignment="Center" Text="Table name" />
+      <TextBox Name="TableNameBox" Width="320" PlaceholderText="NewTable"
+               AutomationProperties.Name="New table name" />
+    </StackPanel>
+
+    <Grid RowDefinitions="*,Auto,180" RowSpacing="8">
+      <DataGrid Name="ColumnGrid" Grid.Row="0" AutoGenerateColumns="False" CanUserSortColumns="False"
+                CanUserReorderColumns="False" SelectionMode="Single"
+                AutomationProperties.Name="Column draft">
+        <DataGrid.Columns>
+          <DataGridTextColumn Header="Name" Binding="{ReflectionBinding Name, Mode=TwoWay}" Width="*" />
+          <DataGridTextColumn Header="Data type" Binding="{ReflectionBinding DataType, Mode=TwoWay}" Width="180" />
+          <DataGridTextColumn Header="Length (-1 = MAX)" Binding="{ReflectionBinding MaxLengthText, Mode=TwoWay}" Width="140" />
+          <DataGridCheckBoxColumn Header="Nullable" Binding="{ReflectionBinding IsNullable, Mode=TwoWay}" Width="90" />
+          <DataGridCheckBoxColumn Header="Identity" Binding="{ReflectionBinding IsIdentity, Mode=TwoWay}" Width="90" />
+          <DataGridCheckBoxColumn Header="Primary key" Binding="{ReflectionBinding IsPrimaryKey, Mode=TwoWay}" Width="100" />
+        </DataGrid.Columns>
+      </DataGrid>
+      <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+        <Button Content="Add column" Click="OnAddColumn" />
+        <Button Content="Remove selected" Click="OnRemoveColumn" />
+        <Button Name="ReloadButton" Content="Reload from server" Click="OnReload" />
+      </StackPanel>
+      <TextBox Name="PreviewBox" Grid.Row="2" Classes="mono" IsReadOnly="True" AcceptsReturn="True"
+               TextWrapping="NoWrap" PlaceholderText="DDL preview appears here."
+               AutomationProperties.Name="DDL preview" />
+    </Grid>
+  </DockPanel>
+</Window>

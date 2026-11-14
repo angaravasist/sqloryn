@@ -1,36 +1,52 @@
 # Current engineering state
 
-Owner: SQLoryn maintainer. Reviewed: 2026-11-03. Experimental; no release support.
+Owner: SQLoryn maintainer. Reviewed: 2026-11-14. Experimental; no release support.
 
 ## Work under review
 
-Branch `codex/developer-preview-0` — Developer Preview 0
-([ADR-003](decisions/003-desktop-avalonia.md),
-[SPEC-002](specs/002-developer-preview-0.md)). Draft
-[PR #6](https://github.com/angaravasist/sqloryn/pull/6).
+- Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7), branch `codex/macos-database-studio`: integrated studio preview ([SPEC-003](specs/003-macos-database-studio.md), [ADR-004](decisions/004-macos-database-studio.md)). It is the single integration PR for the [delivery contract](ssms/DELIVERY-CONTRACT.md) and [Mac experience](ssms/MAC-EXPERIENCE.md). Task status is in the [queue](ssms/DELIVERY-QUEUE.md) and [CAP evidence](ssms/CAP_EVIDENCE.csv).
+- Dependencies: [PR #18](https://github.com/angaravasist/sqloryn/pull/18) (Avalonia 12.1.6, SqlClient 7.1.2, PKCS 10.0.15, setup-dotnet 6.1.0) is merged to `main` and merged into this branch.
 
 ## Evidence
 
 | Claim | Status |
 |---|---|
-| Reviewed implementation (prior tip) | `22d3ab81cd7aff37690b544a2e73b4f4880ba16e` |
-| StopCause / unobserved / value-free drain correction | `d720b17966805fe8f3f86d8494f70d3b9bbb7f30` |
-| Timer attribution: independent watchdog vs drain evidence; late Cancel preserves timeout | `ad288f88bbc3ae0ae641249eab503b8dae4159c0` |
-| Record timer cause before signalling operation token (drain + watchdog) | `8852059bc7eaccb5fc6f4138d2259fac6220cba0` (Core component suite PASS) |
-| Cause visible inside operation cancel callback (drain + watchdog) + UI status | Automated Core PASS |
-| Watchdog during drain (deadline still pending) → `WatchdogTimeout` on UI | Automated Core PASS |
-| Provider -2 then late Cancel → stays `TimedOut (provider)` | Automated Core PASS |
-| Distinct `FinalCompletionUnobserved`; shared `QueryOutcomeFormatter` | Automated Core PASS |
-| Drain without discarded GetValue; later SQL error under drain deadline | Automated Core PASS |
-| Target verification never upgrades SQL Completion/StopCause | Automated Core PASS |
-| Open version race + failed read with intervening edit | Automated Core PASS |
-| Ordinary dirty Open/Quit / remaining host-independent walkthrough steps | **Unverified** on this tip (prior dirty Open/Quit only) |
-| Hosted ubuntu + macos-15 + macos-15-intel | [41416613488](https://github.com/angaravasist/sqloryn/actions/runs/41416613488) |
-| Optional `--ssh-identity-file` for PROBE-11 (command/SCP/tunnel/cleanup) | `695061aa8eca91ce9e99eb69d990c2b03af92eb8` (runner unit tests PASS) |
-| Mac **arm64** desktop: connect (SQL auth + pinned cert) → OE system DBs → `SELECT 1 AS test_result` → `1` | **Observed** (Apple Silicon `.app`, disposable loopback tunnel to approved host) |
-| Lab cleanup for that desktop run (owned tunnel stop; remote workdir gone; Docker label absent; local secrets wiped; run-id preserved) | **Verified** (`cleanup_lab.sh` PASS; run-id `sqloryn-probe-9ccabb4ecf0a23ab`) |
-| Full PROBE-11 automated suite / SqlDataReader decimal(38) / cancel-disconnect live matrix | **Unverified** |
-| Intel Mac desktop SQL / Intel walkthrough | **Unverified** |
+| Release build (0 warnings), Core / probe / Python tests, preflight, framework-dependent `.app` | Hosted `probe-components` on Linux, macOS 15 arm64 and macOS 15 Intel on every push. Results are on the PR checks. |
+| Live Linux SQL acceptance: 12 Core scenarios plus PROBE-10 cleanup | Run on the PR head with `workflow_dispatch`. The run link and exact head SHA are in the PR #7 description, because a docs commit cannot record a run on itself. Previous run: `496b503`, [run 41807915637](https://github.com/angaravasist/sqloryn/actions/runs/41807915637). |
+| Recovery writer and privacy settings | Component-tested (`recovery-writer`): rapid edits, save, discard, quit flush, multiple tabs, disable, retention |
+| Native Mac SQL (arm64 or Intel) | **Not accepted** on this branch. The PR #6 arm64 `SELECT 1` result is history only. |
+| Native UI walk, VoiceOver, screenshots | **Not accepted** |
+| Windows SSH product path | Closed, not recreated |
+
+### Live Linux scenarios
+
+| Scenario | Asserts |
+|---|---|
+| CORE-MATERIALISE | date/money/smallmoney, NULL, negative, fractional and extreme values |
+| CORE-EXPORT | Materialised values preserved in CSV and JSON |
+| CORE-DESIGN-PK | CREATE TABLE and composite PK, observed independently |
+| CORE-EDIT-CONFLICT | Case-only conflict refused; fresh update committed; batch rollback |
+| CORE-PLAN-INSERT | Estimated INSERT returns a plan and inserts no row |
+| CORE-PLAN-DENIED | Restricted-principal estimate denied; no row inserted |
+| CORE-TIME-GUID | time and uniqueidentifier, read from a second session |
+| CORE-DESIGN-APPLY | Create/add, failed-batch rollback, stale fingerprint refused |
+| CORE-EDIT-INSERT-DELETE | Insert/delete conflict rolls back; fresh delete commits |
+| CORE-CSV-IMPORT | Create/Append exact values beyond the preview sample; fidelity/fingerprint refusals |
+| CORE-SECURITY | GRANT preview changes no permissions (apply is not called) |
+| CORE-BACKUP | COPY_ONLY backup recorded in msdb (no restore assertion) |
+
+A component pass or a green `SqlClientProbe` is not live evidence. Linux evidence does not qualify native Mac SQL or UI.
+
+## Open gaps
+
+- Live coverage still missing: security apply and restricted-principal effects, restore round trip, Agent, hostile-DDL apply, `MAX` values and collation edge cases.
+- Native Mac acceptance: SQL from arm64 and Intel apps, an Intel walkthrough, VoiceOver, screenshots and layout sizes. Screen Recording permission decides whether screenshots are possible on the review Mac.
+- Distribution: self-contained runtime licence review, signing and notarisation (maintainer decisions).
+- Earlier review findings 1–18 remain **Partial**: code and component tests exist, and the remaining native/live parts are listed above. The detailed history is in git and [CODEBASE-AUDIT](ssms/CODEBASE-AUDIT.md).
+
+## Local data on the Mac
+
+Everything lives under `~/Library/Application Support/SQLoryn`. See the [threat model](THREAT_MODEL.md#local-app-data) for the full list. Unsaved-tab copies and execution history are on by default with 30-day retention. Settings › Privacy turns them off, changes retention, and clears them.
 
 ## Reviewer launch
 
@@ -43,4 +59,6 @@ bash scripts/build_macos_app.sh
 open artifacts/macos/osx-arm64/SQLoryn.app
 ```
 
-See [WALKTHROUGH.md](WALKTHROUGH.md) for automated vs manual distinction.
+## Explicit non-claims
+
+Not SSMS-compatible. Not signed or notarised. AI assistant deferred. No Windows SSH product path. HA, replication and BI/cloud windows are explanations only.

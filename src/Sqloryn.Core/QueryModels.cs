@@ -43,6 +43,8 @@ public sealed record QueryMessage(byte Class, int Number, string Text);
 public sealed class ResultSet
 {
     public required IReadOnlyList<string> Columns { get; init; }
+    /// <summary>Provider type names aligned with <see cref="Columns"/> (may be empty strings when unknown).</summary>
+    public IReadOnlyList<string> SqlTypes { get; init; } = [];
     public required IReadOnlyList<IReadOnlyList<CellValue>> Rows { get; init; }
     public bool Truncated { get; init; }
     public bool BudgetExceeded { get; init; }
@@ -53,6 +55,9 @@ public readonly record struct CellValue(bool IsNull, string Display, string Kind
     public static CellValue Null => new(true, "NULL", "null");
     public static CellValue Text(string value, string kind, bool truncated = false)
         => new(false, value, kind, truncated);
+
+    /// <summary>Copy text. SQL NULL is empty, matching CSV, and is not the display word NULL.</summary>
+    public string ClipboardText => ResultCopy.FormatCell(this);
 }
 
 public sealed class QueryResult
@@ -71,6 +76,10 @@ public sealed class QueryResult
     public bool RetentionLimitReached { get; init; }
     /// <summary>Stop cause preserved from ExecuteReader / Read / NextResult. Never upgraded by target checks.</summary>
     public StopCause StopCause { get; init; }
+    /// <summary>Provider-reported rows affected, when the command reported one. Null means unreported (not zero).</summary>
+    public int? RowsAffected { get; init; }
+    /// <summary>Client stopwatch around the batch execute, in milliseconds. Not a server statistic. Null means not measured.</summary>
+    public long? ClientElapsedMilliseconds { get; init; }
 }
 
 public static class QueryLimits

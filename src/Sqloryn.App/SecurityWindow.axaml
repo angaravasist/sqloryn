@@ -1,0 +1,165 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Sqloryn.SecurityWindow"
+        Title="Security — SQLoryn"
+        Width="1080" Height="780"
+        MinWidth="860" MinHeight="600"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <DockPanel Margin="14">
+    <StackPanel DockPanel.Dock="Top" Spacing="2" Margin="0,0,0,8">
+      <TextBlock FontSize="18" FontWeight="SemiBold" Text="Security" />
+      <TextBlock Classes="muted" TextWrapping="Wrap"
+                 Text="Browse logins, users and role membership, review a principal's current permissions, then preview a GRANT, DENY or REVOKE. Reading and previewing never change anything; Apply asks for confirmation and runs in one transaction. SQL Server only shows principals this login may see, so a short list is not proof that nothing else exists. Credentials are never entered here and logins are not created or altered." />
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Bottom" Spacing="6" Margin="0,8,0,0">
+      <TextBlock Name="WarningsText" TextWrapping="Wrap" IsVisible="False" Classes="warning"
+                 AutomationProperties.Name="Permission change warnings" />
+      <TextBlock Name="StatusText" TextWrapping="Wrap" Classes="muted"
+                 AutomationProperties.Name="Security status" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <Button Name="PreviewButton" Content="Preview SQL" Click="OnPreview"
+                AutomationProperties.Name="Preview permission change SQL" />
+        <Button Name="ApplyButton" Content="Confirm Apply…" Classes="primary" Click="OnApply" IsEnabled="False"
+                AutomationProperties.Name="Confirm and apply the previewed permission change" />
+        <Button Content="Close" Click="OnClose" />
+      </StackPanel>
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+      <TextBlock VerticalAlignment="Center" Text="Database" />
+      <ComboBox Name="DatabaseBox" Width="260" SelectionChanged="OnDatabaseChanged"
+                AutomationProperties.Name="Database for users, roles and object permissions" />
+      <Button Name="RefreshButton" Content="Refresh" Click="OnRefresh" AutomationProperties.Name="Refresh security lists" />
+    </StackPanel>
+
+    <Grid RowDefinitions="*,Auto" RowSpacing="8">
+      <TabControl Name="SecurityTabs" Grid.Row="0" SelectionChanged="OnTabChanged" AutomationProperties.Name="Security lists">
+        <TabItem Header="Server logins">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Bottom" Name="LoginsNote" TextWrapping="Wrap" Classes="muted" Margin="0,4,0,0"
+                       AutomationProperties.Name="Server logins status" />
+            <DataGrid Name="LoginsGrid" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single"
+                      SelectionChanged="OnPrincipalSelected" AutomationProperties.Name="Server logins">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Login" Binding="{ReflectionBinding Name}" Width="*" />
+                <DataGridTextColumn Header="Type" Binding="{ReflectionBinding TypeDescription}" Width="180" />
+                <DataGridTextColumn Header="Disabled" Binding="{ReflectionBinding IsDisabled}" Width="90" />
+                <DataGridTextColumn Header="Default database" Binding="{ReflectionBinding DefaultDatabase}" Width="180" />
+              </DataGrid.Columns>
+            </DataGrid>
+          </DockPanel>
+        </TabItem>
+        <TabItem Header="Server roles">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Bottom" Name="ServerRolesNote" TextWrapping="Wrap" Classes="muted" Margin="0,4,0,0"
+                       AutomationProperties.Name="Server roles status" />
+            <DataGrid Name="ServerRolesGrid" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single"
+                      SelectionChanged="OnPrincipalSelected" AutomationProperties.Name="Server role members">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Role" Binding="{ReflectionBinding Role}" Width="*" />
+                <DataGridTextColumn Header="Fixed" Binding="{ReflectionBinding Fixed}" Width="70" />
+                <DataGridTextColumn Header="Member" Binding="{ReflectionBinding Member}" Width="*" />
+                <DataGridTextColumn Header="Member type" Binding="{ReflectionBinding MemberType}" Width="180" />
+              </DataGrid.Columns>
+            </DataGrid>
+          </DockPanel>
+        </TabItem>
+        <TabItem Header="Database users">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Bottom" Name="UsersNote" TextWrapping="Wrap" Classes="muted" Margin="0,4,0,0"
+                       AutomationProperties.Name="Database users status" />
+            <DataGrid Name="UsersGrid" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single"
+                      SelectionChanged="OnPrincipalSelected" AutomationProperties.Name="Database users">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="User" Binding="{ReflectionBinding Name}" Width="*" />
+                <DataGridTextColumn Header="Type" Binding="{ReflectionBinding TypeDescription}" Width="150" />
+                <DataGridTextColumn Header="Authentication" Binding="{ReflectionBinding Authentication}" Width="130" />
+                <DataGridTextColumn Header="Default schema" Binding="{ReflectionBinding DefaultSchema}" Width="130" />
+                <DataGridTextColumn Header="Mapped login" Binding="{ReflectionBinding Login}" Width="*" />
+              </DataGrid.Columns>
+            </DataGrid>
+          </DockPanel>
+        </TabItem>
+        <TabItem Header="Database roles">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Bottom" Name="DbRolesNote" TextWrapping="Wrap" Classes="muted" Margin="0,4,0,0"
+                       AutomationProperties.Name="Database roles status" />
+            <DataGrid Name="DbRolesGrid" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single"
+                      SelectionChanged="OnPrincipalSelected" AutomationProperties.Name="Database role members">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Role" Binding="{ReflectionBinding Role}" Width="*" />
+                <DataGridTextColumn Header="Fixed" Binding="{ReflectionBinding Fixed}" Width="70" />
+                <DataGridTextColumn Header="Member" Binding="{ReflectionBinding Member}" Width="*" />
+                <DataGridTextColumn Header="Member type" Binding="{ReflectionBinding MemberType}" Width="180" />
+              </DataGrid.Columns>
+            </DataGrid>
+          </DockPanel>
+        </TabItem>
+      </TabControl>
+
+      <Grid Grid.Row="1" ColumnDefinitions="*,12,*" Height="300">
+        <DockPanel Grid.Column="0">
+          <TextBlock DockPanel.Dock="Top" Classes="caption" Text="CURRENT PERMISSIONS (EXPLICIT, SELECTED PRINCIPAL)" Margin="0,0,0,4" />
+          <TextBlock DockPanel.Dock="Bottom" Name="PermissionsNote" TextWrapping="Wrap" Classes="muted" Margin="0,4,0,0"
+                     AutomationProperties.Name="Current permissions status" />
+          <DataGrid Name="PermissionsGrid" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single"
+                    AutomationProperties.Name="Current explicit permissions">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Scope" Binding="{ReflectionBinding Scope}" Width="130" />
+              <DataGridTextColumn Header="Permission" Binding="{ReflectionBinding Permission}" Width="*" />
+              <DataGridTextColumn Header="State" Binding="{ReflectionBinding State}" Width="130" />
+              <DataGridTextColumn Header="Securable" Binding="{ReflectionBinding Securable}" Width="*" />
+            </DataGrid.Columns>
+          </DataGrid>
+        </DockPanel>
+
+        <DockPanel Grid.Column="2">
+          <TextBlock DockPanel.Dock="Top" Classes="caption" Text="PROPOSED CHANGE" Margin="0,0,0,4" />
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+            <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="Action" />
+            <ComboBox Grid.Row="0" Grid.Column="1" Name="ActionBox" SelectedIndex="0" HorizontalAlignment="Stretch"
+                      SelectionChanged="OnComboFormChanged" AutomationProperties.Name="Action">
+              <ComboBoxItem Content="GRANT" />
+              <ComboBoxItem Content="DENY" />
+              <ComboBoxItem Content="REVOKE" />
+            </ComboBox>
+            <TextBlock Grid.Row="0" Grid.Column="2" VerticalAlignment="Center" Text="Scope" />
+            <ComboBox Grid.Row="0" Grid.Column="3" Name="ScopeBox" SelectedIndex="1" HorizontalAlignment="Stretch"
+                      SelectionChanged="OnScopeChanged" AutomationProperties.Name="Scope">
+              <ComboBoxItem Content="Server" />
+              <ComboBoxItem Content="Database" />
+              <ComboBoxItem Content="Schema" />
+              <ComboBoxItem Content="Object" />
+            </ComboBox>
+            <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Text="Permission" />
+            <ComboBox Grid.Row="1" Grid.Column="1" Name="PermissionBox" HorizontalAlignment="Stretch"
+                      SelectionChanged="OnComboFormChanged" AutomationProperties.Name="Permission" />
+            <TextBlock Grid.Row="1" Grid.Column="2" VerticalAlignment="Center" Text="Principal" />
+            <TextBox Grid.Row="1" Grid.Column="3" Name="PrincipalBox" TextChanged="OnTextFormChanged"
+                     PlaceholderText="Select a row or type a name" AutomationProperties.Name="Principal name" />
+            <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Text="Schema" />
+            <TextBox Grid.Row="2" Grid.Column="1" Name="SchemaBox" TextChanged="OnTextFormChanged" IsEnabled="False"
+                     PlaceholderText="dbo" AutomationProperties.Name="Schema name" />
+            <TextBlock Grid.Row="2" Grid.Column="2" VerticalAlignment="Center" Text="Object" />
+            <TextBox Grid.Row="2" Grid.Column="3" Name="ObjectBox" TextChanged="OnTextFormChanged" IsEnabled="False"
+                     PlaceholderText="Table or procedure" AutomationProperties.Name="Object name" />
+            <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Text="Columns" />
+            <TextBox Grid.Row="3" Grid.Column="1" Name="ColumnsBox" TextChanged="OnTextFormChanged" IsEnabled="False"
+                     PlaceholderText="optional, comma-separated" AutomationProperties.Name="Column list" />
+            <StackPanel Grid.Row="3" Grid.Column="2" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="12">
+              <CheckBox Name="GrantOptionCheck" Content="Grant option" IsCheckedChanged="OnCheckFormChanged"
+                        AutomationProperties.Name="With grant option" />
+              <CheckBox Name="CascadeCheck" Content="Cascade" IsCheckedChanged="OnCheckFormChanged"
+                        AutomationProperties.Name="Cascade" />
+            </StackPanel>
+          </Grid>
+          <TextBox Name="PreviewBox" Classes="mono" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                   Margin="0,8,0,0" PlaceholderText="Preview SQL appears here. Nothing runs until you confirm."
+                   AutomationProperties.Name="Permission change SQL preview" />
+        </DockPanel>
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>
