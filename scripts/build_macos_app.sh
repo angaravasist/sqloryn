@@ -3,7 +3,7 @@
 #   default                       framework-dependent (.NET 10 runtime required on the Mac)
 #   SQLORYN_SELF_CONTAINED=1      self-contained (bundles the runtime; not yet tested on a Mac without .NET)
 # Both modes publish with an explicit -r <RID>; Sqloryn.csproj declares RuntimeIdentifiers osx-arm64;osx-x64 so a single
-# locked restore covers either. Provenance for the build is written to docs/evidence/package-<arm64|x64>[-self-contained].md.
+# locked restore covers either. Provenance for the build is written to artifacts/macos/provenance-<arm64|x64>[-self-contained].md (git-ignored).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -73,11 +73,11 @@ MODE="framework-dependent"
 
 # ---- Provenance ------------------------------------------------------------------------------
 case "$ARCH" in osx-arm64) SHORT=arm64 ;; osx-x64) SHORT=x64 ;; esac
-EVIDENCE="$ROOT/docs/evidence/package-$SHORT.md"
-[[ "$SELF_CONTAINED" == "1" ]] && EVIDENCE="$ROOT/docs/evidence/package-$SHORT-self-contained.md"
-mkdir -p "$ROOT/docs/evidence"
+EVIDENCE="$ROOT/artifacts/macos/provenance-$SHORT.md"
+[[ "$SELF_CONTAINED" == "1" ]] && EVIDENCE="$ROOT/artifacts/macos/provenance-$SHORT-self-contained.md"
+mkdir -p "$ROOT/artifacts/macos"
 COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
-if [[ -n "$(git -C "$ROOT" status --porcelain -- . ':!docs/evidence' ':!artifacts' 2>/dev/null)" ]]; then DIRTY="dirty (uncommitted changes were present; the commit alone does not identify this build)"; else DIRTY="clean"; fi
+if [[ -n "$(git -C "$ROOT" status --porcelain -- . ':!artifacts' 2>/dev/null)" ]]; then DIRTY="dirty (uncommitted changes were present; the commit alone does not identify this build)"; else DIRTY="clean"; fi
 DLL="$APP/Contents/MacOS/Sqloryn.dll"
 DLL_SHA="$(shasum -a 256 "$DLL" | awk '{print $1}')"
 EXE_SHA="$(shasum -a 256 "$APP/Contents/MacOS/Sqloryn" | awk '{print $1}')"
@@ -105,11 +105,11 @@ APP_KB="$(du -sk "$APP" | awk '{print $1}')"
   echo
   echo "## Limits"
   echo
-  echo "- Unsigned and not notarised: internal candidate only."
+  echo "- Unsigned and not notarised: development build only."
   echo "- Built on the build machine. Launch is **not** performed by this script. **Not tested on a Mac without a .NET install**, so no clean-Mac claim is made for either mode."
   echo "- Hashes identify this build output only; there is no reproducible-build claim."
 } > "$EVIDENCE"
 echo "Provenance: $EVIDENCE"
 echo "Built $APP ($ARCH, $MODE)"
 echo "Launch: open \"$APP\""
-echo "Note: unsigned internal candidate only — not Gatekeeper-notarised public distribution."
+echo "Note: unsigned development build — not signed or notarised."

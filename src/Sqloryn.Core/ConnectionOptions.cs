@@ -13,7 +13,7 @@ public sealed class ConnectionOptions
     /// <summary>
     /// Database names are passed to SqlClient only through <see cref="SqlConnectionStringBuilder"/> (quoted values),
     /// never concatenated, so brackets, spaces, Unicode, quotes, semicolons and equals signs are legitimate.
-    /// Remaining exclusions (documented in docs/ssms/DELIVERY-CONTRACT.md §1): empty or whitespace-only names,
+    /// Remaining exclusions: empty or whitespace-only names,
     /// names over 128 UTF-16 code units, and control characters (including newline, NUL and DEL). Names are not trimmed here.
     /// </summary>
     public const string DatabaseNameExclusions =

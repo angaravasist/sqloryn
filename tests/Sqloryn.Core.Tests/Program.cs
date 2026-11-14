@@ -132,29 +132,29 @@ Check(cell38.Display == probe38 && cell38.Kind == "decimal" && !cell38.Truncated
 Check(ResultMaterializer.FormatSqlDecimal(SqlDecimal.Parse(probe38)).Display == probe38, "sqldecimal-direct");
 Pass("numeric-38-production-path");
 
-// --- S-2: date / money / smallmoney through the production typed path ---
+// --- date / money / smallmoney through the production typed path ---
 {
     var typedS2 = new FakeSqlTypedCellSource(
         ["date", "money", "smallmoney", "date", "money", "smallmoney", "money", "smallmoney"],
         [new DateTime(2024, 2, 29, 13, 45, 0), new SqlMoney(-12.3456m), new SqlMoney(214748.3647m),
          null, null, null, new SqlMoney(5m), new SqlMoney(-0.0001m)]);
     var dateCell = ResultMaterializer.FormatSqlTypedCell(typedS2, 0);
-    Check(dateCell.Display == "2024-02-29" && dateCell.Kind == "date", "s2-date-iso-kind");
+    Check(dateCell.Display == "2024-02-29" && dateCell.Kind == "date", "date-iso-kind");
     var moneyCell = ResultMaterializer.FormatSqlTypedCell(typedS2, 1);
-    Check(moneyCell.Display == "-12.3456" && moneyCell.Kind == "money", "s2-money-negative-exact");
+    Check(moneyCell.Display == "-12.3456" && moneyCell.Kind == "money", "money-negative-exact");
     var smallCell = ResultMaterializer.FormatSqlTypedCell(typedS2, 2);
-    Check(smallCell.Display == "214748.3647" && smallCell.Kind == "smallmoney", "s2-smallmoney-exact");
-    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 3).IsNull, "s2-null-date");
-    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 4).IsNull, "s2-null-money");
-    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 5).IsNull, "s2-null-smallmoney");
-    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 6).Display == "5.0000", "s2-money-fixed-scale");
-    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 7).Display == "-0.0001", "s2-smallmoney-negative-fraction");
+    Check(smallCell.Display == "214748.3647" && smallCell.Kind == "smallmoney", "smallmoney-exact");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 3).IsNull, "null-date");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 4).IsNull, "null-money");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 5).IsNull, "null-smallmoney");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 6).Display == "5.0000", "money-fixed-scale");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 7).Display == "-0.0001", "smallmoney-negative-fraction");
 
     var prevCulture = System.Globalization.CultureInfo.CurrentCulture;
     try
     {
         System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
-        Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 1).Display == "-12.3456", "s2-money-culture-invariant");
+        Check(ResultMaterializer.FormatSqlTypedCell(typedS2, 1).Display == "-12.3456", "money-culture-invariant");
     }
     finally { System.Globalization.CultureInfo.CurrentCulture = prevCulture; }
 
@@ -173,15 +173,15 @@ Pass("numeric-38-production-path");
     };
     var s2View = ResultSetView.FromResultSet(s2Set);
     var plainCsv = CsvExporter.ToCsv(s2View);
-    Check(plainCsv.Split("\r\n")[1] == "2024-02-29,-12.3456,-0.0001,,", "s2-csv-plain");
+    Check(plainCsv.Split("\r\n")[1] == "2024-02-29,-12.3456,-0.0001,,", "csv-plain");
     var safeCsv = CsvExporter.ToCsv(s2View, new CsvOptions { SpreadsheetSafe = true });
-    Check(safeCsv.Split("\r\n")[1] == "2024-02-29,-12.3456,-0.0001,,", "s2-csv-spreadsheet-safe-money-unprefixed");
+    Check(safeCsv.Split("\r\n")[1] == "2024-02-29,-12.3456,-0.0001,,", "csv-spreadsheet-safe-money-unprefixed");
     var s2Json = System.Text.Json.JsonDocument.Parse(JsonExporter.ToJson(s2View)).RootElement
         .GetProperty("resultSets")[0].GetProperty("rows")[0];
-    Check(s2Json[0].ValueKind == System.Text.Json.JsonValueKind.String && s2Json[0].GetString() == "2024-02-29", "s2-json-date-string");
-    Check(s2Json[1].ValueKind == System.Text.Json.JsonValueKind.String && s2Json[1].GetString() == "-12.3456", "s2-json-money-string");
-    Check(s2Json[2].ValueKind == System.Text.Json.JsonValueKind.String && s2Json[2].GetString() == "-0.0001", "s2-json-smallmoney-string");
-    Check(s2Json[3].ValueKind == System.Text.Json.JsonValueKind.Null && s2Json[4].ValueKind == System.Text.Json.JsonValueKind.Null, "s2-json-null");
+    Check(s2Json[0].ValueKind == System.Text.Json.JsonValueKind.String && s2Json[0].GetString() == "2024-02-29", "json-date-string");
+    Check(s2Json[1].ValueKind == System.Text.Json.JsonValueKind.String && s2Json[1].GetString() == "-12.3456", "json-money-string");
+    Check(s2Json[2].ValueKind == System.Text.Json.JsonValueKind.String && s2Json[2].GetString() == "-0.0001", "json-smallmoney-string");
+    Check(s2Json[3].ValueKind == System.Text.Json.JsonValueKind.Null && s2Json[4].ValueKind == System.Text.Json.JsonValueKind.Null, "json-null");
 
     // Kind-only (no provider SqlTypes): money/date kinds must still export spreadsheet-safe.
     var kindOnly = ResultSetView.FromResultSet(new ResultSet
@@ -189,9 +189,9 @@ Pass("numeric-38-production-path");
         Columns = ["m", "d"],
         Rows = [[CellValue.Text("-12.3456", "money"), CellValue.Text("2024-02-29", "date")]]
     });
-    Check(kindOnly.Columns[0].SqlType == "money" && kindOnly.Columns[1].SqlType == "date", "s2-kind-infers-money-date");
+    Check(kindOnly.Columns[0].SqlType == "money" && kindOnly.Columns[1].SqlType == "date", "kind-infers-money-date");
     Check(CsvExporter.ToCsv(kindOnly, new CsvOptions { SpreadsheetSafe = true }).Contains("-12.3456", StringComparison.Ordinal)
-          && !CsvExporter.ToCsv(kindOnly, new CsvOptions { SpreadsheetSafe = true }).Contains("'-12.3456", StringComparison.Ordinal), "s2-kind-money-safe-csv");
+          && !CsvExporter.ToCsv(kindOnly, new CsvOptions { SpreadsheetSafe = true }).Contains("'-12.3456", StringComparison.Ordinal), "kind-money-safe-csv");
 
     // ReadResultSetAsync with typed fixture reader (fallback path for non-SqlDataReader).
     using var s2Reader = new TypedValueReader(
@@ -203,18 +203,18 @@ Pass("numeric-38-production-path");
             [null, null, null]
         ]);
     var s2Outcome = await ResultMaterializer.ReadResultSetAsync(s2Reader, new ResultBudget(), CancellationToken.None);
-    Check(s2Outcome.RowFailure is null && s2Outcome.Set.Rows.Count == 2, "s2-read-resultset-no-failure");
+    Check(s2Outcome.RowFailure is null && s2Outcome.Set.Rows.Count == 2, "read-resultset-no-failure");
     var r0Cells = s2Outcome.Set.Rows[0];
-    Check(r0Cells[0].Display == "2024-02-29" && r0Cells[0].Kind == "date", "s2-read-resultset-date");
-    Check(r0Cells[1].Display == "-12.3456" && r0Cells[1].Kind == "money", "s2-read-resultset-money");
-    Check(r0Cells[2].Display == "7.5000" && r0Cells[2].Kind == "smallmoney", "s2-read-resultset-smallmoney");
-    Check(s2Outcome.Set.Rows[1].All(c => c.IsNull), "s2-read-resultset-nulls");
+    Check(r0Cells[0].Display == "2024-02-29" && r0Cells[0].Kind == "date", "read-resultset-date");
+    Check(r0Cells[1].Display == "-12.3456" && r0Cells[1].Kind == "money", "read-resultset-money");
+    Check(r0Cells[2].Display == "7.5000" && r0Cells[2].Kind == "smallmoney", "read-resultset-smallmoney");
+    Check(s2Outcome.Set.Rows[1].All(c => c.IsNull), "read-resultset-nulls");
     var s2ReadView = ResultSetView.FromResultSet(s2Outcome.Set);
-    Check(s2ReadView.Columns[1].SqlType == "money", "s2-read-resultset-sqltype");
-    Pass("s2-date-money-types");
+    Check(s2ReadView.Columns[1].SqlType == "money", "read-resultset-sqltype");
+    Pass("date-money-types");
 }
 
-// --- WS4-T1: time + uniqueidentifier through the production typed path ---
+// --- time + uniqueidentifier through the production typed path ---
 {
     var guidA = Guid.Parse("6F9619FF-8B86-D011-B42D-00C04FC964FF");
     var typedT = new FakeSqlTypedCellSource(
@@ -222,21 +222,21 @@ Pass("numeric-38-production-path");
         [new TimeSpan(13, 45, 30), new TimeSpan(0, 0, 0, 0, 0).Add(TimeSpan.FromTicks(1234567)), null,
          guidA, null, new TimeSpan(23, 59, 59) + TimeSpan.FromTicks(9999999), Guid.Empty]);
     var t0 = ResultMaterializer.FormatSqlTypedCell(typedT, 0);
-    Check(t0.Display == "13:45:30" && t0.Kind == "time" && !t0.IsNull && !t0.Truncated, "ws4-time-whole-seconds");
+    Check(t0.Display == "13:45:30" && t0.Kind == "time" && !t0.IsNull && !t0.Truncated, "results-time-whole-seconds");
     var t1 = ResultMaterializer.FormatSqlTypedCell(typedT, 1);
-    Check(t1.Display == "00:00:00.1234567" && t1.Kind == "time", "ws4-time-100ns-precision");
-    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 2).IsNull, "ws4-time-null");
+    Check(t1.Display == "00:00:00.1234567" && t1.Kind == "time", "results-time-100ns-precision");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 2).IsNull, "results-time-null");
     var g0 = ResultMaterializer.FormatSqlTypedCell(typedT, 3);
-    Check(g0.Display == "6f9619ff-8b86-d011-b42d-00c04fc964ff" && g0.Kind == "uniqueidentifier", "ws4-guid-D-format");
-    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 4).IsNull, "ws4-guid-null");
-    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 5).Display == "23:59:59.9999999", "ws4-time-max");
-    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 6).Display == "00000000-0000-0000-0000-000000000000", "ws4-guid-empty");
+    Check(g0.Display == "6f9619ff-8b86-d011-b42d-00c04fc964ff" && g0.Kind == "uniqueidentifier", "results-guid-D-format");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 4).IsNull, "results-guid-null");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 5).Display == "23:59:59.9999999", "results-time-max");
+    Check(ResultMaterializer.FormatSqlTypedCell(typedT, 6).Display == "00000000-0000-0000-0000-000000000000", "results-guid-empty");
 
     var prevCultureT = System.Globalization.CultureInfo.CurrentCulture;
     try
     {
         System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("ar-SA");
-        Check(ResultMaterializer.FormatSqlTypedCell(typedT, 0).Display == "13:45:30", "ws4-time-culture-invariant");
+        Check(ResultMaterializer.FormatSqlTypedCell(typedT, 0).Display == "13:45:30", "results-time-culture-invariant");
     }
     finally { System.Globalization.CultureInfo.CurrentCulture = prevCultureT; }
 
@@ -250,10 +250,10 @@ Pass("numeric-38-production-path");
             [null, null]
         ]);
     var tgOutcome = await ResultMaterializer.ReadResultSetAsync(tgReader, new ResultBudget(), CancellationToken.None);
-    Check(tgOutcome.RowFailure is null && tgOutcome.Set.Rows.Count == 2, "ws4-read-resultset-no-failure");
-    Check(tgOutcome.Set.Rows[0][0].Display == "08:05:00" && tgOutcome.Set.Rows[0][0].Kind == "time", "ws4-read-time");
-    Check(tgOutcome.Set.Rows[0][1].Display == "6f9619ff-8b86-d011-b42d-00c04fc964ff" && tgOutcome.Set.Rows[0][1].Kind == "uniqueidentifier", "ws4-read-guid");
-    Check(tgOutcome.Set.Rows[1].All(c => c.IsNull), "ws4-read-nulls");
+    Check(tgOutcome.RowFailure is null && tgOutcome.Set.Rows.Count == 2, "results-read-resultset-no-failure");
+    Check(tgOutcome.Set.Rows[0][0].Display == "08:05:00" && tgOutcome.Set.Rows[0][0].Kind == "time", "results-read-time");
+    Check(tgOutcome.Set.Rows[0][1].Display == "6f9619ff-8b86-d011-b42d-00c04fc964ff" && tgOutcome.Set.Rows[0][1].Kind == "uniqueidentifier", "results-read-guid");
+    Check(tgOutcome.Set.Rows[1].All(c => c.IsNull), "results-read-nulls");
 
     // Export: kind-only inference, CSV (spreadsheet-safe) and JSON strings.
     var tgSet = new ResultSet
@@ -268,23 +268,23 @@ Pass("numeric-38-production-path");
         ]]
     };
     var tgView = ResultSetView.FromResultSet(tgSet);
-    Check(tgView.Columns[0].SqlType == "time" && tgView.Columns[1].SqlType == "uniqueidentifier", "ws4-infer-time-guid");
+    Check(tgView.Columns[0].SqlType == "time" && tgView.Columns[1].SqlType == "uniqueidentifier", "results-infer-time-guid");
     var plainTg = CsvExporter.ToCsv(tgView).Split("\r\n")[1];
-    Check(plainTg == "00:00:00.1234567,6f9619ff-8b86-d011-b42d-00c04fc964ff,,", "ws4-csv-plain");
+    Check(plainTg == "00:00:00.1234567,6f9619ff-8b86-d011-b42d-00c04fc964ff,,", "results-csv-plain");
     var safeTg = CsvExporter.ToCsv(tgView, new CsvOptions { SpreadsheetSafe = true }).Split("\r\n")[1];
-    Check(safeTg == plainTg, "ws4-csv-spreadsheet-safe-unprefixed");
+    Check(safeTg == plainTg, "results-csv-spreadsheet-safe-unprefixed");
     var tgJson = System.Text.Json.JsonDocument.Parse(JsonExporter.ToJson(tgView)).RootElement
         .GetProperty("resultSets")[0];
     var tgRow = tgJson.GetProperty("rows")[0];
-    Check(tgRow[0].ValueKind == System.Text.Json.JsonValueKind.String && tgRow[0].GetString() == "00:00:00.1234567", "ws4-json-time-string");
-    Check(tgRow[1].ValueKind == System.Text.Json.JsonValueKind.String && tgRow[1].GetString() == "6f9619ff-8b86-d011-b42d-00c04fc964ff", "ws4-json-guid-string");
-    Check(tgRow[2].ValueKind == System.Text.Json.JsonValueKind.Null && tgRow[3].ValueKind == System.Text.Json.JsonValueKind.Null, "ws4-json-null");
+    Check(tgRow[0].ValueKind == System.Text.Json.JsonValueKind.String && tgRow[0].GetString() == "00:00:00.1234567", "results-json-time-string");
+    Check(tgRow[1].ValueKind == System.Text.Json.JsonValueKind.String && tgRow[1].GetString() == "6f9619ff-8b86-d011-b42d-00c04fc964ff", "results-json-guid-string");
+    Check(tgRow[2].ValueKind == System.Text.Json.JsonValueKind.Null && tgRow[3].ValueKind == System.Text.Json.JsonValueKind.Null, "results-json-null");
     Check(tgJson.GetProperty("columns")[0].GetProperty("sqlType").GetString() == "time"
-          && tgJson.GetProperty("columns")[1].GetProperty("sqlType").GetString() == "uniqueidentifier", "ws4-json-sqltype");
-    Pass("ws4-time-guid-types");
+          && tgJson.GetProperty("columns")[1].GetProperty("sqlType").GetString() == "uniqueidentifier", "results-json-sqltype");
+    Pass("results-time-guid-types");
 }
 
-// --- WS4-T2: retained-row sort / filter helpers (never re-query; operate on retained rows only) ---
+// --- Retained-row sort / filter helpers (never re-query; operate on retained rows only) ---
 {
     ResultSetView MakeView(bool truncated, params (string id, string name, string? n)[] rows) => new()
     {
@@ -306,61 +306,61 @@ Pass("numeric-38-production-path");
 
     // numeric column sorts numerically (not lexically), NULLs last in both directions
     var byIdAsc = sv.SortByColumn(0, descending: false);
-    Check(string.Join(",", byIdAsc.Rows.Select(r => r[0].Display)) == "2,4,10,33", "ws4-sort-numeric-asc");
+    Check(string.Join(",", byIdAsc.Rows.Select(r => r[0].Display)) == "2,4,10,33", "results-sort-numeric-asc");
     var byIdDesc = sv.SortByColumn(0, descending: true);
-    Check(string.Join(",", byIdDesc.Rows.Select(r => r[0].Display)) == "33,10,4,2", "ws4-sort-numeric-desc");
+    Check(string.Join(",", byIdDesc.Rows.Select(r => r[0].Display)) == "33,10,4,2", "results-sort-numeric-desc");
 
     var byAmtAsc = sv.SortByColumn(2, descending: false);
-    Check(string.Join(",", byAmtAsc.Rows.Select(r => r[2].IsNull ? "NULL" : r[2].Display)) == "-1,2.50,100,NULL", "ws4-sort-nulls-last-asc");
+    Check(string.Join(",", byAmtAsc.Rows.Select(r => r[2].IsNull ? "NULL" : r[2].Display)) == "-1,2.50,100,NULL", "results-sort-nulls-last-asc");
     var byAmtDesc = sv.SortByColumn(2, descending: true);
-    Check(string.Join(",", byAmtDesc.Rows.Select(r => r[2].IsNull ? "NULL" : r[2].Display)) == "100,2.50,-1,NULL", "ws4-sort-nulls-last-desc");
+    Check(string.Join(",", byAmtDesc.Rows.Select(r => r[2].IsNull ? "NULL" : r[2].Display)) == "100,2.50,-1,NULL", "results-sort-nulls-last-desc");
 
     // text sort: case-insensitive; NULL (not empty string) last
     var byName = sv.SortByColumn(1, descending: false);
-    Check(string.Join(",", byName.Rows.Select(r => r[1].IsNull ? "NULL" : r[1].Display)) == "Apple,banana,cherry,NULL", "ws4-sort-text-ci-nulls-last");
+    Check(string.Join(",", byName.Rows.Select(r => r[1].IsNull ? "NULL" : r[1].Display)) == "Apple,banana,cherry,NULL", "results-sort-text-ci-nulls-last");
 
     // 38-digit decimals compare exactly (no System.Decimal / double narrowing)
     var big = MakeView(false,
         ("1", "a", "12345678901234567890123456789012345679"),
         ("2", "b", "12345678901234567890123456789012345678"));
-    Check(big.SortByColumn(2, false).Rows[0][0].Display == "2", "ws4-sort-decimal38-exact");
+    Check(big.SortByColumn(2, false).Rows[0][0].Display == "2", "results-sort-decimal38-exact");
 
     // stable: equal keys keep original order; source view untouched
     var ties = MakeView(false, ("1", "x", "5"), ("2", "x", "5"), ("3", "x", "5"));
-    Check(string.Join(",", ties.SortByColumn(1, true).Rows.Select(r => r[0].Display)) == "1,2,3", "ws4-sort-stable");
-    Check(sv.Rows[0][0].Display == "10", "ws4-sort-does-not-mutate-source");
+    Check(string.Join(",", ties.SortByColumn(1, true).Rows.Select(r => r[0].Display)) == "1,2,3", "results-sort-stable");
+    Check(sv.Rows[0][0].Display == "10", "results-sort-does-not-mutate-source");
 
     // Truncated label propagates; complete sets are not labelled truncated
     var trunc = MakeView(true, ("2", "b", "1"), ("1", "a", "2"));
     var truncSorted = trunc.SortByColumn(0, false);
     Check(truncSorted.Truncated && truncSorted.ScopeLabel is not null
           && truncSorted.ScopeLabel.Contains("retained", StringComparison.OrdinalIgnoreCase)
-          && truncSorted.ScopeLabel.Contains("more rows", StringComparison.OrdinalIgnoreCase), "ws4-sort-truncated-label");
+          && truncSorted.ScopeLabel.Contains("more rows", StringComparison.OrdinalIgnoreCase), "results-sort-truncated-label");
     var completeSorted = sv.SortByColumn(0, false);
     Check(!completeSorted.Truncated && completeSorted.ScopeLabel is not null
-          && !completeSorted.ScopeLabel.Contains("more rows", StringComparison.OrdinalIgnoreCase), "ws4-sort-complete-label");
-    Check(trunc.FilterContains("a").Truncated && trunc.FilterContains("a").ScopeLabel!.Contains("more rows", StringComparison.OrdinalIgnoreCase), "ws4-filter-truncated-label");
+          && !completeSorted.ScopeLabel.Contains("more rows", StringComparison.OrdinalIgnoreCase), "results-sort-complete-label");
+    Check(trunc.FilterContains("a").Truncated && trunc.FilterContains("a").ScopeLabel!.Contains("more rows", StringComparison.OrdinalIgnoreCase), "results-filter-truncated-label");
 
     // Filter: case-insensitive substring, all columns, or one column; NULL never matches
-    Check(sv.FilterContains("APPLE").Rows.Count == 1, "ws4-filter-ci");
-    Check(sv.FilterContains("an").Rows.Count == 1 && sv.FilterContains("an").Rows[0][0].Display == "10", "ws4-filter-substring");
-    Check(sv.FilterContains("NULL").Rows.Count == 0, "ws4-filter-null-not-text-NULL");
-    Check(sv.FilterContains("e", columnOrdinal: 1).Rows.Count == 2, "ws4-filter-column-scope");
-    Check(sv.FilterContains("33", columnOrdinal: 1).Rows.Count == 0, "ws4-filter-column-scope-excludes-others");
-    Check(sv.FilterContains("").Rows.Count == 4 && sv.FilterContains(null).Rows.Count == 4, "ws4-filter-empty-returns-all");
-    Check(sv.FilterContains("zzz").Rows.Count == 0, "ws4-filter-no-match");
-    Check(sv.FilterContains("1").SortByColumn(0, true).Rows.Count == 3, "ws4-filter-then-sort-compose");
+    Check(sv.FilterContains("APPLE").Rows.Count == 1, "results-filter-ci");
+    Check(sv.FilterContains("an").Rows.Count == 1 && sv.FilterContains("an").Rows[0][0].Display == "10", "results-filter-substring");
+    Check(sv.FilterContains("NULL").Rows.Count == 0, "results-filter-null-not-text-NULL");
+    Check(sv.FilterContains("e", columnOrdinal: 1).Rows.Count == 2, "results-filter-column-scope");
+    Check(sv.FilterContains("33", columnOrdinal: 1).Rows.Count == 0, "results-filter-column-scope-excludes-others");
+    Check(sv.FilterContains("").Rows.Count == 4 && sv.FilterContains(null).Rows.Count == 4, "results-filter-empty-returns-all");
+    Check(sv.FilterContains("zzz").Rows.Count == 0, "results-filter-no-match");
+    Check(sv.FilterContains("1").SortByColumn(0, true).Rows.Count == 3, "results-filter-then-sort-compose");
 
     // Index helpers used by the grid (keeps CellValue Truncated flags / row numbers)
-    Check(string.Join(",", sv.SortedRowIndexes(0, false)) == "1,3,0,2", "ws4-sorted-indexes");
-    Check(string.Join(",", sv.FilterRowIndexes("an", null)) == "0", "ws4-filter-indexes");
+    Check(string.Join(",", sv.SortedRowIndexes(0, false)) == "1,3,0,2", "results-sorted-indexes");
+    Check(string.Join(",", sv.FilterRowIndexes("an", null)) == "0", "results-filter-indexes");
 
     try { sv.SortByColumn(9, false); throw new Exception("FAIL ws4-sort-bad-ordinal"); }
     catch (ArgumentOutOfRangeException) { }
 
     // Exports of a sorted/filtered truncated view stay marked incomplete
-    Check(JsonExporter.ToJson(truncSorted).Contains("\"truncated\": true", StringComparison.Ordinal), "ws4-sort-export-still-truncated");
-    Pass("ws4-retained-sort-filter");
+    Check(JsonExporter.ToJson(truncSorted).Contains("\"truncated\": true", StringComparison.Ordinal), "results-sort-export-still-truncated");
+    Pass("results-retained-sort-filter");
 }
 
 // --- 2. Budget exhausted mid-row; omit incomplete row; display shows intact rows + marker ---
@@ -887,7 +887,7 @@ Pass("explorer-ownership");
     catch (InvalidOperationException ex) when (!ex.Message.Contains("not supported", StringComparison.Ordinal)) { }
     Pass("go-multi-batch-requires-connection");
 
-    // F7: structured batches with source spans (LF and CRLF).
+    // structured batches with source spans (LF and CRLF).
     static void CheckSpans(string script, string label)
     {
         var parsed = GoBatchSplitter.Parse(script);
@@ -923,7 +923,7 @@ Pass("explorer-ownership");
         Pass("go-parse-source-spans");
     }
 
-    // F7: unsupported SQLCMD / malformed GO rejected with location.
+    // unsupported SQLCMD / malformed GO rejected with location.
     {
         SqlScriptRejectedException? Reject(string sql)
         {
@@ -982,7 +982,7 @@ Pass("explorer-ownership");
         Pass("sqlcmd-preflight-rejection");
     }
 
-    // F7: SqlSession.ExecuteAsync preflights the whole selection before executing batch 1.
+    // SqlSession.ExecuteAsync preflights the whole selection before executing batch 1.
     {
         var executed = new List<string>();
         await using var session = new SqlSession
@@ -1035,7 +1035,7 @@ Pass("explorer-ownership");
     }
 }
 
-// D5: rejection locations are reported against the whole document, not the run selection.
+// Rejection locations are reported against the whole document, not the run selection.
 {
     var executed = new List<string>();
     await using var session = new SqlSession
@@ -1052,21 +1052,21 @@ Pass("explorer-ownership");
     var document = prefix + selection + "\nSELECT 2";
     var selectionStart = prefix.Length;
     var origin = ScriptExecutionOrigin.FromDocument(document, selectionStart);
-    Check(origin.DocumentLineOffset == 50 && origin.DocumentOffset == 50, "d5-origin-from-document");
+    Check(origin.DocumentLineOffset == 50 && origin.DocumentOffset == 50, "selection-origin-from-document");
 
     // Selection on document line 51: :setvar is the selection's first line.
     try
     {
         await session.ExecuteAsync(selection, origin);
-        throw new Exception("FAIL d5-setvar-not-rejected");
+        throw new Exception("FAIL selection-setvar-not-rejected");
     }
     catch (SqlScriptRejectedException ex)
     {
-        Check(ex.Line == 51, "d5-setvar-document-line");
-        Check(ex.Offset == selectionStart, "d5-setvar-document-offset");
-        Check(ex.SelectionLine == 1 && ex.SelectionOffset == 0, "d5-setvar-selection-relative-kept");
-        Check(ex.Message.Contains("line 51,", StringComparison.Ordinal), "d5-setvar-message-document-line");
-        Check(document.AsSpan(ex.Offset).StartsWith(":setvar", StringComparison.Ordinal), "d5-setvar-offset-points-at-directive");
+        Check(ex.Line == 51, "selection-setvar-document-line");
+        Check(ex.Offset == selectionStart, "selection-setvar-document-offset");
+        Check(ex.SelectionLine == 1 && ex.SelectionOffset == 0, "selection-setvar-selection-relative-kept");
+        Check(ex.Message.Contains("line 51,", StringComparison.Ordinal), "selection-setvar-message-document-line");
+        Check(document.AsSpan(ex.Offset).StartsWith(":setvar", StringComparison.Ordinal), "selection-setvar-offset-points-at-directive");
     }
 
     // GO rejected mid-selection: selection starts on document line 11 (10 lines before).
@@ -1074,41 +1074,41 @@ Pass("explorer-ownership");
     var start2 = doc2.IndexOf("SELECT 1", StringComparison.Ordinal);
     var sel2 = doc2[start2..];
     var origin2 = ScriptExecutionOrigin.FromDocument(doc2, start2);
-    Check(origin2.DocumentLineOffset == 10, "d5-origin-line-offset");
+    Check(origin2.DocumentLineOffset == 10, "selection-origin-line-offset");
     try
     {
         await session.ExecuteAsync(sel2, origin2);
-        throw new Exception("FAIL d5-go-not-rejected");
+        throw new Exception("FAIL selection-go-not-rejected");
     }
     catch (SqlScriptRejectedException ex)
     {
-        Check(ex.Kind == SqlScriptRejectionKind.MalformedGo, "d5-go-kind");
-        Check(ex.SelectionLine == 4, "d5-go-selection-line");
-        Check(ex.Line == 14, "d5-go-document-line");
-        Check(doc2.AsSpan(ex.Offset).StartsWith("GO nonsense", StringComparison.Ordinal), "d5-go-offset-points-at-go");
-        Check(ex.Message.Contains("line 14,", StringComparison.Ordinal), "d5-go-message-document-line");
+        Check(ex.Kind == SqlScriptRejectionKind.MalformedGo, "selection-go-kind");
+        Check(ex.SelectionLine == 4, "selection-go-selection-line");
+        Check(ex.Line == 14, "selection-go-document-line");
+        Check(doc2.AsSpan(ex.Offset).StartsWith("GO nonsense", StringComparison.Ordinal), "selection-go-offset-points-at-go");
+        Check(ex.Message.Contains("line 14,", StringComparison.Ordinal), "selection-go-message-document-line");
     }
-    Check(executed.Count == 0, "d5-nothing-executed");
+    Check(executed.Count == 0, "selection-nothing-executed");
 
     // CRLF documents and column on a mid-line selection start.
     var doc3 = "a\r\nb\r\n  :r x";
     var origin3 = ScriptExecutionOrigin.FromDocument(doc3, doc3.IndexOf(":r", StringComparison.Ordinal));
-    Check(origin3.DocumentLineOffset == 2, "d5-origin-crlf");
+    Check(origin3.DocumentLineOffset == 2, "selection-origin-crlf");
     var doc4 = "SELECT 1; :r x";
     var start4 = doc4.IndexOf(":r", StringComparison.Ordinal);
     var origin4 = ScriptExecutionOrigin.FromDocument(doc4, start4);
-    Check(origin4.DocumentLineOffset == 0 && origin4.DocumentColumnOffset == start4, "d5-origin-column");
-    try { await session.ExecuteAsync(doc4[start4..], origin4); throw new Exception("FAIL d5-column"); }
-    catch (SqlScriptRejectedException ex) { Check(ex.Line == 1 && ex.Column == start4 + 1 && ex.Offset == start4, "d5-first-line-column-shifted"); }
+    Check(origin4.DocumentLineOffset == 0 && origin4.DocumentColumnOffset == start4, "selection-origin-column");
+    try { await session.ExecuteAsync(doc4[start4..], origin4); throw new Exception("FAIL selection-column"); }
+    catch (SqlScriptRejectedException ex) { Check(ex.Line == 1 && ex.Column == start4 + 1 && ex.Offset == start4, "selection-first-line-column-shifted"); }
 
     // No origin: behaviour unchanged (selection-relative == document-relative).
-    try { await session.ExecuteAsync("SELECT 1\nGO\n:r x", (ScriptExecutionOrigin?)null); throw new Exception("FAIL d5-null-origin"); }
-    catch (SqlScriptRejectedException ex) { Check(ex.Line == 3 && ex.SelectionLine == 3, "d5-null-origin-unchanged"); }
+    try { await session.ExecuteAsync("SELECT 1\nGO\n:r x", (ScriptExecutionOrigin?)null); throw new Exception("FAIL selection-null-origin"); }
+    catch (SqlScriptRejectedException ex) { Check(ex.Line == 3 && ex.SelectionLine == 3, "selection-null-origin-unchanged"); }
 
     // Origin must not be able to produce negative locations.
-    try { _ = new ScriptExecutionOrigin(-1, 0); throw new Exception("FAIL d5-negative-origin"); }
+    try { _ = new ScriptExecutionOrigin(-1, 0); throw new Exception("FAIL selection-negative-origin"); }
     catch (ArgumentOutOfRangeException) { }
-    Pass("d5-document-relative-rejection");
+    Pass("selection-document-relative-rejection");
 }
 
 // Connection profiles
@@ -1263,7 +1263,7 @@ Pass("explorer-ownership");
         Truncated = false
     });
     Check(fromSet.Rows[0][0].IsNull && !fromSet.Rows[0][1].IsNull && !fromSet.Truncated, "result-view-from-set");
-    // Verifier D1: FromResultSet without explicit sqlTypes must still preserve numeric spreadsheet-safe export.
+    // FromResultSet without explicit sqlTypes must still preserve numeric spreadsheet-safe export.
     {
         var withSqlTypes = new ResultSet
         {
@@ -1356,7 +1356,7 @@ Pass("explorer-ownership");
     Check(TableDesignSql.HasDestructiveChanges(draft, desired) && !TableDesignSql.HasDestructiveChanges(draft, draft), "design-destructive-flag");
     Check(!TableDesignSql.PreviewAlter(draft, draft).HasChanges && TableDesignSql.PreviewAlter(draft, draft).ExecutableSql.Length == 0, "design-alter-noop");
 
-    // Hostile identifiers: metadata must never be embedded in executable SQL comments (PR #7 finding 1).
+    // Hostile identifiers: metadata must never be embedded in executable SQL comments.
     static string StripBracketedIdentifiers(string sql)
     {
         var sb = new System.Text.StringBuilder();
@@ -1511,7 +1511,7 @@ Pass("explorer-ownership");
     Pass("find-replace");
 }
 
-// PR #7 finding 2: remembered password must stay bound to its original endpoint identity.
+// Remembered password must stay bound to its original endpoint identity.
 {
     static EndpointIdentity Id(string server = "hostA", int port = 1433, string user = "app",
         bool trust = false, string? pin = null) => new(server, port, user, trust, pin);
@@ -1713,7 +1713,7 @@ Pass("explorer-ownership");
         Pass("autofill-generation");
     }
 
-    // D8: TryApplySecret only applies for the current generation while still Waiting.
+    // TryApplySecret only applies for the current generation while still Waiting.
     {
         var session = new ProfileAutofillSession();
         var gen = session.BeginLookup(Profile(pid));
@@ -1738,7 +1738,7 @@ Pass("explorer-ownership");
         Pass("autofill-tryapply-secret");
     }
 
-    // D8: UI event sequence through the controller.
+    // UI event sequence through the controller.
     {
         var pidB = Guid.NewGuid();
 
@@ -1863,7 +1863,7 @@ Pass("explorer-ownership");
     }
 }
 
-// Edit rows: transactional batch (PR #7 finding 3)
+// Edit rows: transactional batch
 {
     var tbl = new TableRef("App", "dbo", "Orders");
     var cmds = new List<EditCommand>
@@ -1910,7 +1910,7 @@ Pass("explorer-ownership");
     var commitFailResult = await EditRowsBatch.ApplyAsync(commitFail, cmds);
     Check(commitFailResult.Outcome == EditBatchOutcome.OutcomeUnknown && commitFailResult.RequiresReload && !commitFailResult.Committed, "batch-commit-failure-unknown");
 
-    // Verifier D4: a throwing DisposeAsync must never replace or lose the computed result.
+    // A throwing DisposeAsync must never replace or lose the computed result.
     var disposeBoom = () => new InvalidOperationException("dispose exploded");
     var rbFailDisposeFail = new FakeEditTransactionFactory(1, 0)
     {
@@ -2021,7 +2021,7 @@ Pass("explorer-ownership");
     Check(composite.IsSupported && composite.ConcurrencyColumns.SequenceEqual(["Qty"]), "policy-composite-key");
     Pass("edit-rows-policy");
 
-    // D3: character concurrency columns must be compared with a binary collation.
+    // Character concurrency columns must be compared with a binary collation.
     var chars = EditRowsPolicy.Evaluate(["Id"],
         [C("Id", "int"), C("Qty", "int"), C("A", "char"), C("B", "varchar"), C("N", "nchar"), C("V", "nvarchar"), C("Ts", "datetime")], false);
     Check(chars.IsSupported && chars.CharacterConcurrencyColumns!.SequenceEqual(["A", "B", "N", "V"]), "policy-character-concurrency-columns");
@@ -2031,32 +2031,32 @@ Pass("explorer-ownership");
     Check(EditRowsPolicy.CharacterConcurrencyCollation == "Latin1_General_BIN2", "policy-character-collation-name");
 }
 
-// D3: case-insensitive collation must not hide 'abc' -> 'ABC' / trailing-space changes in the optimistic predicate
+// Case-insensitive collation must not hide 'abc' -> 'ABC' / trailing-space changes in the optimistic predicate
 {
     var t = new TableRef("App", "dbo", "T");
     var k = new RowKey(["Id"], [1]);
     var orig = new Dictionary<string, object?> { ["Id"] = 1, ["Name"] = "abc", ["Qty"] = 4, ["Note"] = null, ["Code"] = "x" };
     var chars = new HashSet<string>(["Name", "Note", "Code"], StringComparer.OrdinalIgnoreCase);
     var u = EditRowsSql.BuildUpdate(t, k, new Dictionary<string, object?> { ["Qty"] = 5 }, orig, null, chars);
-    Check(u.CommandText.Contains("(CAST([Name] AS nvarchar(max)) + N'|') COLLATE Latin1_General_BIN2 = (CAST(@o0 AS nvarchar(max)) + N'|')", StringComparison.Ordinal), "d3-update-nvarchar-bin2");
-    Check(u.CommandText.Contains("AND [Qty] = @o1", StringComparison.Ordinal), "d3-update-nonchar-unchanged");
-    Check(u.CommandText.Contains("AND [Note] IS NULL", StringComparison.Ordinal), "d3-update-null-char-is-null");
-    Check(u.CommandText.Contains("CAST([Code] AS nvarchar(max)) + N'|') COLLATE Latin1_General_BIN2 = (CAST(@o2 AS", StringComparison.Ordinal), "d3-update-second-char-column");
-    Check(u.CommandText.Contains("WHERE [Id] = @k0", StringComparison.Ordinal) && !u.CommandText.Contains("[Id]) COLLATE", StringComparison.Ordinal), "d3-key-unchanged");
-    Check(u.Parameters.Single(p => p.Name == "@o0").Value is "abc", "d3-update-still-parameterised");
+    Check(u.CommandText.Contains("(CAST([Name] AS nvarchar(max)) + N'|') COLLATE Latin1_General_BIN2 = (CAST(@o0 AS nvarchar(max)) + N'|')", StringComparison.Ordinal), "edit-conflict-update-nvarchar-bin2");
+    Check(u.CommandText.Contains("AND [Qty] = @o1", StringComparison.Ordinal), "edit-conflict-update-nonchar-unchanged");
+    Check(u.CommandText.Contains("AND [Note] IS NULL", StringComparison.Ordinal), "edit-conflict-update-null-char-is-null");
+    Check(u.CommandText.Contains("CAST([Code] AS nvarchar(max)) + N'|') COLLATE Latin1_General_BIN2 = (CAST(@o2 AS", StringComparison.Ordinal), "edit-conflict-update-second-char-column");
+    Check(u.CommandText.Contains("WHERE [Id] = @k0", StringComparison.Ordinal) && !u.CommandText.Contains("[Id]) COLLATE", StringComparison.Ordinal), "edit-conflict-key-unchanged");
+    Check(u.Parameters.Single(p => p.Name == "@o0").Value is "abc", "edit-conflict-update-still-parameterised");
 
     var noChars = EditRowsSql.BuildUpdate(t, k, new Dictionary<string, object?> { ["Qty"] = 5 }, orig, new HashSet<string> { "Name", "Note", "Code" }, chars);
-    Check(!noChars.CommandText.Contains("COLLATE", StringComparison.Ordinal), "d3-excluded-char-column-has-no-collate");
+    Check(!noChars.CommandText.Contains("COLLATE", StringComparison.Ordinal), "edit-conflict-excluded-char-column-has-no-collate");
 
     var legacy = EditRowsSql.BuildUpdate(t, k, new Dictionary<string, object?> { ["Qty"] = 5 }, new Dictionary<string, object?> { ["Qty"] = 4 });
-    Check(!legacy.CommandText.Contains("COLLATE", StringComparison.Ordinal), "d3-no-char-no-collate");
+    Check(!legacy.CommandText.Contains("COLLATE", StringComparison.Ordinal), "edit-conflict-no-char-no-collate");
 
     var d = EditRowsSql.BuildDelete(t, k, orig, null, chars);
-    Check(d.CommandText.Contains("COLLATE Latin1_General_BIN2", StringComparison.Ordinal), "d3-delete-bin2");
+    Check(d.CommandText.Contains("COLLATE Latin1_General_BIN2", StringComparison.Ordinal), "edit-conflict-delete-bin2");
     Pass("edit-rows-binary-collation");
 }
 
-// QueryRaw byte budget (PR #7 finding 6)
+// QueryRaw byte budget
 {
     var small = new RawReadBudget(MaxCellBytes: 1024, MaxTotalBytes: 100_000);
     var hugeText = new string('x', 10_000_000);
@@ -2132,7 +2132,7 @@ Pass("explorer-ownership");
     Pass("query-raw-budget");
 }
 
-// F4: loss-aware JSON (ordinal column metadata + row arrays)
+// Loss-aware JSON (ordinal column metadata + row arrays)
 {
     var dup = new ResultSetView
     {
@@ -2155,7 +2155,7 @@ Pass("explorer-ownership");
     Pass("json-duplicate-columns-preserved");
 }
 
-// F4: spreadsheet-safe CSV
+// Spreadsheet-safe CSV
 {
     var view = new ResultSetView
     {
@@ -2182,9 +2182,9 @@ Pass("explorer-ownership");
     Pass("csv-spreadsheet-safe");
 }
 
-// F4/F5: staged atomic writes
+// Staged atomic writes
 {
-    var dir = Path.Combine(Path.GetTempPath(), "sqloryn-f4-" + Guid.NewGuid().ToString("N"));
+    var dir = Path.Combine(Path.GetTempPath(), "sqloryn-export-" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(dir);
     try
     {
@@ -2297,7 +2297,7 @@ Pass("explorer-ownership");
         }
         Pass("safe-file-writer");
 
-        // F4: export writer — one destination, siblings untouched
+        // Export writer — one destination, siblings untouched
         var exportDir = Path.Combine(dir, "export");
         Directory.CreateDirectory(exportDir);
         var results = Path.Combine(exportDir, "results.csv");
@@ -2360,7 +2360,7 @@ Pass("explorer-ownership");
     }
 }
 
-// F13: scripting an object opens a NEW tab; never appends to the active (possibly dirty) editor
+// Scripting an object opens a NEW tab; never appends to the active (possibly dirty) editor
 {
     var plan = ScriptFromObjectPlan.Create("SalesDb", false, "SalesDb", "dbo", "Orders");
     Check(plan.NewTab, "script-plan-new-tab");
@@ -2397,9 +2397,9 @@ Pass("explorer-ownership");
     Pass("oe-truncation-honesty");
 }
 
-// D2: external file edits must survive Save
+// External file edits must survive Save
 {
-    var dir = Path.Combine(Path.GetTempPath(), "sqloryn-d2-" + Guid.NewGuid().ToString("N"));
+    var dir = Path.Combine(Path.GetTempPath(), "sqloryn-external-edit-" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(dir);
     try
     {
@@ -2413,11 +2413,11 @@ Pass("explorer-ownership");
         var refused = false;
         try { await docA.SaveAsync(); }
         catch (ExternalDocumentChangedException) { refused = true; }
-        Check(refused, "d2-external-edit-save-refused");
-        Check(File.ReadAllText(fileA) == "SELECT 'external edit, different length';", "d2-external-edit-survives-save");
+        Check(refused, "external-edit-save-refused");
+        Check(File.ReadAllText(fileA) == "SELECT 'external edit, different length';", "external-edit-survives-save");
         // 3. refused save leaves the user's buffer dirty
-        Check(docA.IsDirty && docA.Text == "SELECT 'mine';", "d2-refused-save-keeps-dirty-buffer");
-        Check(Directory.GetFiles(dir, "*.tmp").Length == 0, "d2-refused-save-removes-temp");
+        Check(docA.IsDirty && docA.Text == "SELECT 'mine';", "refused-save-keeps-dirty-buffer");
+        Check(Directory.GetFiles(dir, "*.tmp").Length == 0, "refused-save-removes-temp");
 
         // same length, different bytes (mtime-granularity proof)
         var fileB = Path.Combine(dir, "b.sql");
@@ -2431,7 +2431,7 @@ Pass("explorer-ownership");
         var refusedB = false;
         try { await docB.SaveAsync(); }
         catch (ExternalDocumentChangedException) { refusedB = true; }
-        Check(refusedB && File.ReadAllText(fileB) == "BBBB", "d2-same-length-same-mtime-edit-detected");
+        Check(refusedB && File.ReadAllText(fileB) == "BBBB", "same-length-same-mtime-edit-detected");
 
         // external edit landing between capture and write is also caught
         var fileC = Path.Combine(dir, "c.sql");
@@ -2449,7 +2449,7 @@ Pass("explorer-ownership");
             });
         }
         catch (ExternalDocumentChangedException) { refusedC = true; }
-        Check(refusedC && File.ReadAllText(fileC) == "C-external" && docC.IsDirty, "d2-external-edit-between-capture-and-write");
+        Check(refusedC && File.ReadAllText(fileC) == "C-external" && docC.IsDirty, "external-edit-between-capture-and-write");
 
         // 2. no external change: Save succeeds, dirty cleared, and repeated saves keep working
         var fileD = Path.Combine(dir, "d.sql");
@@ -2458,10 +2458,10 @@ Pass("explorer-ownership");
         await docD.LoadFileAsync(fileD);
         docD.SetText("D1");
         await docD.SaveAsync();
-        Check(File.ReadAllText(fileD) == "D1" && !docD.IsDirty, "d2-unchanged-save-succeeds-and-clears-dirty");
+        Check(File.ReadAllText(fileD) == "D1" && !docD.IsDirty, "unchanged-save-succeeds-and-clears-dirty");
         docD.SetText("D2");
         await docD.SaveAsync();
-        Check(File.ReadAllText(fileD) == "D2" && !docD.IsDirty, "d2-second-save-after-own-save-succeeds");
+        Check(File.ReadAllText(fileD) == "D2" && !docD.IsDirty, "second-save-after-own-save-succeeds");
 
         // save-as new path, then save again without external change
         var fileE = Path.Combine(dir, "e.sql");
@@ -2470,7 +2470,7 @@ Pass("explorer-ownership");
         await docE.SaveAsync(fileE);
         docE.SetText("E1");
         await docE.SaveAsync();
-        Check(File.ReadAllText(fileE) == "E1" && !docE.IsDirty, "d2-save-as-then-save");
+        Check(File.ReadAllText(fileE) == "E1" && !docE.IsDirty, "save-as-then-save");
 
         // explicit force overwrites after confirmation
         File.WriteAllText(fileE, "E-external");
@@ -2478,12 +2478,12 @@ Pass("explorer-ownership");
         var refusedE = false;
         try { await docE.SaveAsync(); }
         catch (ExternalDocumentChangedException) { refusedE = true; }
-        Check(refusedE && File.ReadAllText(fileE) == "E-external", "d2-refused-before-force");
+        Check(refusedE && File.ReadAllText(fileE) == "E-external", "refused-before-force");
         await docE.SaveAsync(forceSave: true);
-        Check(File.ReadAllText(fileE) == "E2" && !docE.IsDirty, "d2-force-save-overwrites");
+        Check(File.ReadAllText(fileE) == "E2" && !docE.IsDirty, "force-save-overwrites");
         docE.SetText("E3");
         await docE.SaveAsync();
-        Check(File.ReadAllText(fileE) == "E3", "d2-save-after-force-resumes-tracking");
+        Check(File.ReadAllText(fileE) == "E3", "save-after-force-resumes-tracking");
 
         // external delete is also a change
         File.Delete(fileE);
@@ -2491,13 +2491,13 @@ Pass("explorer-ownership");
         var refusedDel = false;
         try { await docE.SaveAsync(); }
         catch (ExternalDocumentChangedException) { refusedDel = true; }
-        Check(refusedDel && !File.Exists(fileE) && docE.IsDirty, "d2-external-delete-refused");
+        Check(refusedDel && !File.Exists(fileE) && docE.IsDirty, "external-delete-refused");
     }
     finally
     {
         try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
     }
-    Pass("d2-external-edit-survives-save");
+    Pass("external-edit-survives-save");
 }
 
 // Object Explorer: keys, indexes, functions under a schema
@@ -2661,7 +2661,7 @@ Pass("explorer-ownership");
         Check(runner.DmlExecutions == 0, "estimate-plan-off-failure-no-dml");
         Pass("estimate-plan-off-failure-taints-session");
 
-        // Verifier S-1: unexpected non-PlanCommandException must still attempt OFF and taint the session.
+        // Unexpected non-PlanCommandException must still attempt OFF and taint the session.
         {
             var unexpected = new FakePlanRunner { BatchFailure = new InvalidOperationException("reader exploded") };
             var r = await EstimatedPlanService.EstimateAsync(unexpected, "INSERT INTO t VALUES (1);");
@@ -3054,8 +3054,8 @@ Pass("explorer-ownership");
     Check(shell.Contains("Key.Enter, KeyModifiers.Meta", StringComparison.Ordinal), "keyboard-mac-cmd-return-run-present");
 
     var resultsUi = File.ReadAllText(Path.Combine(appDir, "MainWindow.Results.cs"));
-    Check(resultsUi.Contains("FilterContains(", StringComparison.Ordinal) && resultsUi.Contains("Does not re-query the server", StringComparison.Ordinal), "ws4-results-filter-box");
-    Check(resultsUi.Contains("Export still writes the full retained result", StringComparison.Ordinal), "ws4-results-filter-export-unfiltered");
+    Check(resultsUi.Contains("FilterContains(", StringComparison.Ordinal) && resultsUi.Contains("Does not re-query the server", StringComparison.Ordinal), "results-results-filter-box");
+    Check(resultsUi.Contains("Export still writes the full retained result", StringComparison.Ordinal), "results-results-filter-export-unfiltered");
     Check(QueryOutcomeFormatter.DescribeTransaction(1).Contains("open", StringComparison.Ordinal) && QueryOutcomeFormatter.DescribeTransaction(1).Contains("last batch", StringComparison.Ordinal), "xact-open-last-batch");
     Check(QueryOutcomeFormatter.DescribeTransaction(0).Contains("none", StringComparison.Ordinal), "xact-none-last-batch");
     Check(QueryOutcomeFormatter.DescribeTransaction(-1).Contains("uncommittable", StringComparison.Ordinal), "xact-uncommittable-last-batch");
@@ -3088,7 +3088,7 @@ Pass("explorer-ownership");
     Pass("settings-grouping-source-scan");
 }
 
-// WS5-T1: transactional designer apply + schema freshness (fakes only; live SQL is separate acceptance)
+// Transactional designer apply + schema freshness (fakes only; live SQL is separate acceptance)
 {
     var ordersTable = new TableRef("App", "dbo", "Orders");
     TableDesignStatement S(string sql) => new(sql);
@@ -3200,7 +3200,7 @@ Pass("explorer-ownership");
     Pass("design-transactional-apply");
 }
 
-// WS5-T2: Edit Rows insert/delete (policy, SQL builders and atomic batches with fakes)
+// Edit Rows insert/delete (policy, SQL builders and atomic batches with fakes)
 {
     var tbl = new TableRef("App", "dbo", "Orders");
     EditColumnInfo C(string n, string t, bool nullable = true, bool identity = false, bool computed = false) => new(n, t, nullable, identity, computed);
@@ -3299,13 +3299,13 @@ await SecurityTests.RunAsync();
 await OperationsTests.RunAsync();
 await AgentTests.RunAsync();
 GatedWorkspaceTests.Run();
-MacCapsTests.Run();
-await NextCapsTests.RunAsync();
-MoreCapsTests.Run();
-ContCapsTests.Run();
+ResultsPresentationTests.Run();
+await QueryContextTests.RunAsync();
+MessagesRecoveryTests.Run();
+PropertiesViewerTests.Run();
 await RecoveryWriterTests.RunAsync();
 
-Console.WriteLine("PASS Sqloryn.Core component assertions (E1; no SQL Server connection)");
+Console.WriteLine("PASS Sqloryn.Core component assertions (no SQL Server connection)");
 Console.WriteLine("NOTE: live SqlDataReader decimal(38) against SQL Server remains provider-only / live-host verification.");
 return 0;
 

@@ -1,7 +1,7 @@
 using Sqloryn.Core;
 
 /// <summary>
-/// WS8-T1 operations: backup/restore plan, DBCC CHECKDB plan, preview-never-executes and honest outcomes.
+/// Operations: backup/restore plan, DBCC CHECKDB plan, preview-never-executes and honest outcomes.
 /// Component-only: no SQL Server connection. A live BACKUP/RESTORE round trip needs a disposable fixture and is not claimed.
 /// </summary>
 static class OperationsTests

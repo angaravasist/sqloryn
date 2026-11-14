@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Measure "open -> process exists" for the built SQLoryn.app and write docs/evidence/launch-<arch>.md.
+# Measure "open -> process exists" for the built SQLoryn.app and write artifacts/macos/launch-<arch>.md (git-ignored).
 #
 # What this measures: wall-clock time from invoking `open` until a process named Sqloryn is visible to pgrep.
 # What it does NOT measure: window shown, first paint, or input readiness. It is not a disk-cold measurement
@@ -25,8 +25,8 @@ case "$MACHINE" in
   *) SHORT="$MACHINE"; RID="unknown" ;;
 esac
 APP="${SQLORYN_APP:-$ROOT/artifacts/macos/$RID/SQLoryn.app}"
-OUT="$ROOT/docs/evidence/launch-$SHORT.md"
-mkdir -p "$ROOT/docs/evidence"
+OUT="$ROOT/artifacts/macos/launch-$SHORT.md"
+mkdir -p "$ROOT/artifacts/macos"
 
 MACOS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo unknown) ($(sw_vers -buildVersion 2>/dev/null || echo unknown))"
 HW_MODEL="$(sysctl -n hw.model 2>/dev/null || echo unknown)"

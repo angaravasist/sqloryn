@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "experiments/SqlClientProbe/bin/Release/net10.0/SqlClientProbe.dll"
 CORE_ACCEPTANCE_PROJECT = ROOT / "tests/Sqloryn.Core.SqlAcceptance/Sqloryn.Core.SqlAcceptance.csproj"
 CORE_ACCEPTANCE = ROOT / "tests/Sqloryn.Core.SqlAcceptance/bin/Release/net10.0/Sqloryn.Core.SqlAcceptance.dll"
-# A green SqlClientProbe alone never closes Core findings; these named Core checks must PASS.
+# A green SqlClientProbe alone is not Core acceptance; these named Core checks must PASS.
 CORE_ACCEPTANCE_REQUIRED_PASSES = (
     "CORE-MATERIALISE",
     "CORE-EXPORT",
@@ -381,7 +381,7 @@ def check_core_acceptance_output(stdout):
     passed_names = set()
     for line in stdout.splitlines():
         if line.startswith("SKIP CORE-ACCEPTANCE "):
-            raise ProbeError("Core acceptance was skipped; probe alone does not close Core findings.")
+            raise ProbeError("Core acceptance was skipped; the probe alone is not Core acceptance.")
         if line.startswith("SKIP CORE-"):
             skipped.append(line.split()[1])
         pass_match = CORE_ACCEPTANCE_PASS_RE.match(line)
@@ -446,7 +446,7 @@ def execute_local():
         ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"])
     info = json.loads(run(["docker", "info", "--format", "{{json .}}"]))
     validate_engine(info, endpoint)
-    print("PROBE-10 supported Linux x64 engine; preparing a disposable instance.", flush=True)
+    print("Supported Linux x64 engine; preparing a disposable instance.", flush=True)
     run(["docker", "pull", IMAGE], timeout=300)
     name = "sqloryn-probe-" + secrets.token_hex(8)
     password = "Aa1!" + secrets.token_hex(24)
@@ -487,7 +487,7 @@ def execute_local():
             run_sql_acceptance(port, name, certs / "server.crt", certs / "wrong.crt", password)
         finally:
             cleanup(name)
-    print("PASS PROBE-10 disposable container/network and temporary files removed.")
+    print("PASS cleanup: disposable container/network and temporary files removed.")
 
 
 def recovery_message(name, failures):
@@ -540,7 +540,7 @@ def execute_ssh(destination, known_hosts, identity_file=None):
     password = "Aa1!" + secrets.token_hex(24)
     tunnel = None
     helper_ready = False
-    print(f"PROBE-11 run-id={name}; preparing disposable remote instance over isolated SSH.", flush=True)
+    print(f"Remote run-id={name}; preparing disposable remote instance over isolated SSH.", flush=True)
     try:
         ssh_run(user, host, known_hosts_path,
                 ["/bin/mkdir", "-m", "700", "--", f"/tmp/{name}"], timeout=30,
@@ -558,7 +558,7 @@ def execute_ssh(destination, known_hosts, identity_file=None):
             ["/usr/bin/python3", f"/tmp/{name}/helper.py", "engine-check"], timeout=60,
             identity_file=identity_path))
         print(
-            f"PROBE-11 remote engine ostype={engine.get('ostype')} arch={engine.get('architecture')} "
+            f"Remote engine ostype={engine.get('ostype')} arch={engine.get('architecture')} "
             f"docker_host={engine.get('docker_host')} "
             "(reported arch is not hardware proof).",
             flush=True)
@@ -594,7 +594,7 @@ def execute_ssh(destination, known_hosts, identity_file=None):
         if helper_ready or tunnel is not None:
             remote_cleanup(user, host, known_hosts_path, name, tunnel, identity_file=identity_path)
         # else: mkdir/upload incomplete — never execute helper.py; preserve the original failure.
-    print(f"PASS PROBE-11 disposable remote resources and owned tunnel removed for run-id {name}.")
+    print(f"PASS remote cleanup: disposable remote resources and owned tunnel removed for run-id {name}.")
 
 
 def require_nonempty_remote_args(ssh_host, ssh_known_hosts):

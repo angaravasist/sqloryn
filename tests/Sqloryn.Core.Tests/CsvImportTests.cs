@@ -2,7 +2,7 @@ using System.Text;
 using Sqloryn.Core;
 
 /// <summary>
-/// WS6-T1 flat-file import: preview parser, mapping plan, SQL generation and the transactional apply (against a fake).
+/// Flat-file import: preview parser, mapping plan, SQL generation and the transactional apply (against a fake).
 /// Component-only: no SQL Server connection. Live INSERT behaviour is provider/host verification, not claimed here.
 /// </summary>
 static class CsvImportTests

@@ -5,7 +5,7 @@ using Sqloryn.Core;
 namespace Sqloryn;
 
 /// <summary>
-/// Security administration (WS7-T1): lists server logins, server roles, database users and database roles, shows the
+/// Security administration: lists server logins, server roles, database users and database roles, shows the
 /// selected principal's explicit permissions, and previews GRANT/DENY/REVOKE. Reading and previewing never change the
 /// server. Apply requires an explicit confirmation of the exact previewed SQL and runs in one owned transaction through
 /// the session's owned permission-change batch. All SQL comes from Core; this window holds no SQL text.

@@ -7,7 +7,7 @@ using Sqloryn.Core;
 namespace Sqloryn;
 
 /// <summary>
-/// Honest gated shell for capabilities that are not implemented or not verified (DELIVERY-CONTRACT §10-11). It renders a
+/// Honest gated shell for capabilities that are not implemented or not verified. It renders a
 /// <see cref="GatedWorkspace"/> model only: every section names its missing fixture, protocol or authentication, the
 /// section action is bound to the model and stays disabled, and the window reads nothing from a server, collects no
 /// credentials and makes no network or cloud call.
@@ -60,12 +60,6 @@ public class GatedWorkspaceWindow : Window
         explanation.Classes.Add("muted");
         stack.Children.Add(explanation);
         stack.Children.Add(new TextBlock { Text = "Missing: " + section.MissingRequirement, TextWrapping = TextWrapping.Wrap });
-        stack.Children.Add(new TextBlock
-        {
-            Text = "Tracked as " + string.Join(", ", section.CapIds) + " in docs/ssms/CAP_EVIDENCE.csv",
-            FontSize = 11,
-            TextWrapping = TextWrapping.Wrap
-        });
         var action = new Button
         {
             Content = section.ActionLabel,

@@ -2,7 +2,7 @@ using Microsoft.Data.SqlClient;
 using Sqloryn.Core;
 
 /// <summary>
-/// WS1-T1 Connections: structured database-name acceptance, capability probe soft-fail, TLS summary,
+/// Connections: structured database-name acceptance, capability probe soft-fail, TLS summary,
 /// profile group compatibility and ConnectWindow auth-label source scans. Component-only: no SQL Server connection.
 /// </summary>
 static class ConnectionTests

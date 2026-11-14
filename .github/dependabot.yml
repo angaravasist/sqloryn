@@ -11,6 +11,9 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Stay on the 10.0.x line for net10.0; see docs/DEPENDENCIES.md.
+      - dependency-name: System.Security.Cryptography.Pkcs
+        update-types: ["version-update:semver-major"]
 
-# Add npm and cargo entries when package manifests are introduced.
 # Require lockfiles where supported; do not auto-merge dependency PRs.

@@ -1,7 +1,7 @@
 using Sqloryn.Core;
 
 /// <summary>
-/// WS7-T1 security administration: bounded read-only catalog queries, denial mapping, GRANT/DENY/REVOKE preview and the
+/// Security administration: bounded read-only catalog queries, denial mapping, GRANT/DENY/REVOKE preview and the
 /// transactional apply (against a fake). Component-only: no SQL Server connection. Role-change behaviour from a separate
 /// principal, partial failure on a real server and server versus database scope on a live target are NOT claimed here.
 /// </summary>

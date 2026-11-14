@@ -67,7 +67,7 @@ try
     foreach (Exception error in new Exception[] { new Exception(secret), new ArgumentException(secret),
                  new IOException(secret), new AuthenticationException(secret), new OperationCanceledException(secret) })
         Check(!SafeFailure.Describe(error).Contains(secret, StringComparison.Ordinal));
-    Console.WriteLine($"PASS {passed} component assertions (E1; no SQL Server connection)");
+    Console.WriteLine($"PASS {passed} component assertions (no SQL Server connection)");
     return 0;
 }
 finally

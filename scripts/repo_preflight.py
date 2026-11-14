@@ -7,14 +7,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = [
     "README.md", "LICENSE", "SECURITY.md", "CONTRIBUTING.md",
-    "CODE_OF_CONDUCT.md", "AGENTS.md", ".gitignore",
+    "CODE_OF_CONDUCT.md", ".gitignore", ".editorconfig",
     ".github/CODEOWNERS", ".github/dependabot.yml",
     ".github/workflows/repository-safeguards.yml",
-    "docs/SECURITY_BASELINE.md", "docs/FEATURE_MATRIX.md", "docs/README.md",
-    "docs/ARCHITECTURE.md", "docs/STATE.md", "docs/TESTING.md",
-    "docs/PRODUCT.md", "docs/FEATURE_CATALOG.csv", "docs/THREAT_MODEL.md",
-    "docs/DEPENDENCIES.md", "docs/decisions/001-sqlclient-probe.md",
-    "docs/specs/001-sqlclient-probe.md",
+    "docs/README.md", "docs/ARCHITECTURE.md", "docs/TESTING.md",
+    "docs/DEPENDENCIES.md", "docs/SECURITY_BASELINE.md",
+    "docs/decisions/001-sqlclient-probe.md",
 ]
 
 

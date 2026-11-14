@@ -1,7 +1,7 @@
 using Sqloryn.Core;
 
 /// <summary>
-/// CAP-046/CAP-064 follow-up: debounced, serialised recovery writes off the UI thread, and privacy
+/// Debounced, serialised recovery writes off the UI thread, and privacy
 /// settings with retention. No SQL Server connection.
 /// </summary>
 static class RecoveryWriterTests
