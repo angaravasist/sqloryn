@@ -40,7 +40,7 @@ CSV fidelity trio, LIVE-WAVE (Linux pass=12 on `496b503`), CAP-084/075/087/099/0
 
 ## Inventory
 
-191 inventory rows, plus the 4 integrator rows above (CSV trio + LIVE-WAVE done-component). CAP-122 is those CSV rows, not another importer. Inventory counts: alias 1, blocked 12, done-component 89, gated-incomplete 10, partial 22, ready 61.
+191 inventory rows (CAP-122 is the three CSV integrator rows above, not another importer; LIVE-WAVE is a test task, not a capability). Inventory table counts: alias 1, blocked 12, done-component 85, gated-incomplete 10, partial 22, ready 61. Distinct done-component CAPs: 86 (85 + CAP-122).
 
 | ID | Workstream | Task | Status | Blocker |
 |---|---|---|---|---|
