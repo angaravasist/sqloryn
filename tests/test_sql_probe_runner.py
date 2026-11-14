@@ -553,7 +553,7 @@ GOOD_CORE_OUTPUT = (
 
 
 class CoreAcceptanceWiringTests(unittest.TestCase):
-    """A green SqlClientProbe alone must never close Core findings."""
+    """A green SqlClientProbe alone must never count as Core acceptance."""
 
     def setUp(self):
         patcher = patch.object(runner, "CORE_ACCEPTANCE", Path(__file__))

@@ -1,15 +1,11 @@
-# Build and test
+# Building and testing
 
-macOS Database Studio preview. Owner: SQLoryn maintainer. Reviewed: 2026-11-03.
+All commands run from the repository root and need the .NET SDK pinned in `global.json`.
 
-## Feature-by-feature TDD and parity evidence
-
-Use the [parallel TDD contract](ssms/PARALLEL-TDD.md) for every parity claim. Record the reference action and configuration, the red/green assertion, the integrated SQLoryn path, negative cases, platform and cleanup. Keep docs-only, Windows-observed, component and native live results distinct.
-
-## Component checks
+## Component tests (no SQL Server)
 
 ```sh
-export DOTNET_CLI_TELEMETRY_OPTOUT=1
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 AVALONIA_TELEMETRY_OPTOUT=1
 dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
 dotnet build SQLoryn.slnx --no-restore --configuration Release
 dotnet run --project tests/SqlClientProbe.Tests --no-build --configuration Release
@@ -19,96 +15,80 @@ python3 scripts/repo_preflight.py
 git diff --check
 ```
 
-## macOS app package
+CI runs the same steps on Linux, macOS arm64 and macOS Intel for every pull request. The macOS jobs also build the app bundle.
+
+## macOS app
 
 ```sh
-bash scripts/build_macos_app.sh
-open artifacts/macos/osx-arm64/SQLoryn.app   # arm64
-# open artifacts/macos/osx-x64/SQLoryn.app   # Intel
+bash scripts/build_macos_app.sh                      # framework-dependent, host architecture
+SQLORYN_SELF_CONTAINED=1 bash scripts/build_macos_app.sh   # bundles the .NET runtime
+open artifacts/macos/osx-arm64/SQLoryn.app           # osx-x64 on Intel
+bash scripts/measure_app_launch.sh 3                 # optional: time from `open` to process start
 ```
 
-Offline launch timing (process start only; writes `docs/evidence/launch-<arch>.md`):
-`bash scripts/measure_app_launch.sh 3`. Offline journey checklist: [JOURNEYS.md](JOURNEYS.md).
+The build script writes a provenance file (commit, runtime identifier, file hashes) to `artifacts/macos/provenance-<arch>.md`. The launch script writes `artifacts/macos/launch-<arch>.md`. Both are git-ignored.
 
-Requires the SDK/runtime from `global.json`. Default is a framework-dependent publish for the host RID
-(`Sqloryn.csproj` declares `RuntimeIdentifiers` osx-arm64;osx-x64). `SQLORYN_SELF_CONTAINED=1` bundles the runtime;
-neither mode has been tested on a Mac without .NET, so no clean-Mac claim exists. Each build writes provenance
-(commit, RID, dll hash) to `docs/evidence/package-<arm64|x64>[-self-contained].md`. Set `AVALONIA_TELEMETRY_OPTOUT=1`
-for any manual `dotnet build` (the script does). Not a signed installer. See [WALKTHROUGH.md](WALKTHROUGH.md).
+## SQL Server acceptance (disposable server)
 
-## SQL acceptance
+Live tests never use an existing or production server. The runner creates a new SQL Server 2022 Developer container on Linux x64 Docker, with generated credentials and synthetic data. It runs the checks and then deletes everything.
 
-- Probe harness: [SPEC-001](specs/001-sqlclient-probe.md) via `run_sql_probe.py`.
-- App walkthrough: [SPEC-002](specs/002-developer-preview-0.md) — needs an
-  approved disposable host; not authorised by documentation alone.
+### In CI (recommended)
 
-Local disposable instance (Linux x64 Docker socket):
+The `sql-integration` job runs only when started by hand, because it requires accepting the SQL Server Developer licence for test use:
 
 ```sh
-export DOTNET_CLI_TELEMETRY_OPTOUT=1
+gh workflow run repository-safeguards.yml --ref <branch> -f accept_sql_server_license=true
+```
+
+A passing run prints `CORE-ACCEPTANCE COMPLETE pass=12 skip=0 fail=0`, followed by `PASS cleanup: disposable container/network and temporary files removed.` On ordinary pull-request runs this job shows as skipped.
+
+### Locally (Linux x64 with Docker)
+
+```sh
 dotnet build SQLoryn.slnx --configuration Release
 python3 scripts/run_sql_probe.py --accept-sql-server-license
 ```
 
-### Probe alone is not Core acceptance
+The runner first runs `SqlClientProbe`, which checks TLS pinning, authentication, result types, timeouts and cancellation. It then runs `tests/Sqloryn.Core.SqlAcceptance` against the same server. A passing probe on its own is not a passing acceptance run. Each Core check reports a `PASS`, `SKIP` or `FAIL` line:
 
-`SqlClientProbe` proves transport, TLS pinning and the SqlClient/server pairing.
-It does **not** exercise `Sqloryn.Core`, so a green probe alone cannot close any
-Core finding (date/money materialisation, export fidelity, DDL, edit conflicts,
-SHOWPLAN). After the probe passes, `run_sql_probe.py` runs
-`tests/Sqloryn.Core.SqlAcceptance` against the **same** disposable instance (a
-probe failure stops the run before this step; both local and PROBE-11 SSH-tunnel
-modes do this, and neither is relaxed). Stable lines: `PASS`/`SKIP`/`FAIL CORE-*`
-and `CORE-ACCEPTANCE COMPLETE pass=N skip=M fail=K`. The runner rejects a run
-with no summary, any `fail`, a missing required pass (the nine names below), or a
-skip other than `CORE-PLAN-DENIED`, `CORE-SECURITY` or `CORE-BACKUP`.
+| Check | What it verifies |
+|---|---|
+| `CORE-MATERIALISE` | date, money and smallmoney values, including NULL, negative and extreme values |
+| `CORE-EXPORT` | CSV and JSON export keep those values |
+| `CORE-DESIGN-PK` | New Table with a composite primary key, verified from a second connection |
+| `CORE-EDIT-CONFLICT` | A case-only concurrent change is detected; a fresh edit commits; a failed batch rolls back |
+| `CORE-PLAN-INSERT` | The estimated plan for an INSERT inserts no row |
+| `CORE-PLAN-DENIED` | An estimate without SHOWPLAN permission is denied and inserts no row |
+| `CORE-TIME-GUID` | time and uniqueidentifier values |
+| `CORE-DESIGN-APPLY` | Transactional create/alter, rollback on failure, stale-design refusal |
+| `CORE-EDIT-INSERT-DELETE` | Row insert/delete with conflict rollback |
+| `CORE-CSV-IMPORT` | Create and Append store exact values |
+| `CORE-SECURITY` | A GRANT preview changes no permissions |
+| `CORE-BACKUP` | A COPY_ONLY backup is recorded in msdb |
 
-Checks use one uniquely named synthetic schema that is dropped afterwards.
-Required passes: `CORE-MATERIALISE` (date, money, smallmoney: NULL, negative,
-fractional, extremes), `CORE-EXPORT` (CSV and JSON from `ResultSetView.FromResultSet`),
-`CORE-DESIGN-PK` (`TableDesignSql.PreviewCreate` + execute; second connection
-verifies columns and composite PK), `CORE-EDIT-CONFLICT` (two sessions: CI-collation
-case change conflicts through the BIN2 predicate, fresh edit commits, two-row
-batch rolls back), `CORE-PLAN-INSERT` (`EstimatePlanAsync` INSERT writes no row),
-`CORE-TIME-GUID` (time and uniqueidentifier displays from a second session),
-`CORE-DESIGN-APPLY` (transactional create, additive `ALTER`, failed-batch rollback,
-stale fingerprint refused), `CORE-EDIT-INSERT-DELETE` (insert/delete conflict and
-fresh delete, second session), `CORE-CSV-IMPORT` (Create and Append; exact stored
-values, including a row past the preview sample). `CORE-PLAN-DENIED`,
-`CORE-SECURITY` (GRANT preview must not change permissions; skip only if a
-login-less user cannot be created) and `CORE-BACKUP` (copy-only backup recorded
-in `msdb.dbo.backupset`, or skip when the server cannot back up) may skip.
+The runner fails if any check fails, if the summary line is missing, or if a required check is skipped. Only `CORE-PLAN-DENIED`, `CORE-SECURITY` and `CORE-BACKUP` may skip, when the server cannot support them.
 
-Manual run against an instance you already own (disposable, synthetic data only;
-encryption is mandatory; set `SQLORYN_ACCEPTANCE_CERT` *or*
-`SQLORYN_ACCEPTANCE_TRUST=1`, never both). With none of the variables set it
-prints `SKIP CORE-ACCEPTANCE …` and exits 0, which is **not** evidence; a
-partial set exits 2:
+### Against a disposable server you already run
 
 ```sh
 export SQLORYN_ACCEPTANCE_SERVER=127.0.0.1 SQLORYN_ACCEPTANCE_PORT=<port> \
   SQLORYN_ACCEPTANCE_USER=<admin> SQLORYN_ACCEPTANCE_DATABASE=<db> \
-  SQLORYN_ACCEPTANCE_CERT=/path/to/server.crt
+  SQLORYN_ACCEPTANCE_CERT=/path/to/server.crt     # or SQLORYN_ACCEPTANCE_TRUST=1, not both
 read -rs SQLORYN_ACCEPTANCE_PASSWORD && export SQLORYN_ACCEPTANCE_PASSWORD
 dotnet run --project tests/Sqloryn.Core.SqlAcceptance -c Release --no-build
 ```
 
-The login needs CREATE SCHEMA in the database; `CORE-PLAN-DENIED` also needs
-CREATE LOGIN (otherwise it SKIPs with a reason).
+The checks create one uniquely named schema and drop it afterwards. The login needs CREATE SCHEMA, and CREATE LOGIN for `CORE-PLAN-DENIED`. With no variables set the program prints `SKIP CORE-ACCEPTANCE` and exits 0. That is not a test result.
 
-Optional PROBE-11 remote mode (maintainer-approved host only). Requires an
-existing known_hosts file with the verified host key. Optional
-`--ssh-identity-file` selects a dedicated private key for every SSH/SCP/tunnel
-call while keeping `StrictHostKeyChecking=yes` and `IdentitiesOnly=yes`. Omit
-the identity flag to keep OpenSSH’s default isolated identity search. Do not
-commit hostnames, addresses, fingerprints or key paths.
+### Remote mode over SSH (optional)
+
+On a Mac without Linux x64 Docker, the runner can create the disposable server on a Linux x64 host you control. It reaches the host over SSH with a pinned host key and uses a local loopback tunnel:
 
 ```sh
 python3 scripts/run_sql_probe.py --accept-sql-server-license \
-  --ssh-host 'user@approved-host' \
+  --ssh-host 'user@host' \
   --ssh-known-hosts /path/to/verified_known_hosts \
-  --ssh-identity-file /path/to/dedicated_private_key
+  --ssh-identity-file /path/to/dedicated_private_key   # optional
 ```
 
-Empty `--ssh-host` / `--ssh-known-hosts` fail before Docker/SSH. Incomplete
-remote bootstrap never executes `helper.py`.
+Do not commit host names, addresses, fingerprints or key paths.

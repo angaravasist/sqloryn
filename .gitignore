@@ -59,5 +59,3 @@ __pycache__/
 
 # Icon build intermediates (keep .icns/.svg/.png sources)
 assets/icon/SQLoryn.iconset/
-
-.worktrees/

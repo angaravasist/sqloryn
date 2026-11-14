@@ -22,9 +22,13 @@ class RepositoryPathTests(unittest.TestCase):
 
     def test_source_and_safe_templates_are_allowed(self):
         for path in ("experiments/Probe/Program.cs", "Directory.Build.props", ".env.example",
-                     "experiments/Probe/packages.lock.json", "docs/FEATURE_CATALOG.csv"):
+                     "experiments/Probe/packages.lock.json", "docs/DEPENDENCIES.md"):
             with self.subTest(path=path):
                 self.assertIsNone(preflight.path_problem(path))
+
+    def test_required_files_exist(self):
+        missing = [f for f in preflight.REQUIRED if not (preflight.ROOT / f).is_file()]
+        self.assertEqual(missing, [])
 
     def test_untrusted_paths_cannot_inject_log_lines(self):
         self.assertNotIn("\n", preflight.path_problem("build/newline\n::warning::injected"))

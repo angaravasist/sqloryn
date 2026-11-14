@@ -47,7 +47,7 @@ static class GatedWorkspaceTests
         BiCloud();
         NoPretendClaims();
         ViewSourceScans();
-        MenuAndDocsScans();
+        MenuScans();
     }
 
     static void Catalog()
@@ -64,7 +64,6 @@ static class GatedWorkspaceTests
                 Check(s.State is GateState.Incomplete or GateState.Disabled, $"gated-{w.Id}-{s.Id}-state-not-available");
                 Check(!s.ActionEnabled, $"gated-{w.Id}-{s.Id}-action-disabled");
                 Check(s.MissingRequirement.Length >= 20, $"gated-{w.Id}-{s.Id}-names-missing-requirement");
-                Check(s.CapIds.Count > 0 && s.CapIds.All(c => c.StartsWith("GATE-", StringComparison.Ordinal)), $"gated-{w.Id}-{s.Id}-caps");
                 Check(s.StatusText.Contains("Not verified", StringComparison.Ordinal) || s.StatusText.Contains("Disabled", StringComparison.Ordinal), $"gated-{w.Id}-{s.Id}-status-honest");
             }
         }
@@ -77,7 +76,6 @@ static class GatedWorkspaceTests
         Check(ha.StatusLine.Contains("incomplete", StringComparison.OrdinalIgnoreCase), "gated-ha-incomplete-line");
         Check(ha.Summary.Contains("multi-node", StringComparison.OrdinalIgnoreCase), "gated-ha-names-multi-node-fixture");
         Check(ha.Sections.All(s => s.State == GateState.Incomplete), "gated-ha-sections-incomplete");
-        Check(ha.Sections.Any(s => s.CapIds.Contains("GATE-158")), "gated-ha-cap-158");
         Check(ha.Sections.Any(s => s.Title.Contains("Availability Group", StringComparison.OrdinalIgnoreCase)), "gated-ha-availability-groups");
         Check(ha.Sections.Any(s => s.Title.Contains("Log shipping", StringComparison.OrdinalIgnoreCase)), "gated-ha-log-shipping");
         Check(ha.Sections.All(s => s.MissingRequirement.Contains("node", StringComparison.OrdinalIgnoreCase)), "gated-ha-each-section-names-nodes");
@@ -86,7 +84,6 @@ static class GatedWorkspaceTests
         var rep = GatedWorkspaceCatalog.Replication;
         Check(rep.StatusLine.Contains("incomplete", StringComparison.OrdinalIgnoreCase), "gated-repl-incomplete-line");
         Check(rep.Summary.Contains("multi-node", StringComparison.OrdinalIgnoreCase), "gated-repl-names-multi-node-fixture");
-        Check(rep.Sections.Any(s => s.CapIds.Contains("GATE-157")), "gated-repl-cap-157");
         foreach (var part in new[] { "Publisher", "Distributor", "Subscriber", "agent", "conflict" })
             Check(rep.Sections.Any(s => s.Title.Contains(part, StringComparison.OrdinalIgnoreCase)), $"gated-repl-section-{part}");
         Check(rep.Sections.All(s => s.State == GateState.Incomplete), "gated-repl-sections-incomplete");
@@ -98,11 +95,11 @@ static class GatedWorkspaceTests
         var bi = GatedWorkspaceCatalog.BiCloud;
         var expected = new Dictionary<string, string[]>
         {
-            ["ssisdb"] = ["SSISDB", "GATE-163", "GATE-164"],
-            ["ssas"] = ["SSAS", "GATE-165", "GATE-166", "GATE-167"],
-            ["ssrs"] = ["SSRS", "GATE-168"],
-            ["fabric"] = ["Fabric", "GATE-170"],
-            ["azure"] = ["Azure", "GATE-171"]
+            ["ssisdb"] = ["SSISDB"],
+            ["ssas"] = ["SSAS"],
+            ["ssrs"] = ["SSRS"],
+            ["fabric"] = ["Fabric"],
+            ["azure"] = ["Azure"]
         };
         Check(bi.Sections.Select(s => s.Id).SequenceEqual(expected.Keys), "gated-bi-section-set");
         foreach (var s in bi.Sections)
@@ -111,7 +108,6 @@ static class GatedWorkspaceTests
             Check(s.StatusText.Contains("Disabled", StringComparison.Ordinal), $"gated-bi-{s.Id}-status-disabled");
             var want = expected[s.Id];
             Check(s.Title.Contains(want[0], StringComparison.Ordinal), $"gated-bi-{s.Id}-title");
-            Check(want.Skip(1).All(c => s.CapIds.Contains(c)), $"gated-bi-{s.Id}-caps");
             var text = s.MissingRequirement;
             Check(text.Contains("protocol", StringComparison.OrdinalIgnoreCase), $"gated-bi-{s.Id}-names-protocol");
             Check(text.Contains("auth", StringComparison.OrdinalIgnoreCase), $"gated-bi-{s.Id}-names-auth");
@@ -167,7 +163,7 @@ static class GatedWorkspaceTests
         Pass("gated-view-source-scan");
     }
 
-    static void MenuAndDocsScans()
+    static void MenuScans()
     {
         var root = FindRepoRoot();
         var shell = File.ReadAllText(Path.Combine(root, "src", "Sqloryn.App", "MainWindow.Shell.cs"));
@@ -181,16 +177,6 @@ static class GatedWorkspaceTests
         Check(tools.Contains("Replication (Incomplete)", StringComparison.Ordinal), "gated-menu-repl-label-incomplete");
         Check(tools.Contains("BI and Cloud (Disabled)", StringComparison.Ordinal), "gated-menu-bi-label-disabled");
 
-        var cap = File.ReadAllText(Path.Combine(root, "docs", "ssms", "CAP_EVIDENCE.csv"));
-        foreach (var capId in new[] { "GATE-157", "GATE-158", "GATE-163", "GATE-164", "GATE-165", "GATE-166", "GATE-167", "GATE-168", "GATE-170", "GATE-171" })
-        {
-            var line = cap.Split('\n').Single(l => l.StartsWith(capId + ",", StringComparison.Ordinal));
-            Check(line.Contains("incomplete", StringComparison.OrdinalIgnoreCase) && line.Contains("Gated shell", StringComparison.Ordinal), $"gated-cap-note-{capId}");
-            Check(line.Contains(",missing,", StringComparison.Ordinal) && line.Contains(",unverified,", StringComparison.Ordinal), $"gated-cap-not-promoted-{capId}");
-        }
-
-        var matrix = File.ReadAllText(Path.Combine(root, "docs", "FEATURE_MATRIX.md"));
-        Check(matrix.Contains("incomplete until", StringComparison.OrdinalIgnoreCase) && matrix.Contains("Gated shell", StringComparison.Ordinal), "gated-feature-matrix-note");
-        Pass("gated-menu-docs-scan");
+        Pass("gated-menu-scan");
     }
 }

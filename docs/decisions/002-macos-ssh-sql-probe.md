@@ -1,37 +1,21 @@
-# ADR-002 — Mac client SQL probe over owned SSH loopback forward
+# ADR-002: Remote disposable SQL Server over SSH for Mac tests
 
-Accepted for the disposable Mac qualification path only. Owner: SQLoryn maintainer.
-Date: 2026-10-31. Extends [ADR-001](001-sqlclient-probe.md); does not select a
-desktop shell, credential store or general remote database client.
+Date: 2026-10-31. This applies to the test runner only; it is not a connection feature of the app.
 
-## Decision and alternatives
+## Decision
 
-Linux x64 Docker on the Mac is unavailable or unsupported for SQL Server evidence.
-Keep the local runner unchanged. Add an explicit SSH transport that provisions a
-fresh disposable SQL Server on an **already approved** Linux x64 host, returns only
-the public server certificate, and runs the existing native Mac SqlClient probe
-against a process-owned `127.0.0.1` forward.
+SQL Server's Linux x64 container cannot run reliably on Apple Silicon. For Mac client tests, `scripts/run_sql_probe.py` can therefore create the disposable server on a Linux x64 host the developer controls. It reaches the host over SSH. Only the server's public certificate comes back to the Mac, and the native Mac SqlClient connects through a `127.0.0.1` port forward owned by the runner.
 
-| Candidate | Assessment |
+| Option | Assessment |
 |---|---|
-| Explicit SSH + local loopback forward | Uses platform OpenSSH; isolates config; keeps SqlClient native on the Mac. Selected. |
-| Remote Docker context (`DOCKER_HOST=ssh://…`) | Conflicts with the local-socket safeguard and blurs ownership of forwards/certs. Rejected for this milestone. |
-| Split provision/client CLIs | Extra surface for one outcome. Deferred. |
-| Tunnel broker / VPN / public SQL publish | New trust and exposure. Requires separate maintainer approval. Not used. |
+| Explicit SSH plus a local loopback forward | Uses the system OpenSSH with isolated configuration, and keeps SqlClient native on the Mac. **Chosen.** |
+| Remote Docker context (`DOCKER_HOST=ssh://…`) | Conflicts with the local-socket safeguard and blurs ownership of forwards and certificates. |
+| Tunnel broker, VPN or publicly published SQL port | Adds new trust and exposure. Not used. |
 
 ## Consequences
 
-- Host approval and a maintainer-supplied known_hosts file are prerequisites. No
-  host is implied by this ADR. Missing approval leaves Mac SQL evidence unverified.
-- SSH is noninteractive (`BatchMode`), config-isolated (`-F /dev/null`), host-key
-  pinned to the supplied file, with `ExitOnForwardFailure` and no agent forwarding.
-  Tunnel argv omits `ClearAllForwardings` so explicit `-L` remains effective;
-  command/scp sessions still clear forwardings.
-- Remote verbs use a fixed helper (`prepare` → `provision`/`cleanup`) and JSON
-  stdin; passwords never appear in remote shell command strings. Server private
-  keys are generated remotely and are not copied to the Mac. Docker on the SSH
-  host is constrained to the local Unix socket after `uname` and env checks.
-- Reported remote architecture is checked and known ARM/emulation shapes are
-  rejected; architecture strings alone do not prove hardware suitability.
-- This is not authorisation to scan for hosts, create paid infrastructure, or
-  accept arbitrary existing SQL endpoints.
+- The developer supplies the host and a known_hosts file containing its verified key.
+- SSH runs non-interactively (`BatchMode`), ignores user configuration (`-F /dev/null`), pins the host key and uses `ExitOnForwardFailure`. It never forwards the SSH agent.
+- Remote actions go through a fixed helper script (`prepare`, `provision`, `cleanup`) with JSON on stdin, so passwords never appear in remote command lines. The server's private key is generated on the remote host and never copied to the Mac.
+- The reported remote architecture is checked, and known ARM or emulated engines are rejected.
+- Cleanup removes only resources named with the run's unique id.

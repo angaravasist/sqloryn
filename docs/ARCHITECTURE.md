@@ -1,45 +1,35 @@
 # Architecture
 
-macOS Database Studio preview. Owner: SQLoryn maintainer. Reviewed: 2026-11-03.
-Decisions: [ADR-001](decisions/001-sqlclient-probe.md),
-[ADR-002](decisions/002-macos-ssh-sql-probe.md),
-[ADR-003](decisions/003-desktop-avalonia.md),
-[ADR-004](decisions/004-macos-database-studio.md). Spec: [SPEC-003](specs/003-macos-database-studio.md).
+SQLoryn is a single-process desktop app. The Avalonia UI calls `Sqloryn.Core`, which talks to SQL Server through Microsoft.Data.SqlClient running in the same process. There is no helper process and no network service.
 
 ```mermaid
 flowchart LR
-  UI[Avalonia studio shell] --> Core[Sqloryn.Core]
-  Core -->|SqlClient in-process| SQL[SQL Server]
-  UI --> Profiles[profiles.json non-secret]
-  UI --> Keychain[macOS Keychain optional]
-  UI --> Docs[ScriptDocument UTF-8]
-  Probe[SqlClientProbe experiment] -. harness only .-> SQL
+  UI[Sqloryn.App: Avalonia UI] --> Core[Sqloryn.Core]
+  Core -->|Microsoft.Data.SqlClient| SQL[SQL Server]
+  Core --> Files[Application Support: settings, profiles, recovery, history]
+  Core --> Keychain[macOS Keychain: optional passwords]
 ```
+
+## Projects
 
 | Path | Role |
 |---|---|
-| `src/Sqloryn.Core` | Sessions, GO batches, profiles/settings stores, Keychain adapter, metadata, export, design/edit SQL, diagnostics redaction |
-| `src/Sqloryn.App` | Studio UI: connect/profiles, OE, editor, DataGrid results, export, design/edit dialogs |
-| `assets/icon` | Original app icon (SVG/PNG/ICNS) — not derived from Microsoft assets |
-| `experiments/SqlClientProbe` | Disposable qualification harness (not the app path) |
-| `tests/Sqloryn.Core.SqlAcceptance` | Live Core checks on the disposable instance (env-driven; SKIPs without it) |
-| `scripts/run_sql_probe.py` | Local/SSH disposable server runner: probe, then Core acceptance (lab only; not a product SSH connection) |
-| `scripts/build_macos_app.sh` | Framework-dependent `.app` package with icon |
+| `src/Sqloryn.Core` | No UI code. Connection options and sessions, `GO` batch splitting and execution, result materialisation and export, Object Explorer catalog queries, table design / row edit / import / security / operations SQL builders, settings, profile, recovery and history stores, Keychain adapter |
+| `src/Sqloryn.App` | Avalonia windows and dialogs: main window (Explorer, editor tabs, results), connect, settings, design/edit/import/security/operations/Agent windows |
+| `tests/Sqloryn.Core.Tests` | Component tests for Core, with no SQL Server. They use fakes plus source checks of App wiring |
+| `tests/Sqloryn.Core.SqlAcceptance` | Core checks against a live disposable SQL Server (see [TESTING.md](TESTING.md)) |
+| `experiments/SqlClientProbe`, `tests/SqlClientProbe.Tests` | Driver/TLS probe for a disposable server, and its offline tests |
+| `scripts/` | Disposable SQL Server runner, macOS app packaging, launch timing, repository checks |
+| `assets/icon` | Original app icon |
 
-Each query tab owns a `SqlSession`. Results are applied only to the originating
-tab id. Passwords are session-only unless the user opts into Remember (macOS
-Keychain); encryption is mandatory; optional lab pin is explicit and mutually
-exclusive with TrustServerCertificate. `GO` batch separators are split by
-`GoBatchSplitter.Parse`, which returns batches with source spans and runs as a
-preflight over the whole selection before batch 1: SQLCMD directives (`:setvar`,
-`:r`, ...), malformed `GO` lines and out-of-bounds repeat counts throw
-`SqlScriptRejectedException` (line/column/offset) and nothing executes. When only
-a selection runs, `SqlSession.ExecuteAsync(sql, ScriptExecutionOrigin, ct)` maps
-the rejection to document coordinates (`Line`/`Offset`/`Column`, 1-based line);
-the selection-relative values stay in `SelectionLine`/`SelectionOffset`.
-`$(var)` substitution is not interpreted or rejected. The App uses Avalonia.Controls.DataGrid 12.1.2 (12.1.4 is not
-published on nuget.org). See [current and historical test evidence](STATE.md) for the distinction between the previously exercised arm64 desktop connection and the unverified live workflows on this branch.
+## Key rules in the code
 
-## Parallel development boundaries
+- **One session per tab.** Each query tab owns a `SqlSession`. Results and status are applied only to the tab that started the query.
+- **Credentials.** Passwords stay in memory unless the user ticks Remember, which stores them in the Keychain under a key bound to the endpoint. Profiles and settings never contain passwords.
+- **Encryption.** Encryption is always on. Certificate pinning and "trust server certificate" are explicit per-connection choices and cannot be combined.
+- **Batches.** `GoBatchSplitter` validates the whole script before batch 1 runs. SQLCMD directives and malformed `GO` lines are rejected, with a location, and nothing runs.
+- **Writes.** Every database write (design, edit rows, import, permissions, backup/restore, Agent run/delete) is built in Core. It is shown as SQL and needs confirmation. It runs in one transaction where SQL Server allows. If the commit outcome is uncertain, the result is reported as unknown and the session is not reused.
+- **Results.** Retained rows and cell sizes are capped. Sort, filter and export work on retained rows only and never re-query.
+- **Local files.** `AtomicFile` writes through a temporary file, using owner-only permissions. Recovery copies are written by `RecoveryWriter`, which is debounced, serialised and off the UI thread.
 
-[The feature ownership contract](ssms/PARALLEL-TDD.md) assigns changes to the existing application and service boundaries. Workstream names are ownership labels, not a decision to introduce new processes, libraries or framework layers. Each service-specific protocol and redistribution choice needs its own evidence.
+Design decisions are recorded in [decisions/](decisions/).

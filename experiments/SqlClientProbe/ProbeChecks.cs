@@ -24,13 +24,13 @@ internal static class ProbeChecks
         {
             identity.CommandTimeout = 5;
             await using var reader = await identity.ExecuteReaderAsync(token);
-            Require(await reader.ReadAsync(token), "PROBE-02 identity row");
+            Require(await reader.ReadAsync(token), "identity row");
             Require(reader.GetString(0) == options.ExpectedServer &&
                     reader.GetString(1).StartsWith("Developer Edition", StringComparison.Ordinal),
-                    "PROBE-02 disposable identity");
+                    "disposable identity");
             Require(Version.TryParse(reader.GetString(2), out Version? version) && version.Major == 16,
-                    "PROBE-02 SQL Server 2022");
-            output.WriteLine($"PASS PROBE-02 SQL Server {version}; Developer edition");
+                    "SQL Server 2022");
+            output.WriteLine($"PASS SQL Server {version}; Developer edition");
         }
 
         await using (var wrongPin = new SqlConnection(options.ConnectionString(password, wrongCertificate: true)))
@@ -38,11 +38,11 @@ internal static class ProbeChecks
             try
             {
                 await wrongPin.OpenAsync(token);
-                throw new ProbeFailure("PROBE-03 wrong certificate accepted");
+                throw new ProbeFailure("wrong certificate accepted");
             }
             catch (SqlException error) when (SafeFailure.IsTls(error))
             {
-                output.WriteLine("PASS PROBE-03 mismatched certificate rejected during TLS");
+                output.WriteLine("PASS mismatched certificate rejected during TLS");
             }
         }
 
@@ -52,24 +52,24 @@ internal static class ProbeChecks
             try
             {
                 await wrongPassword.OpenAsync(token);
-                throw new ProbeFailure("PROBE-04 invalid password accepted");
+                throw new ProbeFailure("invalid password accepted");
             }
             catch (SqlException error) when (error.Number == 18456)
             {
-                output.WriteLine("PASS PROBE-04 invalid password rejected");
+                output.WriteLine("PASS invalid password rejected");
             }
         }
 
         await CheckResultsAsync(connection, token);
-        output.WriteLine("PASS PROBE-05 multiple results, empty set and type fidelity");
+        output.WriteLine("PASS multiple results, empty set and type fidelity");
         await CheckMessagesAndErrorsAsync(connection, token);
-        output.WriteLine("PASS PROBE-06 notices and error after a result");
+        output.WriteLine("PASS notices and error after a result");
         await CheckTimeoutAsync(connection, token);
-        output.WriteLine("PASS PROBE-07 command timeout");
+        output.WriteLine("PASS command timeout");
         await CheckCancellationAsync(options, password, connection, token);
-        output.WriteLine("PASS PROBE-08 observed server cancellation and session reuse");
+        output.WriteLine("PASS observed server cancellation and session reuse");
         await CheckStreamingAsync(connection, token);
-        output.WriteLine("PASS PROBE-09 10000 sequential synthetic rows");
+        output.WriteLine("PASS 10000 sequential synthetic rows");
     }
 
     private static async Task CheckResultsAsync(SqlConnection connection, CancellationToken token)
@@ -88,17 +88,17 @@ internal static class ProbeChecks
         command.Parameters.Add("@binary", SqlDbType.VarBinary, binary.Length).Value = binary;
         command.Parameters.Add("@timestamp", SqlDbType.DateTimeOffset).Value = timestamp;
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token);
-        Require(await reader.ReadAsync(token), "PROBE-05 first row");
+        Require(await reader.ReadAsync(token), "first row");
         Require(reader.IsDBNull(0) && reader.GetString(1) == "" && reader.GetString(2) == text &&
                 reader.GetSqlDecimal(3).Equals(SqlDecimal.Parse("12345678901234567890123456789012345678")) &&
                 reader.GetSqlBinary(4).Value.SequenceEqual(binary) &&
-                reader.GetDateTimeOffset(5).EqualsExact(timestamp), "PROBE-05 fidelity");
-        Require(!await reader.ReadAsync(token), "PROBE-05 first result count");
+                reader.GetDateTimeOffset(5).EqualsExact(timestamp), "fidelity");
+        Require(!await reader.ReadAsync(token), "first result count");
         Require(await reader.NextResultAsync(token) && reader.FieldCount == 1 &&
-                !await reader.ReadAsync(token), "PROBE-05 empty result");
+                !await reader.ReadAsync(token), "empty result");
         Require(await reader.NextResultAsync(token) && await reader.ReadAsync(token) &&
                 reader.GetInt32(0) == 42 && !await reader.ReadAsync(token) &&
-                !await reader.NextResultAsync(token), "PROBE-05 final result");
+                !await reader.NextResultAsync(token), "final result");
     }
 
     private static async Task CheckMessagesAndErrorsAsync(SqlConnection connection, CancellationToken token)
@@ -119,11 +119,11 @@ internal static class ProbeChecks
                     while (await reader.ReadAsync(token))
                         sawRow = true;
                 } while (await reader.NextResultAsync(token));
-                throw new ProbeFailure("PROBE-06 late error missing");
+                throw new ProbeFailure("late error missing");
             }
             catch (SqlException error) when (error.Number == 50000)
             {
-                Require(sawRow && notices > 0, "PROBE-06 row and notice before error");
+                Require(sawRow && notices > 0, "row and notice before error");
             }
         }
         finally
@@ -138,7 +138,7 @@ internal static class ProbeChecks
         try
         {
             await command.ExecuteNonQueryAsync(token);
-            throw new ProbeFailure("PROBE-07 timeout missing");
+            throw new ProbeFailure("timeout missing");
         }
         catch (SqlException error) when (error.Number == -2 && !token.IsCancellationRequested) { }
     }
@@ -164,22 +164,22 @@ internal static class ProbeChecks
                 if (!active)
                     await Task.Delay(100, token);
             }
-            Require(active && !execution.IsCompleted, "PROBE-08 active server request");
+            Require(active && !execution.IsCompleted, "active server request");
             cancel.Cancel();
             try
             {
                 await execution.WaitAsync(TimeSpan.FromSeconds(5), token);
-                throw new ProbeFailure("PROBE-08 execution did not cancel");
+                throw new ProbeFailure("execution did not cancel");
             }
             catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
             catch (SqlException error) when (error.Number == 0 && !token.IsCancellationRequested) { }
-            Require(Convert.ToInt32(await activity.ExecuteScalarAsync(token)) == 0, "PROBE-08 server request still active");
+            Require(Convert.ToInt32(await activity.ExecuteScalarAsync(token)) == 0, "server request still active");
             using var state = new SqlCommand("DECLARE @state smallint = XACT_STATE(); SELECT @@SPID, @@TRANCOUNT, @state;", worker) { CommandTimeout = 5 };
             await using var reader = await state.ExecuteReaderAsync(token);
-            Require(await reader.ReadAsync(token), "PROBE-08 session state row");
-            Require(Convert.ToInt32(reader.GetValue(0)) == sessionId, "PROBE-08 session identity changed");
-            Require(reader.GetInt32(1) == 0, "PROBE-08 transaction count nonzero");
-            Require(reader.GetInt16(2) == 0, "PROBE-08 transaction state nonzero");
+            Require(await reader.ReadAsync(token), "session state row");
+            Require(Convert.ToInt32(reader.GetValue(0)) == sessionId, "session identity changed");
+            Require(reader.GetInt32(1) == 0, "transaction count nonzero");
+            Require(reader.GetInt16(2) == 0, "transaction state nonzero");
         }
         finally
         {
@@ -199,7 +199,7 @@ internal static class ProbeChecks
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token);
         int rows = 0;
         while (await reader.ReadAsync(token))
-            Require(reader.GetInt32(0) == ++rows, "PROBE-09 row order/value");
-        Require(rows == 10000 && !await reader.NextResultAsync(token), "PROBE-09 complete result");
+            Require(reader.GetInt32(0) == ++rows, "row order/value");
+        Require(rows == 10000 && !await reader.NextResultAsync(token), "complete result");
     }
 }

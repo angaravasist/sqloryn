@@ -60,12 +60,6 @@ public class GatedWorkspaceWindow : Window
         explanation.Classes.Add("muted");
         stack.Children.Add(explanation);
         stack.Children.Add(new TextBlock { Text = "Missing: " + section.MissingRequirement, TextWrapping = TextWrapping.Wrap });
-        stack.Children.Add(new TextBlock
-        {
-            Text = "Tracked as " + string.Join(", ", section.CapIds) + " in docs/ssms/CAP_EVIDENCE.csv",
-            FontSize = 11,
-            TextWrapping = TextWrapping.Wrap
-        });
         var action = new Button
         {
             Content = section.ActionLabel,
