@@ -55,6 +55,14 @@ public interface ISqlTypedCellSource
     string GetDataTypeName(int ordinal);
     SqlDecimal GetSqlDecimal(int ordinal);
     DateTimeOffset GetDateTimeOffset(int ordinal);
+    /// <summary>money/smallmoney via SqlMoney (never System.Decimal / double).</summary>
+    SqlMoney GetSqlMoney(int ordinal);
+    /// <summary>SQL <c>date</c> column value (time-of-day component is meaningless and ignored).</summary>
+    DateTime GetDate(int ordinal);
+    /// <summary>SQL <c>time</c> column value as a TimeSpan (100 ns ticks cover time(7) exactly).</summary>
+    TimeSpan GetTime(int ordinal);
+    /// <summary>SQL <c>uniqueidentifier</c> column value.</summary>
+    Guid GetGuid(int ordinal);
     long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length);
     long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length);
     bool TryGetBoolean(int ordinal, out bool value);
@@ -70,6 +78,10 @@ public sealed class SqlDataReaderCellSource(SqlDataReader reader) : ISqlTypedCel
     public string GetDataTypeName(int ordinal) => reader.GetDataTypeName(ordinal);
     public SqlDecimal GetSqlDecimal(int ordinal) => reader.GetSqlDecimal(ordinal);
     public DateTimeOffset GetDateTimeOffset(int ordinal) => reader.GetDateTimeOffset(ordinal);
+    public SqlMoney GetSqlMoney(int ordinal) => reader.GetSqlMoney(ordinal);
+    public DateTime GetDate(int ordinal) => reader.GetDateTime(ordinal);
+    public TimeSpan GetTime(int ordinal) => reader.GetTimeSpan(ordinal);
+    public Guid GetGuid(int ordinal) => reader.GetGuid(ordinal);
     public long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
         => reader.GetChars(ordinal, dataOffset, buffer, bufferOffset, length);
     public long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length)
@@ -128,8 +140,13 @@ public static class ResultMaterializer
         CancellationToken cancellationToken)
     {
         var columns = new string[reader.FieldCount];
+        var sqlTypes = new string[reader.FieldCount];
         for (var i = 0; i < reader.FieldCount; i++)
+        {
             columns[i] = string.IsNullOrEmpty(reader.GetName(i)) ? $"Column{i + 1}" : reader.GetName(i);
+            try { sqlTypes[i] = reader.GetDataTypeName(i) ?? ""; }
+            catch (Exception) { sqlTypes[i] = ""; }
+        }
 
         var rows = new List<IReadOnlyList<CellValue>>();
         var truncated = false;
@@ -214,6 +231,7 @@ public static class ResultMaterializer
             Set = new ResultSet
             {
                 Columns = columns,
+                SqlTypes = sqlTypes,
                 Rows = rows,
                 Truncated = truncated || budget.Exceeded || rowFailure is not null,
                 BudgetExceeded = budget.Exceeded
@@ -238,10 +256,25 @@ public static class ResultMaterializer
             return FormatSqlDecimal(sqlDecimal);
         }
 
-        if (IsCharacterType(typeName))
-            return ReadBoundedChars(source, ordinal);
+        if (IsMoneyType(typeName, out var moneyKind))
+        {
+            var money = source.GetSqlMoney(ordinal);
+            return money.IsNull ? CellValue.Null : FormatSqlMoney(money, moneyKind);
+        }
+
+        if (typeName.Equals("date", StringComparison.OrdinalIgnoreCase))
+            return FormatDate(source.GetDate(ordinal));
+
+        if (typeName.Equals("time", StringComparison.OrdinalIgnoreCase))
+            return FormatTime(source.GetTime(ordinal));
+
+        if (typeName.Equals("uniqueidentifier", StringComparison.OrdinalIgnoreCase))
+            return FormatGuid(source.GetGuid(ordinal));
+
         if (IsBinaryType(typeName))
             return ReadBoundedBinary(source, ordinal);
+        if (IsCharacterType(typeName))
+            return ReadBoundedChars(source, ordinal);
         if (typeName.Contains("datetimeoffset", StringComparison.OrdinalIgnoreCase))
             return CellValue.Text(source.GetDateTimeOffset(ordinal).ToString("o", CultureInfo.InvariantCulture), "datetimeoffset");
         if (source.TryGetDateTime(ordinal, out var dt))
@@ -260,6 +293,52 @@ public static class ResultMaterializer
     public static CellValue FormatSqlDecimal(SqlDecimal value)
         => CellValue.Text(value.ToString(), "decimal");
 
+    /// <summary>money/smallmoney with exactly four fractional digits, invariant formatting, sign preserved.</summary>
+    public static CellValue FormatSqlMoney(SqlMoney value, string kind = "money")
+        => CellValue.Text(value.ToSqlDecimal().ToString(), kind);
+
+    /// <summary>SQL <c>date</c> as ISO yyyy-MM-dd (no time component).</summary>
+    public static CellValue FormatDate(DateTime value)
+        => CellValue.Text(value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), "date");
+
+    /// <summary>
+    /// SQL <c>time</c> as invariant <c>HH:mm:ss</c> with a fractional part only when non-zero (trailing zeros trimmed,
+    /// up to 7 digits = 100 ns). The declared time(n) scale is not carried by the value.
+    /// </summary>
+    public static CellValue FormatTime(TimeSpan value)
+    {
+        var negative = value < TimeSpan.Zero;
+        var ticks = negative ? -value.Ticks : value.Ticks;
+        var whole = TimeSpan.FromTicks(ticks - ticks % TimeSpan.TicksPerSecond);
+        var text = ((int)whole.TotalHours).ToString("00", CultureInfo.InvariantCulture) + ":" +
+                   whole.Minutes.ToString("00", CultureInfo.InvariantCulture) + ":" +
+                   whole.Seconds.ToString("00", CultureInfo.InvariantCulture);
+        var fraction = ticks % TimeSpan.TicksPerSecond;
+        if (fraction != 0)
+            text += "." + fraction.ToString("0000000", CultureInfo.InvariantCulture).TrimEnd('0');
+        return CellValue.Text(negative ? "-" + text : text, "time");
+    }
+
+    /// <summary>SQL <c>uniqueidentifier</c> as lowercase 8-4-4-4-12 ("D") text.</summary>
+    public static CellValue FormatGuid(Guid value)
+        => CellValue.Text(value.ToString("D", CultureInfo.InvariantCulture), "uniqueidentifier");
+
+    static bool IsMoneyType(string typeName, out string kind)
+    {
+        if (typeName.Equals("smallmoney", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = "smallmoney";
+            return true;
+        }
+        if (typeName.Equals("money", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = "money";
+            return true;
+        }
+        kind = "";
+        return false;
+    }
+
     /// <summary>Non-SqlClient readers (unit fixtures only). Not used for live SqlDataReader decimal(38).</summary>
     internal static CellValue FormatCell(DbDataReader reader, int ordinal)
         => reader is SqlDataReader sql
@@ -272,14 +351,28 @@ public static class ResultMaterializer
             return CellValue.Null;
 
         var fieldType = reader.GetFieldType(ordinal);
+        var typeName = SafeTypeName(reader, ordinal);
+        if (BinaryDisplay.IsBinarySqlType(typeName) && fieldType != typeof(byte[]))
+            return CellValue.Text(BinaryDisplay.NotText, "binary");
         if (fieldType == typeof(string) || fieldType == typeof(char))
             return ReadBoundedCharsDb(reader, ordinal);
         if (fieldType == typeof(byte[]))
             return ReadBoundedBinaryDb(reader, ordinal);
         if (fieldType == typeof(SqlDecimal))
             return FormatSqlDecimal(reader.GetFieldValue<SqlDecimal>(ordinal));
+        if (fieldType == typeof(SqlMoney))
+        {
+            IsMoneyType(typeName, out var kind);
+            return FormatSqlMoney(reader.GetFieldValue<SqlMoney>(ordinal), kind.Length == 0 ? "money" : kind);
+        }
         if (fieldType == typeof(bool))
             return CellValue.Text(reader.GetBoolean(ordinal) ? "true" : "false", "bool");
+        if (fieldType == typeof(DateTime) && SafeTypeName(reader, ordinal).Equals("date", StringComparison.OrdinalIgnoreCase))
+            return FormatDate(reader.GetDateTime(ordinal));
+        if (fieldType == typeof(TimeSpan))
+            return FormatTime(reader.GetFieldValue<TimeSpan>(ordinal));
+        if (fieldType == typeof(Guid))
+            return FormatGuid(reader.GetFieldValue<Guid>(ordinal));
         if (fieldType == typeof(DateTimeOffset))
             return CellValue.Text(reader.GetFieldValue<DateTimeOffset>(ordinal).ToString("o", CultureInfo.InvariantCulture), "datetimeoffset");
         if (fieldType == typeof(DateTime))
@@ -294,6 +387,12 @@ public static class ResultMaterializer
         // No System.Decimal path for 38-digit fidelity — fixtures must supply SqlDecimal or use ISqlTypedCellSource.
         throw new NotSupportedException(
             $"Fallback reader cannot format '{fieldType.Name}' without a bounded typed accessor.");
+    }
+
+    static string SafeTypeName(DbDataReader reader, int ordinal)
+    {
+        try { return reader.GetDataTypeName(ordinal) ?? ""; }
+        catch (Exception) { return ""; }
     }
 
     static bool IsCharacterType(string typeName)
@@ -328,7 +427,7 @@ public static class ResultMaterializer
             source.GetBytes(ordinal, 0, buffer, 0, take);
         var truncated = total > maxBytes;
         return CellValue.Text(
-            "0x" + Convert.ToHexString(buffer) + (truncated ? "…" : ""),
+            BinaryDisplay.FormatBytes(buffer) + (truncated ? "…" : ""),
             "binary",
             truncated);
     }
@@ -367,7 +466,7 @@ public static class ResultMaterializer
                 reader.GetBytes(ordinal, 0, buffer, 0, take);
             var truncated = total > maxBytes;
             return CellValue.Text(
-                "0x" + Convert.ToHexString(buffer) + (truncated ? "…" : ""),
+                BinaryDisplay.FormatBytes(buffer) + (truncated ? "…" : ""),
                 "binary",
                 truncated);
         }
@@ -378,7 +477,7 @@ public static class ResultMaterializer
             var truncated = bytes.Length > maxBytes;
             var take = Math.Min(bytes.Length, maxBytes);
             return CellValue.Text(
-                "0x" + Convert.ToHexString(bytes.AsSpan(0, take)) + (truncated ? "…" : ""),
+                BinaryDisplay.FormatBytes(bytes.AsSpan(0, take)) + (truncated ? "…" : ""),
                 "binary",
                 truncated);
         }

@@ -1,0 +1,624 @@
+using System.Globalization;
+using System.Text;
+using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.Automation;
+using Avalonia.Controls;
+using Avalonia.Controls.Templates;
+using Avalonia.Data;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Platform.Storage;
+using Sqloryn.Core;
+
+namespace Sqloryn;
+
+public partial class MainWindow
+{
+    sealed record ResultRow(int Number, CellValue[] Cells);
+
+    bool _renderingResults;
+    bool _resultsAsText;
+    ViewedCell? _viewedCell;
+
+    sealed record ViewedCell(int SetIndex, int RowNumber, int Column, string? SqlType, CellValue Cell, string Header);
+
+    /// <summary>Rebuilds the results area: one DataGrid tab per result set plus a Messages tab.</summary>
+    void RenderResult(QueryResult? result)
+    {
+        _renderingResults = true;
+        _viewedCell = null;
+        try
+        {
+            ResultTabs.Items.Clear();
+            var maxRows = Math.Max(1, _settings.ResultsMaxRows);
+            var shownNote = new StringBuilder();
+            var notices = result is null ? "" : QueryOutcomeFormatter.DescribeNoticeSummary(result.Messages);
+
+            if (result is null)
+            {
+                MessagesBox.Text = "";
+                ResultSummary.Text = "";
+            }
+            else
+            {
+                for (var i = 0; i < result.ResultSets.Count; i++)
+                {
+                    var set = result.ResultSets[i];
+                    var shown = Math.Min(set.Rows.Count, maxRows);
+                    if (shown < set.Rows.Count)
+                        shownNote.Append($"Result {i + 1}: displaying first {shown:N0} of {set.Rows.Count:N0} retained rows (Settings > Max rows displayed). ");
+                    // "Retained" is what the engine kept (at most QueryLimits.MaxRowsPerSet per set); when it stopped
+                    // early the server's total is unknown, so say so instead of presenting the count as complete.
+                    var kept = set.Truncated || set.BudgetExceeded
+                        ? $"first {set.Rows.Count:N0} rows kept, more exist"
+                        : $"{set.Rows.Count:N0} row{(set.Rows.Count == 1 ? "" : "s")}";
+                    ResultTabs.Items.Add(new TabItem
+                    {
+                        Header = $"Result {i + 1} ({kept})",
+                        Tag = i,
+                        Content = _resultsAsText
+                            ? BuildResultText(set, shown)
+                            : BuildResultGrid(set, shown, i, RememberViewedCell, OpenStructuredCell)
+                    });
+                }
+                MessagesBox.Text = QueryOutcomeFormatter.FormatMessages(result);
+                var affected = QueryOutcomeFormatter.DescribeRowsAffected(result.RowsAffected);
+                var elapsed = QueryOutcomeFormatter.DescribeClientElapsed(result.ClientElapsedMilliseconds);
+                ResultSummary.Text = $"{QueryOutcomeFormatter.DescribeStatus(result)} · {result.ResultSets.Count} result set(s)" +
+                                     (affected.Length > 0 ? " · " + affected : "") +
+                                     (elapsed.Length > 0 ? " · " + elapsed : "") +
+                                     (notices.Length > 0 ? " · " + notices : "") +
+                                     (result.PartialResults || result.RetentionLimitReached ? " · output truncated" : "") +
+                                     (shownNote.Length > 0 ? " · " + shownNote.ToString().TrimEnd() : "");
+            }
+
+            var messagesTab = new TabItem
+            {
+                Header = notices.Length == 0 ? "Messages" : "Messages (" + notices + ")",
+                Tag = -1,
+                Content = MessagesBox
+            };
+            ResultTabs.Items.Add(messagesTab);
+
+            var preferred = _active?.LastResultSetIndex ?? -1;
+            var setCount = result?.ResultSets.Count ?? 0;
+            // Failed or empty runs land on Messages so the outcome is the first thing visible.
+            var showMessages = result is null || setCount == 0 || result.Completion != QueryCompletionKind.Succeeded
+                               || preferred < 0 || preferred >= setCount;
+            if (!showMessages && result is not null && result.Completion == QueryCompletionKind.Succeeded)
+                ResultTabs.SelectedItem = ResultTabs.Items.OfType<TabItem>().First(t => t.Tag is int n && n == preferred);
+            else
+                ResultTabs.SelectedItem = messagesTab;
+        }
+        finally
+        {
+            _renderingResults = false;
+        }
+        SetResultsVisible(result is not null);
+        if (_active is not null)
+            UpdateCommandState(_active);
+    }
+
+    void ShowMessagesTab()
+    {
+        if (ResultTabs.Items.OfType<TabItem>().FirstOrDefault(t => t.Tag is -1) is { } tab)
+            ResultTabs.SelectedItem = tab;
+    }
+
+    void OnResultTabChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_renderingResults || _active is null)
+            return;
+        if (ResultTabs.SelectedItem is TabItem { Tag: int index })
+            _active.LastResultSetIndex = index;
+    }
+
+    void RememberViewedCell(int setIndex, int rowNumber, int column, string? sqlType, CellValue cell, string header)
+        => _viewedCell = new ViewedCell(setIndex, rowNumber, column, sqlType, cell, header);
+
+    void OpenStructuredCell(string? sqlType, CellValue cell, string header)
+    {
+        var view = StructuredValueView.Present(sqlType, cell);
+        _ = new StructuredValueWindow(header, view.Text).ShowDialog(this);
+    }
+
+    void OnViewStructured(object? sender, RoutedEventArgs e)
+    {
+        if (_active is not { } tab)
+            return;
+        if (tab.IsExecuting || tab.Session.HasActiveCommand)
+        {
+            StatusBar.Text = "A command is still running. View XML/JSON waits for the retained result and does not query the server.";
+            return;
+        }
+        if (tab.LastResult is not { } result || result.ResultSets.Count == 0)
+        {
+            StatusBar.Text = "Run a query that returns rows first. View XML/JSON does not re-query the server and does not execute cell content.";
+            return;
+        }
+        if (_viewedCell is { } picked && StructuredValueView.CanView(picked.SqlType, picked.Cell))
+        {
+            OpenStructuredCell(picked.SqlType, picked.Cell, picked.Header);
+            StatusBar.Text = "Showing the retained cell. The content was not executed and the server was not queried again.";
+            return;
+        }
+        if (_viewedCell is not null)
+        {
+            StatusBar.Text = "View XML/JSON applies to an xml column or nvarchar holding a JSON object or array. This cell was not executed and the server was not queried.";
+            return;
+        }
+        if (ResultTabs.SelectedItem is TabItem { Tag: int index and >= 0, Content: Control content } &&
+            index < result.ResultSets.Count && FindGrid(content) is { } grid)
+        {
+            var row = grid.SelectedItems?.OfType<ResultRow>().FirstOrDefault();
+            if (row is not null)
+            {
+                var set = result.ResultSets[index];
+                var matches = new List<int>();
+                for (var c = 0; c < set.Columns.Count; c++)
+                {
+                    var cell = c < row.Cells.Length ? row.Cells[c] : CellValue.Null;
+                    var sqlType = c < set.SqlTypes.Count ? set.SqlTypes[c] : null;
+                    if (StructuredValueView.CanView(sqlType, cell))
+                        matches.Add(c);
+                }
+                if (matches.Count == 1)
+                {
+                    var c = matches[0];
+                    var header = string.IsNullOrEmpty(set.Columns[c]) ? "(no column name)" : set.Columns[c];
+                    OpenStructuredCell(c < set.SqlTypes.Count ? set.SqlTypes[c] : null, row.Cells[c], header);
+                    StatusBar.Text = "Showing the retained cell. The content was not executed and the server was not queried again.";
+                    return;
+                }
+                if (matches.Count > 1)
+                {
+                    StatusBar.Text = "This row has more than one XML or JSON value. Click the cell, then View XML/JSON. Nothing was executed.";
+                    return;
+                }
+            }
+        }
+        StatusBar.Text = "Click an xml cell or an nvarchar cell that holds a JSON object or array, then View XML/JSON. The cell is not executed and the server is not queried again.";
+    }
+
+    /// <summary>
+    /// One result set as a grid. Header clicks cycle ascending, descending and original order over the
+    /// rows retained in memory (Core <see cref="ResultSetView.SortedRowIndexes"/>; NULLs last). The filter box
+    /// calls <see cref="ResultSetView.FilterContains"/> on those same rows. Neither path re-queries the server,
+    /// and export still writes the full retained result. A banner states the retained-row scope.
+    /// </summary>
+    Control BuildResultGrid(
+        ResultSet set,
+        int shownRows,
+        int setIndex,
+        Action<int, int, int, string?, CellValue, string> selectCell,
+        Action<string?, CellValue, string> openCell)
+    {
+        ResultRow MakeRow(int index)
+        {
+            var row = set.Rows[index];
+            var cells = new CellValue[set.Columns.Count];
+            for (var c = 0; c < cells.Length; c++)
+                cells[c] = c < row.Count ? row[c] : CellValue.Null;
+            return new ResultRow(index + 1, cells);
+        }
+
+        List<ResultRow> Project(IEnumerable<int> order) => order.Take(shownRows).Select(MakeRow).ToList();
+
+        var grid = new DataGrid
+        {
+            AutoGenerateColumns = false,
+            IsReadOnly = true,
+            CanUserResizeColumns = true,
+            CanUserReorderColumns = true,
+            CanUserSortColumns = true,
+            SelectionMode = DataGridSelectionMode.Extended,
+            ClipboardCopyMode = DataGridClipboardCopyMode.IncludeHeader,
+            HeadersVisibility = DataGridHeadersVisibility.All,
+            ItemsSource = Project(Enumerable.Range(0, shownRows))
+        };
+        grid.Columns.Add(new DataGridTemplateColumn
+        {
+            Header = "#",
+            IsReadOnly = true,
+            CanUserSort = false,
+            Width = new DataGridLength(56),
+            CellTemplate = new FuncDataTemplate<ResultRow>((row, _) =>
+            {
+                var tb = new TextBlock
+                {
+                    Text = row?.Number.ToString(CultureInfo.InvariantCulture) ?? "",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Avalonia.Thickness(8, 0)
+                };
+                tb.Classes.Add("muted");
+                return tb;
+            })
+        });
+
+        var headerNames = new string[set.Columns.Count];
+        var dataColumns = new DataGridTemplateColumn[set.Columns.Count];
+        for (var i = 0; i < set.Columns.Count; i++)
+        {
+            var index = i;
+            var name = set.Columns[i];
+            headerNames[i] = string.IsNullOrEmpty(name) ? "(no column name)" : name;
+            var sqlType = i < set.SqlTypes.Count ? set.SqlTypes[i] : null;
+            dataColumns[i] = new DataGridTemplateColumn
+            {
+                Header = headerNames[i],
+                IsReadOnly = true,
+                CanUserSort = true,
+                MinWidth = 64,
+                MaxWidth = 640,
+                Width = new DataGridLength(1, DataGridLengthUnitType.Auto),
+                ClipboardContentBinding = new Binding($"Cells[{index}].ClipboardText"),
+                CellTemplate = new FuncDataTemplate<ResultRow>((row, _) => BuildCell(row, index, sqlType, headerNames[index], setIndex, selectCell, openCell))
+            };
+            grid.Columns.Add(dataColumns[i]);
+        }
+
+        var banner = new TextBlock
+        {
+            IsVisible = false,
+            Margin = new Avalonia.Thickness(8, 4),
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap
+        };
+        banner.Classes.Add("muted");
+
+        ResultSetView? view = null;
+        var sortColumn = -1;
+        var descending = false;
+        string? filterText = null;
+
+        var filterBox = new TextBox
+        {
+            PlaceholderText = "Filter retained rows",
+            Margin = new Avalonia.Thickness(8, 4, 8, 0)
+        };
+        AutomationProperties.SetName(filterBox, "Filter retained rows");
+        ToolTip.SetTip(filterBox,
+            "Narrows rows already kept in memory. Does not re-query the server. NULL cells do not match the text NULL. Export still writes the full retained result.");
+
+        void ApplyProjection()
+        {
+            view ??= ResultSetView.FromResultSet(set);
+            IReadOnlyList<int> sourceIndexes;
+            ResultSetView scoped;
+            if (string.IsNullOrEmpty(filterText))
+            {
+                sourceIndexes = Enumerable.Range(0, view.Rows.Count).ToList();
+                scoped = view;
+            }
+            else
+            {
+                sourceIndexes = view.FilterRowIndexes(filterText, null);
+                scoped = view.FilterContains(filterText);
+            }
+
+            var ordered = sourceIndexes;
+            string? scope = string.IsNullOrEmpty(filterText) && sortColumn < 0 ? null : scoped.ScopeLabel;
+            if (sortColumn >= 0)
+            {
+                var local = scoped.SortedRowIndexes(sortColumn, descending);
+                ordered = local.Select(i => sourceIndexes[i]).ToList();
+                scope = scoped.SortByColumn(sortColumn, descending).ScopeLabel ?? scope;
+            }
+
+            grid.ItemsSource = Project(ordered);
+            for (var c = 0; c < dataColumns.Length; c++)
+                dataColumns[c].Header = c == sortColumn ? headerNames[c] + (descending ? " ▼" : " ▲") : headerNames[c];
+
+            if (string.IsNullOrEmpty(filterText) && sortColumn < 0)
+            {
+                banner.IsVisible = false;
+                return;
+            }
+
+            var bits = new List<string>();
+            if (!string.IsNullOrEmpty(filterText))
+            {
+                var visible = ShownFilter(filterText);
+                if (sourceIndexes.Count == 0)
+                    bits.Add($"No retained rows contain \"{visible}\". NULL cells are not matched as the text NULL.");
+                else if (sourceIndexes.Count > shownRows)
+                    bits.Add($"Filter matches {sourceIndexes.Count:N0} retained rows; displaying the first {shownRows:N0} (Settings > rows shown).");
+                else
+                    bits.Add($"Filter matches {sourceIndexes.Count:N0} retained row{(sourceIndexes.Count == 1 ? "" : "s")}.");
+            }
+            if (sortColumn >= 0)
+                bits.Add($"Sorted by {headerNames[sortColumn]} ({(descending ? "descending" : "ascending")}, NULL last).");
+            if (!string.IsNullOrEmpty(scope))
+                bits.Add(scope.TrimEnd('.') + ".");
+            bits.Add("Display only. Does not re-query the server. Export still writes the full retained result.");
+            banner.Text = string.Join(" ", bits);
+            banner.IsVisible = true;
+        }
+
+        grid.Sorting += (_, e) =>
+        {
+            e.Handled = true; // Core sorts retained rows; the DataGrid's own view sort is not used.
+            var column = Array.IndexOf(dataColumns, e.Column as DataGridTemplateColumn);
+            if (column < 0)
+                return;
+            if (sortColumn != column) { sortColumn = column; descending = false; }
+            else if (!descending) descending = true;
+            else sortColumn = -1;
+            ApplyProjection();
+        };
+        filterBox.TextChanged += (_, _) =>
+        {
+            filterText = string.IsNullOrEmpty(filterBox.Text) ? null : filterBox.Text;
+            ApplyProjection();
+        };
+        ApplyProjection();
+
+        var host = new DockPanel();
+        DockPanel.SetDock(filterBox, Dock.Top);
+        DockPanel.SetDock(banner, Dock.Top);
+        host.Children.Add(filterBox);
+        host.Children.Add(banner);
+        host.Children.Add(grid);
+        return host;
+    }
+
+    /// <summary>Retained rows as aligned monospace text. Uses <see cref="ResultTextFormatter"/> and does not run SQL.</summary>
+    static Control BuildResultText(ResultSet set, int shownRows)
+    {
+        var text = new TextBox
+        {
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.NoWrap,
+            FontFamily = new FontFamily("Menlo, Monaco, Consolas, monospace"),
+            Text = ResultTextFormatter.Format(set, shownRows),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+        AutomationProperties.SetName(text, "Results as text");
+        ToolTip.SetTip(text,
+            "Retained rows as aligned text. Does not re-query the server. SQL NULL is (null); an empty string is blank; the word NULL is a real value.");
+        return text;
+    }
+
+    async void OnCopyResults()
+    {
+        var copied = CopyTextForActiveResult();
+        if (copied is null)
+        {
+            StatusBar.Text = "Select result rows to copy. SQL NULL copies as an empty field, not the word NULL; an empty string copies as \"\".";
+            return;
+        }
+        try
+        {
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard is null)
+            {
+                StatusBar.Text = "Clipboard unavailable.";
+                return;
+            }
+            await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(clipboard, copied.Value.Text);
+            StatusBar.Text = copied.Value.TextView
+                ? "Copied the retained text view. SQL NULL is (null); an empty string is blank."
+                : "Copied results. SQL NULL is an empty field (not the word NULL); an empty string is \"\".";
+        }
+        catch (Exception ex)
+        {
+            StatusBar.Text = "Copy failed: " + ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Selected grid rows, or the retained text view. Grid copy uses <see cref="ResultCopy"/> (SQL NULL is an empty field).
+    /// The text view already writes SQL NULL as (null).
+    /// </summary>
+    (string Text, bool TextView)? CopyTextForActiveResult()
+    {
+        if (ResultTabs.SelectedItem is not TabItem { Content: Control content, Tag: int index and >= 0 })
+            return null;
+        if (_resultsAsText && content is TextBox box && !string.IsNullOrEmpty(box.Text))
+            return (box.Text, true);
+        if (_active?.LastResult is not { } result || index >= result.ResultSets.Count)
+            return null;
+        if (FindGrid(content) is not { } grid)
+            return null;
+        var selected = grid.SelectedItems?.OfType<ResultRow>().ToList();
+        if (selected is null || selected.Count == 0)
+            return null;
+
+        var set = result.ResultSets[index];
+        var lines = new StringBuilder();
+        lines.Append('#').Append('\t');
+        for (var c = 0; c < set.Columns.Count; c++)
+        {
+            if (c > 0)
+                lines.Append('\t');
+            lines.Append(string.IsNullOrEmpty(set.Columns[c]) ? "(no column name)" : set.Columns[c]);
+        }
+        lines.AppendLine();
+        foreach (var row in selected)
+        {
+            lines.Append(row.Number.ToString(CultureInfo.InvariantCulture));
+            for (var c = 0; c < set.Columns.Count; c++)
+            {
+                lines.Append('\t');
+                lines.Append(ResultCopy.FormatCell(c < row.Cells.Length ? row.Cells[c] : CellValue.Null));
+            }
+            lines.AppendLine();
+        }
+        return (lines.ToString(), false);
+    }
+
+    static DataGrid? FindGrid(Control? content)
+    {
+        switch (content)
+        {
+            case DataGrid grid:
+                return grid;
+            case Panel panel:
+                foreach (var child in panel.Children)
+                    if (child is Control control && FindGrid(control) is { } found)
+                        return found;
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    static string ShownFilter(string text)
+    {
+        var one = text.Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal).Trim();
+        return one.Length <= 80 ? one : one[..80] + "…";
+    }
+
+    static Control BuildCell(
+        ResultRow? row,
+        int index,
+        string? sqlType,
+        string header,
+        int setIndex,
+        Action<int, int, int, string?, CellValue, string> selectCell,
+        Action<string?, CellValue, string> openCell)
+    {
+        var cell = row is not null && index < row.Cells.Length ? row.Cells[index] : CellValue.Null;
+        var shown = BinaryDisplay.PresentColumn(sqlType, cell);
+        var binary = BinaryDisplay.IsBinarySqlType(sqlType) || cell.Kind.Equals("binary", StringComparison.OrdinalIgnoreCase);
+        var text = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Avalonia.Thickness(8, 0),
+            TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
+            MaxLines = 1
+        };
+        if (cell.IsNull)
+        {
+            // NULL is distinct from the empty string and from the text "NULL".
+            text.Text = "NULL";
+            text.Classes.Add("null");
+        }
+        else
+        {
+            text.Text = shown.Length == 0 ? "" : shown.Replace("\r\n", " ⏎ ", StringComparison.Ordinal).Replace('\n', '⏎').Replace('\r', '⏎');
+            if (binary)
+                ToolTip.SetTip(text, "Hexadecimal (0x). Not decoded as text.");
+            else if (shown.Length == 0)
+                ToolTip.SetTip(text, "empty string");
+            else if (cell.Truncated)
+                ToolTip.SetTip(text, "Value truncated for display. View XML/JSON does not re-query the server.");
+            else if (StructuredValueView.CanView(sqlType, cell))
+                ToolTip.SetTip(text, "Click, then View XML/JSON. Pretty-prints this retained cell and does not re-query the server.");
+        }
+        if (row is not null)
+        {
+            text.PointerPressed += (_, e) =>
+            {
+                selectCell(setIndex, row.Number, index, sqlType, cell, header);
+                if (e.ClickCount >= 2 && StructuredValueView.CanView(sqlType, cell))
+                    openCell(sqlType, cell, header);
+            };
+        }
+        return text;
+    }
+
+    // ---- Export ---------------------------------------------------------------------------
+
+    void OnExportCsv(object? sender, RoutedEventArgs e) => _ = ExportAsync(ResultExportFormat.Csv, spreadsheetSafe: false);
+    void OnExportCsvSafe(object? sender, RoutedEventArgs e) => _ = ExportAsync(ResultExportFormat.Csv, spreadsheetSafe: true);
+    void OnExportJson(object? sender, RoutedEventArgs e) => _ = ExportAsync(ResultExportFormat.Json, spreadsheetSafe: false);
+
+    CancellationTokenSource? _exportCts;
+
+    /// <summary>Result-set indexes to export: the selected result tab, or every result set when Messages is selected.</summary>
+    List<int> ExportTargets(QueryResult result)
+    {
+        if (ResultTabs.SelectedItem is TabItem { Tag: int index and >= 0 } && index < result.ResultSets.Count)
+            return [index];
+        return Enumerable.Range(0, result.ResultSets.Count).ToList();
+    }
+
+    /// <summary>
+    /// One export = one user-chosen file. No sibling names are derived, so no other file can be overwritten.
+    /// CSV holds a single result set (select its tab); JSON holds all sets for the scope in one document.
+    /// The write is staged beside the destination and replaced only if the active result is still the one exported.
+    /// </summary>
+    async Task ExportAsync(ResultExportFormat format, bool spreadsheetSafe)
+    {
+        if (_active?.LastResult is not { } result || result.ResultSets.Count == 0)
+        {
+            StatusBar.Text = "Nothing to export: run a query that returns a result set first.";
+            return;
+        }
+        var tab = _active;
+        var targets = ExportTargets(result);
+        var json = format == ResultExportFormat.Json;
+        if (!json && targets.Count != 1)
+        {
+            StatusBar.Text = "CSV holds one result set per file: select a result tab, then export again (or export JSON for all sets).";
+            return;
+        }
+
+        var extension = json ? "json" : "csv";
+        var cts = new CancellationTokenSource();
+        var previous = Interlocked.Exchange(ref _exportCts, cts);
+        try { previous?.Cancel(); } catch (ObjectDisposedException) { /* previous export already finished */ }
+        try
+        {
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = json ? "Export results as JSON" : "Export results as CSV",
+                SuggestedFileName = "results." + extension,
+                DefaultExtension = extension,
+                ShowOverwritePrompt = true,
+                FileTypeChoices =
+                [
+                    json
+                        ? new FilePickerFileType("JSON") { Patterns = ["*.json"] }
+                        : new FilePickerFileType("CSV") { Patterns = ["*.csv"] }
+                ]
+            });
+            var path = file?.TryGetLocalPath();
+            if (path is null)
+                return;
+
+            bool Stale() => !ReferenceEquals(_active, tab) || !ReferenceEquals(tab.LastResult, result);
+            if (Stale())
+            {
+                StatusBar.Text = "Export cancelled: the active result changed while choosing a file.";
+                return;
+            }
+
+            var views = targets.Select(i => ResultSetView.FromResultSet(result.ResultSets[i])).ToList();
+            var outcome = await ResultExportWriter.ExportAsync(
+                path,
+                format,
+                views,
+                new ResultExportOptions { SpreadsheetSafeCsv = spreadsheetSafe },
+                cts.Token,
+                beforeCommit: ct =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (Stale())
+                        throw new OperationCanceledException("The active result changed before the file was replaced.");
+                    return Task.CompletedTask;
+                });
+
+            StatusBar.Text = $"Exported {outcome.ResultSetCount} result set(s) to {outcome.Path}" +
+                             (outcome.Incomplete ? " — WARNING: retained rows were truncated, so the export is incomplete." : "") +
+                             (spreadsheetSafe ? " (spreadsheet-safe: formula-like text cells were prefixed with ')" : "") +
+                             (json ? " (JSON: columns by ordinal with SQL types; values are strings except NULL, int and bit.)" : "");
+        }
+        catch (OperationCanceledException)
+        {
+            StatusBar.Text = "Export cancelled: no file was changed.";
+        }
+        catch (Exception ex)
+        {
+            ReportError("Export failed (existing files were left unchanged): " + ex.Message);
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _exportCts, null, cts);
+            cts.Dispose();
+        }
+    }
+}

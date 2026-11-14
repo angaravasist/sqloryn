@@ -2,27 +2,71 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Sqloryn.ConnectWindow"
         Title="Connect — SQLoryn"
-        Width="480" Height="420"
+        Width="500" Height="740"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
-  <StackPanel Margin="16" Spacing="10">
-    <TextBlock Text="SQL authentication · encryption mandatory · credentials stay in memory for this session only."
-               TextWrapping="Wrap" />
-    <TextBox Name="ServerBox" PlaceholderText="Server host" AutomationProperties.Name="Server" />
-    <TextBox Name="PortBox" PlaceholderText="Port" Text="1433" AutomationProperties.Name="Port" />
-    <TextBox Name="DatabaseBox" PlaceholderText="Database" Text="master" AutomationProperties.Name="Database" />
-    <TextBox Name="UserBox" PlaceholderText="Login" AutomationProperties.Name="Login" />
-    <TextBox Name="PasswordBox" PlaceholderText="Password" PasswordChar="•"
-             AutomationProperties.Name="Password" />
-    <CheckBox Name="TrustBox" Content="Trust server certificate (lab only — skips CA/name checks)"
-              AutomationProperties.Name="Trust server certificate" />
-    <TextBox Name="PinBox" PlaceholderText="Optional lab certificate pin path (.cer/.crt)"
-             AutomationProperties.Name="Certificate pin path" />
-    <TextBlock Name="ErrorText" Foreground="#A40000" TextWrapping="Wrap" IsVisible="False" />
-    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
-      <Button Content="Cancel" Click="OnCancel" AutomationProperties.Name="Cancel connect" />
-      <Button Content="Connect" Click="OnConnect" IsDefault="True"
-              AutomationProperties.Name="Connect" />
+  <ScrollViewer>
+    <StackPanel Margin="20" Spacing="10">
+      <TextBlock Text="Connect to SQL Server" FontSize="18" FontWeight="SemiBold" />
+      <TextBlock Classes="muted"
+                 Text="SQL authentication · encryption mandatory · password lives in memory unless you choose Remember."
+                 TextWrapping="Wrap" />
+
+      <TextBlock Classes="caption" Text="RECENT PROFILE" Margin="0,6,0,0" />
+      <ComboBox Name="ProfileBox" HorizontalAlignment="Stretch"
+                PlaceholderText="(new connection)"
+                AutomationProperties.Name="Recent profile"
+                SelectionChanged="OnProfileChanged" />
+
+      <TextBlock Classes="caption" Text="SERVER" Margin="0,6,0,0" />
+      <Grid ColumnDefinitions="*,92" ColumnSpacing="8">
+        <TextBox Name="ServerBox" TextChanged="OnEndpointTextChanged" PlaceholderText="Server host" AutomationProperties.Name="Server" />
+        <TextBox Name="PortBox" TextChanged="OnEndpointTextChanged" Grid.Column="1" PlaceholderText="Port" Text="1433" AutomationProperties.Name="Port" />
+      </Grid>
+      <TextBox Name="DatabaseBox" PlaceholderText="Database" Text="master" AutomationProperties.Name="Database" />
+
+      <TextBlock Classes="caption" Text="AUTHENTICATION" Margin="0,6,0,0" />
+      <ComboBox Name="AuthBox" HorizontalAlignment="Stretch" SelectedIndex="0"
+                AutomationProperties.Name="Authentication method">
+        <ComboBoxItem Content="SQL Server Authentication"
+                      ToolTip.Tip="Login and password sent over the mandatory TLS channel." />
+        <ComboBoxItem Content="Microsoft Entra ID (unavailable)" IsEnabled="False" ToolTip.ShowOnDisabled="True"
+                      ToolTip.Tip="Not available: needs the Azure authentication extension for Microsoft.Data.SqlClient (Azure.Identity / MSAL) and a sign-in flow, which SQLoryn does not bundle yet." />
+        <ComboBoxItem Content="Integrated / Kerberos (unavailable)" IsEnabled="False" ToolTip.ShowOnDisabled="True"
+                      ToolTip.Tip="Not available: needs a Kerberos (GSSAPI) ticket from kinit on this Mac and a login-less connection model, which SQLoryn does not implement yet." />
+      </ComboBox>
+
+      <TextBlock Classes="caption" Text="CREDENTIALS" Margin="0,6,0,0" />
+      <TextBox Name="UserBox" TextChanged="OnEndpointTextChanged" PlaceholderText="Login" AutomationProperties.Name="Login" />
+      <TextBox Name="PasswordBox" TextChanged="OnPasswordTextChanged" PlaceholderText="Password" PasswordChar="•"
+               AutomationProperties.Name="Password" />
+
+      <TextBlock Classes="caption" Text="TLS" Margin="0,6,0,0" />
+      <CheckBox Name="TrustBox" IsCheckedChanged="OnEndpointCheckChanged" Content="Trust server certificate (lab only — skips CA/name checks)"
+                AutomationProperties.Name="Trust server certificate" />
+      <TextBox Name="PinBox" TextChanged="OnEndpointTextChanged" PlaceholderText="Optional lab certificate pin path (.cer/.crt)"
+               AutomationProperties.Name="Certificate pin path" />
+      <TextBlock Name="TlsSummaryText" Classes="muted" FontSize="11" TextWrapping="Wrap"
+                 AutomationProperties.Name="TLS summary" />
+
+      <TextBlock Classes="caption" Text="PROFILE" Margin="0,6,0,0" />
+      <CheckBox Name="SaveProfileBox" Content="Save profile (non-secret settings only)"
+                IsCheckedChanged="OnSaveProfileChanged"
+                AutomationProperties.Name="Save profile" />
+      <TextBox Name="ProfileNameBox" PlaceholderText="Profile name" IsEnabled="False"
+               AutomationProperties.Name="Profile name" />
+      <TextBox Name="GroupBox" PlaceholderText="Group (optional)" IsEnabled="False"
+               AutomationProperties.Name="Profile group" />
+      <CheckBox Name="RememberBox" Content="Remember password (macOS Keychain)" IsEnabled="False"
+                AutomationProperties.Name="Remember password" />
+      <TextBlock Name="KeychainNote" Classes="muted" FontSize="11" TextWrapping="Wrap" />
+
+      <TextBlock Name="ErrorText" Classes="error" TextWrapping="Wrap" IsVisible="False" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,6,0,0">
+        <Button Content="Cancel" Click="OnCancel" AutomationProperties.Name="Cancel connect" />
+        <Button Content="Connect" Classes="primary" Click="OnConnect" IsDefault="True"
+                AutomationProperties.Name="Connect" />
+      </StackPanel>
     </StackPanel>
-  </StackPanel>
+  </ScrollViewer>
 </Window>

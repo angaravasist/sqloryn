@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Build a framework-dependent SQLoryn.app for the current Mac (.NET 10 required).
+# Build SQLoryn.app for the current Mac architecture.
+#   default                       framework-dependent (.NET 10 runtime required on the Mac)
+#   SQLORYN_SELF_CONTAINED=1      self-contained (bundles the runtime; not yet tested on a Mac without .NET)
+# Both modes publish with an explicit -r <RID>; Sqloryn.csproj declares RuntimeIdentifiers osx-arm64;osx-x64 so a single
+# locked restore covers either. Provenance for the build is written to docs/evidence/package-<arm64|x64>[-self-contained].md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 export DOTNET_GENERATE_ASPNET_CERTIFICATE=false
 export DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true
+# Avalonia.BuildServices sends build-time statistics unless opted out; this project does not.
+export AVALONIA_TELEMETRY_OPTOUT=1
 case "$(uname -m)" in
   arm64) ARCH=osx-arm64 ;;
   x86_64) ARCH=osx-x64 ;;
@@ -13,11 +19,34 @@ case "$(uname -m)" in
 esac
 OUT="$ROOT/artifacts/macos/$ARCH"
 APP="$OUT/SQLoryn.app"
+ICON_SRC="$ROOT/assets/icon/SQLoryn.icns"
+SELF_CONTAINED="${SQLORYN_SELF_CONTAINED:-0}"
 rm -rf "$OUT"
-mkdir -p "$APP/Contents/MacOS"
-dotnet restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
-dotnet publish src/Sqloryn.App/Sqloryn.csproj -c Release --self-contained false \
-  --no-restore -o "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+if [[ ! -f "$ICON_SRC" ]]; then
+  echo "Missing required icon: $ICON_SRC" >&2
+  exit 1
+fi
+# Prefer repo-local or PATH dotnet that matches global.json
+DOTNET_BIN="${DOTNET_ROOT:+$DOTNET_ROOT/dotnet}"
+if [[ -z "${DOTNET_BIN}" || ! -x "${DOTNET_BIN}" ]]; then
+  if [[ -x "$HOME/.dotnet/dotnet" ]]; then
+    DOTNET_BIN="$HOME/.dotnet/dotnet"
+  else
+    DOTNET_BIN="dotnet"
+  fi
+fi
+# Locked restore: RIDs come from the project, so no RID-specific restore flags are needed and the lock file stays authoritative.
+"$DOTNET_BIN" restore SQLoryn.slnx --locked-mode --configfile NuGet.Config
+if [[ "$SELF_CONTAINED" == "1" ]]; then
+  SC_FLAG=true
+else
+  SC_FLAG=false
+fi
+"$DOTNET_BIN" publish src/Sqloryn.App/Sqloryn.csproj -c Release --no-restore \
+  -o "$APP/Contents/MacOS" -r "$ARCH" --self-contained "$SC_FLAG"
+cp "$ICON_SRC" "$APP/Contents/Resources/SQLoryn.icns"
+# Minimal Info.plist lint: required keys must be present after write
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -25,12 +54,62 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>Sqloryn</string>
   <key>CFBundleIdentifier</key><string>org.sqloryn.app</string>
   <key>CFBundleName</key><string>SQLoryn</string>
+  <key>CFBundleDisplayName</key><string>SQLoryn</string>
+  <key>CFBundleIconFile</key><string>SQLoryn</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.0.0</string>
-  <key>CFBundleVersion</key><string>0</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSHumanReadableCopyright</key><string>Copyright SQLoryn contributors. Independent open-source project; not affiliated with Microsoft.</string>
 </dict></plist>
 PLIST
-echo "Built $APP ($ARCH, framework-dependent)"
+for key in CFBundleExecutable CFBundleIdentifier CFBundleName CFBundleIconFile; do
+  /usr/libexec/PlistBuddy -c "Print :$key" "$APP/Contents/Info.plist" >/dev/null \
+    || { echo "Info.plist missing $key" >&2; exit 1; }
+done
+MODE="framework-dependent"
+[[ "$SELF_CONTAINED" == "1" ]] && MODE="self-contained"
+
+# ---- Provenance ------------------------------------------------------------------------------
+case "$ARCH" in osx-arm64) SHORT=arm64 ;; osx-x64) SHORT=x64 ;; esac
+EVIDENCE="$ROOT/docs/evidence/package-$SHORT.md"
+[[ "$SELF_CONTAINED" == "1" ]] && EVIDENCE="$ROOT/docs/evidence/package-$SHORT-self-contained.md"
+mkdir -p "$ROOT/docs/evidence"
+COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+if [[ -n "$(git -C "$ROOT" status --porcelain -- . ':!docs/evidence' ':!artifacts' 2>/dev/null)" ]]; then DIRTY="dirty (uncommitted changes were present; the commit alone does not identify this build)"; else DIRTY="clean"; fi
+DLL="$APP/Contents/MacOS/Sqloryn.dll"
+DLL_SHA="$(shasum -a 256 "$DLL" | awk '{print $1}')"
+EXE_SHA="$(shasum -a 256 "$APP/Contents/MacOS/Sqloryn" | awk '{print $1}')"
+SDK_VER="$("$DOTNET_BIN" --version)"
+BUNDLED_RUNTIME="no"
+[[ -f "$APP/Contents/MacOS/libcoreclr.dylib" ]] && BUNDLED_RUNTIME="yes (libcoreclr.dylib present)"
+APP_KB="$(du -sk "$APP" | awk '{print $1}')"
+{
+  echo "# Package provenance ($SHORT, $MODE)"
+  echo
+  echo "Generated by \`scripts/build_macos_app.sh\` at $(date -u +%Y-%m-%dT%H:%M:%SZ). Do not edit by hand."
+  echo
+  echo "| Field | Value |"
+  echo "|---|---|"
+  echo "| git commit | \`$COMMIT\` |"
+  echo "| working tree | $DIRTY |"
+  echo "| runtime identifier | \`$ARCH\` |"
+  echo "| mode | $MODE |"
+  echo "| .NET SDK | $SDK_VER |"
+  echo "| SHA-256 \`Sqloryn.dll\` | \`$DLL_SHA\` |"
+  echo "| SHA-256 launcher \`Sqloryn\` | \`$EXE_SHA\` |"
+  echo "| runtime bundled in app | $BUNDLED_RUNTIME |"
+  echo "| bundle size (KiB) | $APP_KB |"
+  echo "| built on | $(uname -m), macOS $(sw_vers -productVersion) |"
+  echo
+  echo "## Limits"
+  echo
+  echo "- Unsigned and not notarised: internal candidate only."
+  echo "- Built on the build machine. Launch is **not** performed by this script. **Not tested on a Mac without a .NET install**, so no clean-Mac claim is made for either mode."
+  echo "- Hashes identify this build output only; there is no reproducible-build claim."
+} > "$EVIDENCE"
+echo "Provenance: $EVIDENCE"
+echo "Built $APP ($ARCH, $MODE)"
 echo "Launch: open \"$APP\""
+echo "Note: unsigned internal candidate only — not Gatekeeper-notarised public distribution."

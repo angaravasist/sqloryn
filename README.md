@@ -2,7 +2,7 @@
 
 **SQLoryn** is an independent, open-source, macOS-first SQL Server management application for developers and DBAs.
 
-> **Status: Developer Preview 0 (draft).** A launchable development `.app` exists on the preview branch. It is not signed, notarised or supported for production. SQLoryn is not affiliated with Microsoft or SQL Server Management Studio.
+> **Status: macOS Database Studio preview (draft).** A launchable development `.app` exists on the preview branch. It is not signed, notarised or supported for production. Not SSMS-compatible. SQLoryn is not affiliated with Microsoft or SQL Server Management Studio.
 
 ## Build and launch (macOS)
 
@@ -19,11 +19,13 @@ Requires .NET SDK 10.0.403 (see `global.json`). Walkthrough: [docs/WALKTHROUGH.m
 ## Goals
 
 - Familiar SQL Server workflows on macOS with accurate, testable behaviour.
-- Local-first connections; Preview 0 uses session-only SQL authentication.
+- Local-first connections; SQL authentication with optional saved profiles and macOS Keychain remember-password (never store secrets in profile JSON).
 - Safe defaults for TLS, cancellation, destructive operations and CI.
 
 Start with the [context map](docs/README.md), [STATE.md](docs/STATE.md),
 [TESTING.md](docs/TESTING.md) and [FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md).
+
+The [SSMS 22.11.3 comparison inventory](docs/ssms/README.md) lists reference behaviours and gaps. It is separate from verified SQLoryn functionality.
 
 ## Licence
 

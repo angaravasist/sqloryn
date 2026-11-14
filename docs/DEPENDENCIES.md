@@ -61,10 +61,17 @@ the project MIT licence. Inspect actual artifacts and notices before any release
   execution requires explicit test-use licence acceptance.
 - actions/checkout and actions/setup-dotnet have MIT source licences, pinned to
   full commits. Hosted OS images evolve; record their actual run versions.
-- Avalonia 12.1.6 packages (MIT) power Developer Preview 0 UI; Avalonia,
+- Avalonia 12.1.6 packages (MIT) power the desktop UI; Avalonia,
   Avalonia.Desktop and Avalonia.Themes.Fluent must move together. Versions are
-  locked in `src/Sqloryn.App/packages.lock.json`. Inspect publish output before
-  any redistribution.
+  locked in `src/Sqloryn.App/packages.lock.json`. `Avalonia.Controls.DataGrid` is
+  pinned to 12.1.2 (latest published; resolves against Avalonia 12.1.6). Inspect
+  publish output before any redistribution.
+- `Avalonia.AvaloniaEdit` 12.0.0 (MIT, Avalonia Team; depends on Avalonia >= 12.0.0) provides the SQL editor
+  (`TextEditor`, line numbers, highlighting engine). Managed assembly only; locked in
+  `src/Sqloryn.App/packages.lock.json`. Rationale and rejected alternatives: [ADR-005](decisions/005-sql-editor-component.md).
+  Retain upstream copyright/licence notices in any artifact; inspect publish output before redistribution.
+- App icon under `assets/icon` is original SQLoryn artwork (MIT with the project);
+  not copied from Microsoft/SSMS.
 - OpenSSL, Docker, Python and .NET are host prerequisites. OpenSSH client/scp are
   additional prerequisites for optional Mac SSH qualification (PROBE-11). Their
   redistribution has not been assessed because no installer bundles them.
