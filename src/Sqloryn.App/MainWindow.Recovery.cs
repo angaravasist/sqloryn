@@ -10,55 +10,33 @@ namespace Sqloryn;
 
 public partial class MainWindow
 {
-    void PersistRecovery()
+    /// <summary>Queues the open tabs for the debounced recovery writer. No disk I/O on the UI thread.</summary>
+    void PersistRecovery(params string[] removedIds)
     {
-        if (_persistingRecovery || _suspendRecoveryPersist)
+        if (_suspendRecoveryPersist)
             return;
-        _persistingRecovery = true;
+        _recoveryWriter.Schedule(
+            _tabs.Select(t => new RecoveryTabState(
+                t.Id.ToString("N"), t.Document.Title, t.Document.FilePath, t.Document.Text, t.Document.IsDirty)),
+            removedIds);
+    }
+
+    /// <summary>Clears execution history and unsaved copies after explicit confirmation in Settings.</summary>
+    async Task ClearPrivateDataAsync()
+    {
         try
         {
-            if (_active is not null)
-                _active.Document.SetText(Editor.Text ?? "");
-            var path = AppServices.Recovery.FilePath;
-            var existed = File.Exists(path);
-            var stored = AppServices.Recovery.Read();
-            if (existed && stored.Count == 0 && File.Exists(path))
-            {
-                StatusBar.Text = "Unsaved script copies could not be read. They were left in place.";
-                return;
-            }
-
-            var openDirty = new List<RecoveryDocument>();
-            var openClean = new List<string>();
-            foreach (var tab in _tabs)
-            {
-                var id = tab.Id.ToString("N");
-                if (tab.Document.IsDirty)
-                {
-                    openDirty.Add(DocumentRecovery.Capture(
-                        id, tab.Document.Title, tab.Document.FilePath, tab.Document.Text, DateTimeOffset.UtcNow));
-                }
-                else
-                {
-                    openClean.Add(id);
-                }
-            }
-
-            var merged = DocumentRecovery.Merge(stored, openDirty, openClean, _adoptedRecoveryIds);
-            if (merged.Count == 0)
-                AppServices.Recovery.Clear();
-            else
-                AppServices.Recovery.Write(merged);
-            _adoptedRecoveryIds.Clear();
+            AppServices.History.Clear();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            StatusBar.Text = "Could not update the unsaved-script copy: " + SafeUi(ex.Message);
+            StatusBar.Text = "Could not clear execution history: " + SafeUi(ex.Message);
+            return;
         }
-        finally
-        {
-            _persistingRecovery = false;
-        }
+        await _recoveryWriter.ClearAsync();
+        StatusBar.Text = _recoveryWriter.Enabled
+            ? "Cleared execution history and unsaved copies. Tabs that are still unsaved are copied again on the next edit."
+            : "Cleared execution history and unsaved copies.";
     }
 
     async void OnRecoverUnsaved(object? sender, RoutedEventArgs e)
@@ -92,7 +70,7 @@ public partial class MainWindow
         var choice = await ShowRecoveryChoiceAsync(summary, found);
         if (choice == "discard")
         {
-            AppServices.Recovery.Clear();
+            await _recoveryWriter.ClearAsync();
             StatusBar.Text = "Discarded the unsaved recovery copies.";
             return;
         }
@@ -107,8 +85,6 @@ public partial class MainWindow
         try
         {
             foreach (var doc in found)
-                _adoptedRecoveryIds.Add(doc.Id);
-            foreach (var doc in found)
                 RestoreRecoveredDocument(doc);
         }
         finally
@@ -116,7 +92,11 @@ public partial class MainWindow
             _suspendRecoveryPersist = false;
         }
 
-        PersistRecovery();
+        // The restored tabs own the text now; drop the old copies (all of them when recovery is off).
+        if (_recoveryWriter.Enabled)
+            PersistRecovery(found.Select(d => d.Id).ToArray());
+        else
+            await _recoveryWriter.ClearAsync();
         StatusBar.Text = "Restored unsaved scripts into query tabs. They stay unsaved until you save them. The SQL was not run.";
     }
 

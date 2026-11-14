@@ -205,6 +205,8 @@ public partial class MainWindow
 
     void RememberBatch(ExecutionHistoryEntry entry)
     {
+        if (!_settings.KeepExecutionHistory)
+            return;
         try
         {
             AppServices.History.Append(entry);

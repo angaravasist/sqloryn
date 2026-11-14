@@ -32,8 +32,7 @@ public partial class MainWindow : Window
     bool _closePromptInFlight;
     long _treeLoadGeneration;
     bool _suppressDatabaseChoice;
-    readonly HashSet<string> _adoptedRecoveryIds = new(StringComparer.Ordinal);
-    bool _persistingRecovery;
+    readonly RecoveryWriter _recoveryWriter;
     bool _suspendRecoveryPersist;
     bool _announceEmptyRecovery;
 
@@ -41,6 +40,11 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _settings = LoadSettings();
+        _recoveryWriter = new RecoveryWriter(
+            AppServices.Recovery,
+            TimeSpan.FromMilliseconds(750),
+            message => Avalonia.Threading.Dispatcher.UIThread.Post(() => StatusBar.Text = SafeUi(message)),
+            _settings.KeepUnsavedCopies);
         _explorer = new ExplorerController(
             (tab, binding) => BindingStillCurrent(tab, binding) && ReferenceEquals(_active, tab),
             message => StatusBar.Text = SafeUi(message));
@@ -85,7 +89,26 @@ public partial class MainWindow : Window
 
     void ApplySettings(AppSettings settings)
     {
+        var previous = _settings;
         _settings = settings;
+        _recoveryWriter.RetentionDays = settings.PrivateDataRetentionDays;
+        AppServices.History.RetentionDays = settings.PrivateDataRetentionDays;
+        if (_recoveryWriter.Enabled != settings.KeepUnsavedCopies)
+        {
+            _ = _recoveryWriter.SetEnabledAsync(settings.KeepUnsavedCopies);
+            PersistRecovery();
+        }
+        if (previous.KeepExecutionHistory && !settings.KeepExecutionHistory)
+        {
+            try
+            {
+                AppServices.History.Clear();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                StatusBar.Text = "Could not delete execution history: " + SafeUi(ex.Message);
+            }
+        }
         Editor.FontSize = settings.EditorFontSize;
         AppServices.ApplyTheme(settings);
     }
@@ -551,6 +574,7 @@ public partial class MainWindow : Window
         tab.BumpGeneration();
         await tab.DisposeAsync();
         _tabs.Remove(tab);
+        PersistRecovery(tab.Id.ToString("N"));
         var item = QueryTabs.Items.OfType<TabItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, tab));
         if (item is not null)
             QueryTabs.Items.Remove(item);
@@ -685,6 +709,7 @@ public partial class MainWindow : Window
         {
             await tab.Document.SaveAsync(path);
             RefreshHeader(tab);
+            PersistRecovery();
             if (ReferenceEquals(_active, tab))
                 StatusBar.Text = tab.Document.IsDirty
                     ? $"Saved {tab.Document.Title} (newer edits remain unsaved)"
@@ -738,6 +763,7 @@ public partial class MainWindow : Window
         if (_active is not null)
             _active.Document.SetText(Editor.Text ?? "");
         PersistRecovery();
+        await _recoveryWriter.FlushAsync();
 
         var docs = _tabs.Select(t => t.Document).ToList();
         var (ok, pending) = await DocumentLifecycle.ResolveAllDirtyDeferredAsync(
@@ -768,6 +794,7 @@ public partial class MainWindow : Window
                 RefreshHeader(tab);
             }
             PersistRecovery();
+            await _recoveryWriter.FlushAsync();
             return false;
         }
 
@@ -779,6 +806,7 @@ public partial class MainWindow : Window
             RefreshHeader(tab);
         }
         PersistRecovery();
+        await _recoveryWriter.FlushAsync();
 
         if (!disposeOnSuccess)
             return true;
@@ -1284,7 +1312,7 @@ public partial class MainWindow : Window
 
     async void OnSettings(object? sender, RoutedEventArgs e)
     {
-        var dialog = new SettingsWindow();
+        var dialog = new SettingsWindow { ClearPrivateData = ClearPrivateDataAsync };
         await dialog.ShowDialog<bool>(this);
         if (dialog.Saved is { } saved)
         {

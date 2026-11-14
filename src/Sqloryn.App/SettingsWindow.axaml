@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Sqloryn.SettingsWindow"
         Title="Settings — SQLoryn"
-        Width="520" Height="520"
+        Width="560" Height="640"
         CanResize="False"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False">
@@ -81,11 +81,22 @@
           <TextBlock Name="PathText" Classes="muted mono" FontSize="11" TextWrapping="Wrap" />
           <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
                      Text="Holds only the preferences on these tabs and window layout. It never contains passwords or query text." />
-          <TextBlock Classes="caption" Text="ON THIS MAC" Margin="0,8,0,0" />
-          <TextBlock Classes="muted" TextWrapping="Wrap"
-                     Text="Dirty query tabs are copied under Application Support/SQLoryn/recovery so a relaunch can offer them back. Credential-like text is removed from that copy. File > Recover Unsaved Scripts… restores it, discards it, or leaves it. Closing that sheet does not delete it." />
-          <TextBlock Classes="muted" TextWrapping="Wrap"
-                     Text="Query > Execution History keeps a short list of recent batch text, the outcome and the client elapsed time. Result rows are not stored. Opening an entry puts the SQL in a new tab and does not run it." />
+          <TextBlock Classes="caption" Text="ON THIS MAC (OFF UNLESS YOU TURN IT ON)" Margin="0,8,0,0" />
+          <CheckBox Name="KeepUnsavedBox" Content="Keep copies of unsaved query tabs"
+                    AutomationProperties.Name="Keep copies of unsaved query tabs" />
+          <TextBlock Name="RecoveryPathText" Classes="muted" FontSize="11" TextWrapping="Wrap"
+                     Text="Unsaved tab text is copied a moment after you stop typing so a relaunch can offer it back (File > Recover Unsaved Scripts…). Credential-like assignments are removed, but other confidential text in the script is kept. Turning this off deletes the copies." />
+          <CheckBox Name="KeepHistoryBox" Content="Keep execution history"
+                    AutomationProperties.Name="Keep execution history" />
+          <TextBlock Name="HistoryPathText" Classes="muted" FontSize="11" TextWrapping="Wrap"
+                     Text="Recent batch text (up to 40), its outcome and client elapsed time, for Query > Execution History. Result rows, messages and server names are not stored. Turning this off deletes the history." />
+          <Grid ColumnDefinitions="180,*">
+            <TextBlock Text="Keep for (days)" VerticalAlignment="Center" />
+            <NumericUpDown Name="RetentionDaysBox" Grid.Column="1" Minimum="1" Maximum="365" Increment="1"
+                           FormatString="0" AutomationProperties.Name="Days to keep unsaved copies and history" />
+          </Grid>
+          <Button Name="ClearPrivateButton" Content="Clear History and Unsaved Copies…" Classes="danger"
+                  HorizontalAlignment="Left" Click="OnClearPrivateData" />
         </StackPanel>
       </TabItem>
     </TabControl>

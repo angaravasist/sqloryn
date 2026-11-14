@@ -87,24 +87,21 @@ public sealed class ExecutionHistoryStore
         _path = Path.Combine(root, "history", "batches.json");
     }
 
+    int _retentionDays = AppSettings.DefaultPrivateDataRetentionDays;
+
     public string FilePath => _path;
+
+    /// <summary>Entries recorded longer ago than this are not returned and are dropped on the next append.</summary>
+    public int RetentionDays
+    {
+        get => Volatile.Read(ref _retentionDays);
+        set => Volatile.Write(ref _retentionDays, Math.Clamp(value, AppSettings.MinPrivateDataRetentionDays, AppSettings.MaxPrivateDataRetentionDays));
+    }
 
     public IReadOnlyList<ExecutionHistoryEntry> Read()
     {
         lock (_lock)
-        {
-            if (!File.Exists(_path))
-                return [];
-            try
-            {
-                var entries = JsonSerializer.Deserialize<List<ExecutionHistoryEntry>>(File.ReadAllText(_path), AtomicFile.JsonOptions);
-                return entries ?? [];
-            }
-            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
-            {
-                return [];
-            }
-        }
+            return ReadHoldingLock();
     }
 
     public void Append(ExecutionHistoryEntry entry)
@@ -132,7 +129,9 @@ public sealed class ExecutionHistoryStore
             return [];
         try
         {
-            return JsonSerializer.Deserialize<List<ExecutionHistoryEntry>>(File.ReadAllText(_path), AtomicFile.JsonOptions) ?? [];
+            var cutoff = DateTimeOffset.UtcNow.AddDays(-RetentionDays);
+            var entries = JsonSerializer.Deserialize<List<ExecutionHistoryEntry>>(File.ReadAllText(_path), AtomicFile.JsonOptions) ?? [];
+            return entries.Where(e => e.RecordedUtc >= cutoff).ToList();
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {

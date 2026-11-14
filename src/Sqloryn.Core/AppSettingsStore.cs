@@ -15,6 +15,9 @@ public sealed record AppSettings
     public const int MinConnectTimeoutSeconds = 1;
     public const int MaxConnectTimeoutSeconds = 120;
     public const int DefaultConnectTimeoutSeconds = 15;
+    public const int MinPrivateDataRetentionDays = 1;
+    public const int MaxPrivateDataRetentionDays = 365;
+    public const int DefaultPrivateDataRetentionDays = 30;
 
     public double EditorFontSize { get; init; } = 13;
     public int ResultsMaxRows { get; init; } = QueryLimits.MaxRowsPerSet;
@@ -28,6 +31,12 @@ public sealed record AppSettings
     public double ResultsHeight { get; init; }
     /// <summary>Client connect timeout applied the next time a session connects. Not a server setting.</summary>
     public int ConnectTimeoutSeconds { get; init; } = DefaultConnectTimeoutSeconds;
+    /// <summary>Opt-in: copy unsaved query tabs to Application Support so a relaunch can offer them back.</summary>
+    public bool KeepUnsavedCopies { get; init; }
+    /// <summary>Opt-in: remember recent batch text, outcome and elapsed time.</summary>
+    public bool KeepExecutionHistory { get; init; }
+    /// <summary>Unsaved copies and history entries older than this are dropped.</summary>
+    public int PrivateDataRetentionDays { get; init; } = DefaultPrivateDataRetentionDays;
 
     public AppSettings Normalize()
     {
@@ -42,7 +51,8 @@ public sealed record AppSettings
             Theme = theme,
             SidebarWidth = sidebar,
             ResultsHeight = results,
-            ConnectTimeoutSeconds = Math.Clamp(ConnectTimeoutSeconds, MinConnectTimeoutSeconds, MaxConnectTimeoutSeconds)
+            ConnectTimeoutSeconds = Math.Clamp(ConnectTimeoutSeconds, MinConnectTimeoutSeconds, MaxConnectTimeoutSeconds),
+            PrivateDataRetentionDays = Math.Clamp(PrivateDataRetentionDays, MinPrivateDataRetentionDays, MaxPrivateDataRetentionDays)
         };
     }
 }
