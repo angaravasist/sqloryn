@@ -5,7 +5,7 @@ Owner: SQLoryn maintainer. Reviewed: 2026-11-14. Experimental; no release suppor
 ## Work under review
 
 - Draft [PR #7](https://github.com/angaravasist/sqloryn/pull/7), branch `codex/macos-database-studio`: integrated studio preview ([SPEC-003](specs/003-macos-database-studio.md), [ADR-004](decisions/004-macos-database-studio.md)). It is the single integration PR for the [delivery contract](ssms/DELIVERY-CONTRACT.md) and [Mac experience](ssms/MAC-EXPERIENCE.md). Task status is in the [queue](ssms/DELIVERY-QUEUE.md) and [CAP evidence](ssms/CAP_EVIDENCE.csv).
-- [PR #18](https://github.com/angaravasist/sqloryn/pull/18): consolidated dependency refresh (Avalonia 12.1.6, SqlClient 7.1.2, PKCS 10.0.15, setup-dotnet 6.1.0). It supersedes the Dependabot PRs.
+- Dependencies: [PR #18](https://github.com/angaravasist/sqloryn/pull/18) (Avalonia 12.1.6, SqlClient 7.1.2, PKCS 10.0.15, setup-dotnet 6.1.0) is merged to `main` and merged into this branch.
 
 ## Evidence
 
@@ -46,7 +46,7 @@ A component pass or a green `SqlClientProbe` is not live evidence. Linux evidenc
 
 ## Local data on the Mac
 
-Everything lives under `~/Library/Application Support/SQLoryn`. See the [threat model](THREAT_MODEL.md#local-app-data) for the full list. Unsaved-tab copies and execution history are **off by default**. Settings › Privacy turns them on, sets retention, and clears them.
+Everything lives under `~/Library/Application Support/SQLoryn`. See the [threat model](THREAT_MODEL.md#local-app-data) for the full list. Unsaved-tab copies and execution history are on by default with 30-day retention. Settings › Privacy turns them off, changes retention, and clears them.
 
 ## Reviewer launch
 

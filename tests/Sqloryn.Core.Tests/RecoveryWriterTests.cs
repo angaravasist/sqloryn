@@ -1,7 +1,7 @@
 using Sqloryn.Core;
 
 /// <summary>
-/// CAP-046/CAP-064 follow-up: debounced, serialised recovery writes off the UI thread, and opt-in privacy
+/// CAP-046/CAP-064 follow-up: debounced, serialised recovery writes off the UI thread, and privacy
 /// settings with retention. No SQL Server connection.
 /// </summary>
 static class RecoveryWriterTests
@@ -105,7 +105,7 @@ static class RecoveryWriterTests
         using var writer = new RecoveryWriter(store, TimeSpan.FromMinutes(5), m => { lock (reports) reports.Add(m); }, enabled: false);
         writer.Schedule([Tab("a", "secret-ish")]);
         await writer.FlushAsync();
-        Check(!File.Exists(store.FilePath), "recovery-off-by-default-writes-nothing");
+        Check(!File.Exists(store.FilePath), "recovery-disabled-writes-nothing");
 
         await writer.SetEnabledAsync(true);
         writer.Schedule([Tab("a", "A")]);
@@ -150,7 +150,7 @@ static class RecoveryWriterTests
     static void Settings()
     {
         var defaults = new AppSettings();
-        Check(!defaults.KeepUnsavedCopies && !defaults.KeepExecutionHistory, "privacy-storage-is-opt-in");
+        Check(defaults.KeepUnsavedCopies && defaults.KeepExecutionHistory, "privacy-storage-on-by-default");
         Check(defaults.PrivateDataRetentionDays == AppSettings.DefaultPrivateDataRetentionDays, "privacy-retention-default");
         Check(new AppSettings { PrivateDataRetentionDays = 0 }.Normalize().PrivateDataRetentionDays == AppSettings.MinPrivateDataRetentionDays
               && new AppSettings { PrivateDataRetentionDays = 9999 }.Normalize().PrivateDataRetentionDays == AppSettings.MaxPrivateDataRetentionDays,

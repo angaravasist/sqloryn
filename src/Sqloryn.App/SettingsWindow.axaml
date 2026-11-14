@@ -81,7 +81,7 @@
           <TextBlock Name="PathText" Classes="muted mono" FontSize="11" TextWrapping="Wrap" />
           <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap"
                      Text="Holds only the preferences on these tabs and window layout. It never contains passwords or query text." />
-          <TextBlock Classes="caption" Text="ON THIS MAC (OFF UNLESS YOU TURN IT ON)" Margin="0,8,0,0" />
+          <TextBlock Classes="caption" Text="ON THIS MAC" Margin="0,8,0,0" />
           <CheckBox Name="KeepUnsavedBox" Content="Keep copies of unsaved query tabs"
                     AutomationProperties.Name="Keep copies of unsaved query tabs" />
           <TextBlock Name="RecoveryPathText" Classes="muted" FontSize="11" TextWrapping="Wrap"

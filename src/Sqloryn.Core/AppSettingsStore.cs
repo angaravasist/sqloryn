@@ -31,10 +31,10 @@ public sealed record AppSettings
     public double ResultsHeight { get; init; }
     /// <summary>Client connect timeout applied the next time a session connects. Not a server setting.</summary>
     public int ConnectTimeoutSeconds { get; init; } = DefaultConnectTimeoutSeconds;
-    /// <summary>Opt-in: copy unsaved query tabs to Application Support so a relaunch can offer them back.</summary>
-    public bool KeepUnsavedCopies { get; init; }
-    /// <summary>Opt-in: remember recent batch text, outcome and elapsed time.</summary>
-    public bool KeepExecutionHistory { get; init; }
+    /// <summary>On by default: copy unsaved query tabs to Application Support so a relaunch can offer them back.</summary>
+    public bool KeepUnsavedCopies { get; init; } = true;
+    /// <summary>On by default: remember recent batch text, outcome and elapsed time.</summary>
+    public bool KeepExecutionHistory { get; init; } = true;
     /// <summary>Unsaved copies and history entries older than this are dropped.</summary>
     public int PrivateDataRetentionDays { get; init; } = DefaultPrivateDataRetentionDays;
 

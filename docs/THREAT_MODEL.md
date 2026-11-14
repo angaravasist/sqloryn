@@ -38,10 +38,10 @@ The studio app stores the following under `~/Library/Application Support/SQLoryn
 | `settings.json` | Preferences and window layout. No passwords and no query text | Always | Overwritten on save |
 | `profiles.json` | Server, port, login name, database, TLS choices. No passwords | When a profile is saved | Delete the profile |
 | macOS Keychain | Password for a profile, bound to its endpoint | Only when Remember is ticked | Forget in Connect |
-| `recovery/unsaved-documents.json` | Text of unsaved query tabs (≤ 20 tabs, ≤ 200,000 characters each), title, file path | **Off**: opt-in in Settings › Privacy | Retention 1–365 days (default 30); removed on save, close-with-Discard, Restore, Discard, turning it off, or Clear |
-| `history/batches.json` | Up to 40 recent batch texts (≤ 4,000 characters each), outcome, client elapsed time. No rows, messages or server names | **Off**: opt-in in Settings › Privacy | Same retention; removed when turned off, or with Clear |
+| `recovery/unsaved-documents.json` | Text of unsaved query tabs (≤ 20 tabs, ≤ 200,000 characters each), title, file path | On; turn off in Settings › Privacy | Retention 1–365 days (default 30); removed on save, close-with-Discard, Restore, Discard, turning it off, or Clear |
+| `history/batches.json` | Up to 40 recent batch texts (≤ 4,000 characters each), outcome, client elapsed time. No rows, messages or server names | On; turn off in Settings › Privacy | Same retention; removed when turned off, or with Clear |
 
-Credential-like assignments are redacted before recovery or history is written. Other confidential literals in SQL text are **not** removed, which is why both stores are opt-in. Recovery writes are debounced and serialised off the UI thread, and an older snapshot cannot overwrite newer, saved or discarded state. Files are written atomically with mode 0600 in 0700 directories. They are not encrypted at rest beyond FileVault.
+Credential-like assignments are redacted before recovery or history is written. Other confidential literals in SQL text are **not** removed, which is why both stores can be turned off, expire after the retention period and can be cleared. Recovery writes are debounced and serialised off the UI thread, and an older snapshot cannot overwrite newer, saved or discarded state. Files are written atomically with mode 0600 in 0700 directories. They are not encrypted at rest beyond FileVault.
 
 ## Controls and remaining evidence
 
